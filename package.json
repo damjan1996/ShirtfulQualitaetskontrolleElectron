@@ -1,0 +1,129 @@
+{
+  "name": "rfid-qr-wareneingang",
+  "version": "1.0.0",
+  "description": "RFID-basierte Zeiterfassung und QR-Code Wareneingang - Moderne Electron Desktop-Anwendung",
+  "main": "main.js",
+  "author": {
+    "name": "Shirtful GmbH",
+    "email": "support@shirtful.com",
+    "url": "https://www.shirtful.com"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env NODE_ENV=development electron .",
+    "debug": "cross-env NODE_ENV=development DEBUG=true electron .",
+    "test": "node test.js",
+    "setup": "node setup.js",
+    "clean": "rimraf dist node_modules/.cache",
+    "rebuild": "electron-rebuild",
+    "rebuild-force": "electron-rebuild --force",
+    "rebuild-hid": "electron-rebuild --module-dir . --which-module node-hid",
+    "install-rebuild": "npm install && npm run rebuild",
+    "full-rebuild": "npm run clean && npm install && npm run rebuild",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:win32": "electron-builder --win --ia32",
+    "build:win64": "electron-builder --win --x64",
+    "dist": "electron-builder --publish=never",
+    "dist:dir": "electron-builder --dir",
+    "pack": "electron-builder --dir --publish=never",
+    "postinstall": "electron-rebuild --force"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "mssql": "^10.0.1",
+    "node-hid": "^3.2.0"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.4",
+    "electron-rebuild": "^3.2.9",
+    "rimraf": "^5.0.1"
+  },
+  "electronRebuild": {
+    "force": true,
+    "onlyModules": [
+      "node-hid",
+      "mssql"
+    ]
+  },
+  "build": {
+    "appId": "com.shirtful.rfid-qr-wareneingang",
+    "productName": "RFID QR Wareneingang",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "rfid/**/*",
+      "db/**/*",
+      "node_modules/**/*",
+      "package.json",
+      "!node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!node_modules/*.d.ts",
+      "!node_modules/.bin",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!.editorconfig",
+      "!**/._*",
+      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+      "!**/{appveyor.yml,.travis.yml,circle.yml}",
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+    ],
+    "extraResources": [
+      {
+        "from": ".env.example",
+        "to": ".env.example"
+      },
+      {
+        "from": "README.md",
+        "to": "README.md"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "RFID QR Wareneingang",
+      "language": "1031",
+      "artifactName": "${productName} Setup ${version}.${ext}",
+      "deleteAppDataOnUninstall": false,
+      "perMachine": false,
+      "menuCategory": "Shirtful"
+    }
+  },
+  "keywords": [
+    "rfid",
+    "qr-code",
+    "wareneingang",
+    "zeiterfassung",
+    "electron",
+    "desktop"
+  ]
+}
