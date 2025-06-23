@@ -2,15 +2,18 @@ const { app, BrowserWindow, ipcMain, dialog, globalShortcut } = require('electro
 const path = require('path');
 require('dotenv').config();
 
-// Import Module mit Error-Handling
-let RFIDListenerKeyboard;
-try {
-    RFIDListenerKeyboard = require('./rfid/rfid-listener-keyboard');
-} catch (error) {
-    console.warn('⚠️ RFID-Modul nicht verfügbar:', error.message);
-    console.log('💡 App läuft ohne RFID-Hardware-Support');
-}
+// Nur sichere Module laden
 const DatabaseClient = require('./db/db-client');
+
+// Simple RFID Listener laden (ohne native Dependencies)
+let SimpleRFIDListener;
+try {
+    SimpleRFIDListener = require('./rfid/simple-rfid-listener');
+    console.log('✅ Simple RFID Listener geladen');
+} catch (error) {
+    console.warn('⚠️ Simple RFID Listener nicht verfügbar:', error.message);
+    console.log('💡 App läuft ohne RFID-Support');
+}
 
 class WareneingangMainApp {
     constructor() {
@@ -77,9 +80,8 @@ class WareneingangMainApp {
                 webSecurity: true
             },
             show: false,
-            icon: path.join(__dirname, 'assets/icon.png'),
             title: 'RFID Wareneingang - Shirtful',
-            autoHideMenuBar: true, // Menüleiste automatisch ausblenden
+            autoHideMenuBar: true,
             frame: true,
             titleBarStyle: 'default'
         });
@@ -168,11 +170,11 @@ class WareneingangMainApp {
         try {
             console.log('🏷️ Initialisiere RFID-Listener...');
 
-            if (!RFIDListenerKeyboard) {
-                throw new Error('RFID-Modul nicht verfügbar - Hardware-Support deaktiviert');
+            if (!SimpleRFIDListener) {
+                throw new Error('Simple RFID-Listener nicht verfügbar');
             }
 
-            this.rfidListener = new RFIDListenerKeyboard((tagId) => {
+            this.rfidListener = new SimpleRFIDListener((tagId) => {
                 this.handleRFIDScan(tagId);
             });
 
@@ -191,9 +193,9 @@ class WareneingangMainApp {
 
             console.error('❌ RFID-Initialisierung fehlgeschlagen:', error);
             console.log('💡 RFID-Alternativen:');
-            console.log('   1. Tags manuell in der UI eingeben');
-            console.log('   2. Keyboard-Simulation verwenden');
-            console.log('   3. Build Tools installieren für Hardware-Support');
+            console.log('   1. Tags manuell in der UI simulieren');
+            console.log('   2. Entwickler-Console für Tests verwenden');
+            console.log('   3. Hardware später konfigurieren');
 
             // RFID ist nicht kritisch - App kann ohne laufen
         }
@@ -311,13 +313,20 @@ class WareneingangMainApp {
 
         // ===== RFID OPERATIONEN =====
         ipcMain.handle('rfid-get-status', async (event) => {
-            return this.rfidListener ? this.rfidListener.getStatus() : null;
+            return this.rfidListener ? this.rfidListener.getStatus() : {
+                listening: false,
+                type: 'not-available',
+                message: 'RFID-Listener nicht verfügbar'
+            };
         });
 
         ipcMain.handle('rfid-simulate-tag', async (event, tagId) => {
             try {
                 if (!this.rfidListener) {
-                    throw new Error('RFID-Listener nicht verfügbar');
+                    // Direkte Simulation wenn kein Listener verfügbar
+                    console.log(`🧪 Direkte RFID-Simulation: ${tagId}`);
+                    await this.handleRFIDScan(tagId);
+                    return true;
                 }
                 return this.rfidListener.simulateTag(tagId);
             } catch (error) {
@@ -372,11 +381,12 @@ class WareneingangMainApp {
                 const success = await this.dbClient.endSession(this.currentSession.sessionId);
 
                 if (success) {
+                    const oldSession = this.currentSession;
                     this.currentSession = null;
 
                     this.sendToRenderer('user-logout', {
                         user,
-                        sessionId: this.currentSession ? this.currentSession.sessionId : null,
+                        sessionId: oldSession.sessionId,
                         timestamp: new Date().toISOString()
                     });
 

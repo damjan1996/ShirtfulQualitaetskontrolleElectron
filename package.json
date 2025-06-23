@@ -25,18 +25,11 @@
     "setup-users": "node scripts/create-test-users.js",
     "test-db": "node scripts/test-db-connection.js",
     "clean": "rimraf dist node_modules/.cache",
-    "rebuild": "@electron/rebuild --force",
-    "rebuild-hid": "@electron/rebuild --module-dir . --which-module node-hid",
-    "install-rebuild": "npm install && npm run rebuild",
-    "full-rebuild": "npm run clean && npm install && npm run rebuild-safe",
+    "rebuild-safe": "electron-rebuild --force --only node-hid || echo 'Native module rebuild failed - app will work without RFID hardware'",
+    "install-rebuild": "npm install && npm run rebuild-safe",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
-    "build:win32": "electron-builder --win --ia32",
-    "build:win64": "electron-builder --win --x64",
-    "dist": "electron-builder --publish=never",
-    "dist:dir": "electron-builder --dir",
-    "pack": "electron-builder --dir --publish=never",
-    "postinstall": "electron-rebuild --force"
+    "dist": "electron-builder --publish=never"
   },
   "dependencies": {
     "dotenv": "^16.3.1",
@@ -46,18 +39,7 @@
     "cross-env": "^7.0.3",
     "electron": "^27.0.0",
     "electron-builder": "^24.6.4",
-    "@electron/rebuild": "^3.6.0",
     "rimraf": "^5.0.1"
-  },
-  "optionalDependencies": {
-    "node-hid": "^3.2.0"
-  },
-  "electronRebuild": {
-    "force": true,
-    "onlyModules": [
-      "node-hid",
-      "mssql"
-    ]
   },
   "build": {
     "appId": "com.shirtful.wareneingang-rfid-qr",
@@ -85,12 +67,6 @@
       "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
       "!**/{appveyor.yml,.travis.yml,circle.yml}",
       "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
-    ],
-    "extraResources": [
-      {
-        "from": ".env.example",
-        "to": ".env.example"
-      }
     ],
     "win": {
       "target": [
