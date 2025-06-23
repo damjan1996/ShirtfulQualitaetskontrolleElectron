@@ -1,7 +1,7 @@
 {
-  "name": "rfid-qr-wareneingang",
+  "name": "wareneingang-rfid-qr",
   "version": "1.0.0",
-  "description": "RFID-basierte Zeiterfassung und QR-Code Wareneingang - Moderne Electron Desktop-Anwendung",
+  "description": "RFID Wareneingang System - Vereinfachte Desktop-Anwendung für Shirtful",
   "main": "main.js",
   "author": {
     "name": "Shirtful GmbH",
@@ -17,15 +17,18 @@
   "scripts": {
     "start": "electron .",
     "dev": "cross-env NODE_ENV=development electron .",
-    "debug": "cross-env NODE_ENV=development DEBUG=true electron .",
+    "debug": "cross-env NODE_ENV=development DEBUG=true electron . --inspect=9229",
     "test": "node test.js",
+    "test-quick": "node scripts/quick-test.js",
     "setup": "node setup.js",
+    "setup-db": "node scripts/create-database.js",
+    "setup-users": "node scripts/create-test-users.js",
+    "test-db": "node scripts/test-db-connection.js",
     "clean": "rimraf dist node_modules/.cache",
-    "rebuild": "electron-rebuild",
-    "rebuild-force": "electron-rebuild --force",
-    "rebuild-hid": "electron-rebuild --module-dir . --which-module node-hid",
+    "rebuild": "@electron/rebuild --force",
+    "rebuild-hid": "@electron/rebuild --module-dir . --which-module node-hid",
     "install-rebuild": "npm install && npm run rebuild",
-    "full-rebuild": "npm run clean && npm install && npm run rebuild",
+    "full-rebuild": "npm run clean && npm install && npm run rebuild-safe",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:win32": "electron-builder --win --ia32",
@@ -37,15 +40,17 @@
   },
   "dependencies": {
     "dotenv": "^16.3.1",
-    "mssql": "^10.0.1",
-    "node-hid": "^3.2.0"
+    "mssql": "^10.0.1"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
     "electron": "^27.0.0",
     "electron-builder": "^24.6.4",
-    "electron-rebuild": "^3.2.9",
+    "@electron/rebuild": "^3.6.0",
     "rimraf": "^5.0.1"
+  },
+  "optionalDependencies": {
+    "node-hid": "^3.2.0"
   },
   "electronRebuild": {
     "force": true,
@@ -55,8 +60,8 @@
     ]
   },
   "build": {
-    "appId": "com.shirtful.rfid-qr-wareneingang",
-    "productName": "RFID QR Wareneingang",
+    "appId": "com.shirtful.wareneingang-rfid-qr",
+    "productName": "Wareneingang RFID QR",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -85,10 +90,6 @@
       {
         "from": ".env.example",
         "to": ".env.example"
-      },
-      {
-        "from": "README.md",
-        "to": "README.md"
       }
     ],
     "win": {
@@ -96,8 +97,7 @@
         {
           "target": "nsis",
           "arch": [
-            "x64",
-            "ia32"
+            "x64"
           ]
         }
       ],
@@ -110,7 +110,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
-      "shortcutName": "RFID QR Wareneingang",
+      "shortcutName": "Wareneingang RFID QR",
       "language": "1031",
       "artifactName": "${productName} Setup ${version}.${ext}",
       "deleteAppDataOnUninstall": false,
@@ -122,7 +122,7 @@
     "rfid",
     "qr-code",
     "wareneingang",
-    "zeiterfassung",
+    "shirtful",
     "electron",
     "desktop"
   ]

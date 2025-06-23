@@ -1,38 +1,37 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose safe API to renderer process
+// Sichere API für Renderer Process
 contextBridge.exposeInMainWorld('electronAPI', {
-    // Database operations
+    // ===== DATENBANK OPERATIONEN =====
     db: {
         query: (query, params) => ipcRenderer.invoke('db-query', query, params),
         getUserByEPC: (tagId) => ipcRenderer.invoke('db-get-user-by-epc', tagId)
     },
 
-    // Session management
+    // ===== SESSION MANAGEMENT =====
     session: {
         create: (userId) => ipcRenderer.invoke('session-create', userId),
-        end: (sessionId) => ipcRenderer.invoke('session-end', sessionId),
-        getActiveSessions: () => ipcRenderer.invoke('get-active-sessions')
+        end: (sessionId) => ipcRenderer.invoke('session-end', sessionId)
     },
 
-    // QR Code operations
+    // ===== QR-CODE OPERATIONEN =====
     qr: {
         saveScan: (sessionId, payload) => ipcRenderer.invoke('qr-scan-save', sessionId, payload)
     },
 
-    // RFID operations
+    // ===== RFID OPERATIONEN =====
     rfid: {
         getStatus: () => ipcRenderer.invoke('rfid-get-status'),
         simulateTag: (tagId) => ipcRenderer.invoke('rfid-simulate-tag', tagId)
     },
 
-    // System status and diagnostics
+    // ===== SYSTEM STATUS =====
     system: {
         getStatus: () => ipcRenderer.invoke('get-system-status'),
         getInfo: () => ipcRenderer.invoke('get-system-info')
     },
 
-    // Application controls
+    // ===== APP STEUERUNG =====
     app: {
         minimize: () => ipcRenderer.invoke('app-minimize'),
         close: () => ipcRenderer.invoke('app-close'),
@@ -40,7 +39,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         getSystemInfo: () => ipcRenderer.invoke('get-system-info')
     },
 
-    // Event listeners for main process events
+    // ===== EVENT LISTENERS =====
     on: (channel, callback) => {
         const validChannels = [
             'system-ready',
@@ -52,19 +51,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ];
 
         if (validChannels.includes(channel)) {
-            // Remove existing listeners to prevent duplicates
             ipcRenderer.removeAllListeners(channel);
-            // Add new listener
             ipcRenderer.on(channel, (event, data) => callback(data));
         }
     },
 
-    // Remove event listener
     off: (channel) => {
         ipcRenderer.removeAllListeners(channel);
     },
 
-    // One-time event listener
     once: (channel, callback) => {
         const validChannels = [
             'system-ready',
@@ -81,27 +76,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
 });
 
-// QR Scanner API (using getUserMedia)
+// ===== KAMERA API =====
 contextBridge.exposeInMainWorld('cameraAPI', {
     getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
-
-    // Helper to enumerate available cameras
     getDevices: () => navigator.mediaDevices.enumerateDevices(),
 
-    // Check camera permissions
     checkPermissions: async () => {
         try {
             const result = await navigator.permissions.query({ name: 'camera' });
-            return result.state; // 'granted', 'denied', or 'prompt'
+            return result.state;
         } catch (error) {
             return 'unknown';
         }
     },
 
-    // Get supported camera constraints
     getSupportedConstraints: () => navigator.mediaDevices.getSupportedConstraints(),
 
-    // Helper to stop media stream
     stopStream: (stream) => {
         if (stream && stream.getTracks) {
             stream.getTracks().forEach(track => track.stop());
@@ -109,38 +99,147 @@ contextBridge.exposeInMainWorld('cameraAPI', {
     }
 });
 
-// Utility functions for the renderer
+// ===== VERBESSERTE UTILITY FUNKTIONEN =====
 contextBridge.exposeInMainWorld('utils', {
-    // Format duration from seconds to HH:MM:SS
+    // ===== ZEIT & DATUM FORMATIERUNG =====
     formatDuration: (seconds) => {
+        if (typeof seconds !== 'number' || seconds < 0) return '00:00:00';
+
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
-        const secs = seconds % 60;
+        const secs = Math.floor(seconds % 60);
 
-        if (hours > 0) {
-            return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        } else {
-            return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        return [hours, minutes, secs]
+            .map(v => v.toString().padStart(2, '0'))
+            .join(':');
+    },
+
+    formatTimestamp: (timestamp, format = 'datetime') => {
+        try {
+            const date = new Date(timestamp);
+
+            // Prüfe auf gültiges Datum
+            if (isNaN(date.getTime())) {
+                return 'Ungültiges Datum';
+            }
+
+            const options = {
+                timeZone: 'Europe/Berlin', // Deutsche Zeitzone
+            };
+
+            switch (format) {
+                case 'time':
+                    return date.toLocaleTimeString('de-DE', {
+                        ...options,
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    });
+
+                case 'date':
+                    return date.toLocaleDateString('de-DE', {
+                        ...options,
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    });
+
+                case 'datetime':
+                    return date.toLocaleString('de-DE', {
+                        ...options,
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    });
+
+                case 'short':
+                    return date.toLocaleString('de-DE', {
+                        ...options,
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+
+                case 'relative':
+                    return this.getRelativeTime(date);
+
+                case 'iso':
+                    return date.toISOString();
+
+                default:
+                    return date.toLocaleString('de-DE', options);
+            }
+        } catch (error) {
+            console.error('Fehler bei Zeitformatierung:', error);
+            return 'Formatfehler';
         }
     },
 
-    // Validate RFID tag format
-    validateTagId: (tagId) => {
-        if (!tagId || typeof tagId !== 'string') return false;
-        const cleaned = tagId.trim().toUpperCase();
-        return /^[0-9A-F]{8,12}$/.test(cleaned) && parseInt(cleaned, 16) > 0;
+    getRelativeTime: (date) => {
+        try {
+            const now = new Date();
+            const diffMs = now - new Date(date);
+            const diffSecs = Math.floor(diffMs / 1000);
+            const diffMins = Math.floor(diffSecs / 60);
+            const diffHours = Math.floor(diffMins / 60);
+            const diffDays = Math.floor(diffHours / 24);
+
+            if (diffSecs < 5) return 'gerade eben';
+            if (diffSecs < 60) return `vor ${diffSecs} Sekunde${diffSecs !== 1 ? 'n' : ''}`;
+            if (diffMins < 60) return `vor ${diffMins} Minute${diffMins !== 1 ? 'n' : ''}`;
+            if (diffHours < 24) return `vor ${diffHours} Stunde${diffHours !== 1 ? 'n' : ''}`;
+            if (diffDays < 7) return `vor ${diffDays} Tag${diffDays !== 1 ? 'en' : ''}`;
+
+            return new Date(date).toLocaleDateString('de-DE');
+        } catch (error) {
+            return 'Unbekannt';
+        }
     },
 
-    // Parse QR code payload
+    getCurrentTimestamp: () => new Date().toISOString(),
+
+    // ===== RFID TAG VALIDIERUNG =====
+    validateTagId: (tagId) => {
+        if (!tagId || typeof tagId !== 'string') return false;
+
+        const cleaned = tagId.trim().toUpperCase();
+
+        // Prüfe Länge (8-12 Hex-Zeichen sind typisch)
+        if (cleaned.length < 8 || cleaned.length > 12) return false;
+
+        // Prüfe Hex-Format
+        if (!/^[0-9A-F]+$/.test(cleaned)) return false;
+
+        // Prüfe ob konvertierbar und nicht Null
+        try {
+            const decimal = parseInt(cleaned, 16);
+            return decimal > 0;
+        } catch (error) {
+            return false;
+        }
+    },
+
+    // ===== QR-CODE VERARBEITUNG =====
     parseQRPayload: (payload) => {
-        if (!payload) return { type: 'invalid', data: null };
+        if (!payload || typeof payload !== 'string') {
+            return { type: 'invalid', data: null, display: 'Ungültiger QR-Code' };
+        }
 
         try {
-            // Try JSON first
+            // JSON-Format versuchen
             const jsonData = JSON.parse(payload);
-            return { type: 'json', data: jsonData, display: JSON.stringify(jsonData, null, 2) };
+            return {
+                type: 'json',
+                data: jsonData,
+                display: JSON.stringify(jsonData, null, 2),
+                preview: this.createJSONPreview(jsonData)
+            };
         } catch (e) {
-            // Try key-value format
+            // Key-Value Format versuchen (Format: key1:value1^key2:value2)
             if (payload.includes('^') && payload.includes(':')) {
                 const parts = payload.split('^');
                 const data = {};
@@ -148,7 +247,8 @@ contextBridge.exposeInMainWorld('utils', {
 
                 parts.forEach(part => {
                     if (part.includes(':')) {
-                        const [key, value] = part.split(':', 2);
+                        const [key, ...valueParts] = part.split(':');
+                        const value = valueParts.join(':'); // Für Werte mit ':'
                         data[key.trim()] = value.trim();
                         valid = true;
                     }
@@ -158,87 +258,102 @@ contextBridge.exposeInMainWorld('utils', {
                     const display = Object.entries(data)
                         .map(([k, v]) => `${k}: ${v}`)
                         .join('\n');
-                    return { type: 'keyvalue', data, display };
+                    return {
+                        type: 'keyvalue',
+                        data,
+                        display,
+                        preview: this.createKeyValuePreview(data)
+                    };
                 }
             }
 
-            // Plain text
+            // Barcode-Format erkennen (EAN, UPC, etc.)
+            if (/^\d{8,14}$/.test(payload)) {
+                return {
+                    type: 'barcode',
+                    data: payload,
+                    display: payload,
+                    preview: `Barcode: ${payload}`
+                };
+            }
+
+            // URL-Format
+            if (payload.startsWith('http://') || payload.startsWith('https://')) {
+                return {
+                    type: 'url',
+                    data: payload,
+                    display: payload,
+                    preview: `URL: ${payload.length > 50 ? payload.substring(0, 50) + '...' : payload}`
+                };
+            }
+
+            // Plain Text
             return {
                 type: 'text',
                 data: payload,
-                display: payload.length > 100 ? payload.substring(0, 100) + '...' : payload
+                display: payload,
+                preview: payload.length > 100 ? payload.substring(0, 100) + '...' : payload
             };
         }
     },
 
-    // Get current timestamp
-    getCurrentTimestamp: () => new Date().toISOString(),
+    createJSONPreview: (jsonData) => {
+        try {
+            if (typeof jsonData === 'object') {
+                const keys = Object.keys(jsonData);
+                if (keys.length === 0) return 'Leeres JSON-Objekt';
 
-    // Format timestamp for display
-    formatTimestamp: (timestamp, format = 'time') => {
-        const date = new Date(timestamp);
+                const preview = keys.slice(0, 3).map(key => {
+                    const value = jsonData[key];
+                    const shortValue = typeof value === 'string' && value.length > 20
+                        ? value.substring(0, 20) + '...'
+                        : value;
+                    return `${key}: ${shortValue}`;
+                }).join(', ');
 
-        switch (format) {
-            case 'time':
-                return date.toLocaleTimeString('de-DE');
-            case 'datetime':
-                return date.toLocaleString('de-DE');
-            case 'date':
-                return date.toLocaleDateString('de-DE');
-            case 'iso':
-                return date.toISOString();
-            case 'relative':
-                return utils.getRelativeTime(date);
-            default:
-                return date.toLocaleString('de-DE');
+                return keys.length > 3 ? `${preview}...` : preview;
+            }
+            return String(jsonData);
+        } catch (error) {
+            return 'JSON-Vorschau nicht verfügbar';
         }
     },
 
-    // Get relative time (e.g., "2 minutes ago")
-    getRelativeTime: (date) => {
-        const now = new Date();
-        const diffMs = now - date;
-        const diffSecs = Math.floor(diffMs / 1000);
-        const diffMins = Math.floor(diffSecs / 60);
-        const diffHours = Math.floor(diffMins / 60);
-        const diffDays = Math.floor(diffHours / 24);
+    createKeyValuePreview: (data) => {
+        try {
+            const entries = Object.entries(data);
+            if (entries.length === 0) return 'Keine Daten';
 
-        if (diffSecs < 60) return 'gerade eben';
-        if (diffMins < 60) return `vor ${diffMins} Minute${diffMins !== 1 ? 'n' : ''}`;
-        if (diffHours < 24) return `vor ${diffHours} Stunde${diffHours !== 1 ? 'n' : ''}`;
-        if (diffDays < 7) return `vor ${diffDays} Tag${diffDays !== 1 ? 'en' : ''}`;
-        return date.toLocaleDateString('de-DE');
+            const preview = entries.slice(0, 2).map(([key, value]) => {
+                const shortValue = value.length > 15 ? value.substring(0, 15) + '...' : value;
+                return `${key}: ${shortValue}`;
+            }).join(', ');
+
+            return entries.length > 2 ? `${preview}...` : preview;
+        } catch (error) {
+            return 'Vorschau nicht verfügbar';
+        }
     },
 
-    // Convert hex to decimal
+    // ===== ZAHLKONVERTIERUNG =====
     hexToDecimal: (hex) => {
         try {
-            return parseInt(hex, 16);
+            const cleaned = hex.toString().replace(/[^0-9A-Fa-f]/g, '');
+            return parseInt(cleaned, 16);
         } catch (error) {
             return null;
         }
     },
 
-    // Convert decimal to hex
     decimalToHex: (decimal) => {
         try {
-            return decimal.toString(16).toUpperCase();
+            return Number(decimal).toString(16).toUpperCase();
         } catch (error) {
             return null;
         }
     },
 
-    // Generate random RFID tag (for testing)
-    generateRandomTag: () => {
-        const chars = '0123456789ABCDEF';
-        let result = '';
-        for (let i = 0; i < 10; i++) {
-            result += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return result;
-    },
-
-    // Debounce function
+    // ===== PERFORMANCE UTILITIES =====
     debounce: (func, wait) => {
         let timeout;
         return function executedFunction(...args) {
@@ -251,31 +366,39 @@ contextBridge.exposeInMainWorld('utils', {
         };
     },
 
-    // Throttle function
     throttle: (func, limit) => {
         let inThrottle;
-        return function() {
-            const args = arguments;
-            const context = this;
+        return function(...args) {
             if (!inThrottle) {
-                func.apply(context, args);
+                func.apply(this, args);
                 inThrottle = true;
                 setTimeout(() => inThrottle = false, limit);
             }
         };
     },
 
-    // Format file size
+    // ===== DATENVERARBEITUNG =====
     formatFileSize: (bytes) => {
         if (bytes === 0) return '0 Bytes';
+
         const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
+
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     },
 
-    // Log to console (for debugging)
-    log: (level, message, data) => {
+    generateRandomTag: () => {
+        const chars = '0123456789ABCDEF';
+        let result = '';
+        for (let i = 0; i < 10; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return result;
+    },
+
+    // ===== LOGGING =====
+    log: (level, message, data = null) => {
         const timestamp = new Date().toISOString();
         const logMessage = `[${timestamp}] ${level.toUpperCase()}: ${message}`;
 
@@ -297,12 +420,27 @@ contextBridge.exposeInMainWorld('utils', {
             default:
                 console.log(logMessage, data);
         }
+    },
+
+    // ===== VALIDIERUNG =====
+    isValidEmail: (email) => {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    },
+
+    sanitizeString: (str) => {
+        if (typeof str !== 'string') return '';
+        return str.replace(/[<>"/\\&]/g, '');
+    },
+
+    truncateString: (str, maxLength = 50) => {
+        if (typeof str !== 'string') return '';
+        return str.length > maxLength ? str.substring(0, maxLength) + '...' : str;
     }
 });
 
-// Environment and configuration
+// ===== KONFIGURATION & UMGEBUNG =====
 contextBridge.exposeInMainWorld('config', {
-    // Safe access to certain environment variables
     get: (key) => {
         const allowedKeys = [
             'NODE_ENV',
@@ -316,38 +454,53 @@ contextBridge.exposeInMainWorld('config', {
         if (allowedKeys.includes(key)) {
             return process.env[key];
         }
-
         return undefined;
     },
 
-    // Check if in development mode
     isDev: () => process.env.NODE_ENV === 'development',
+    version: null, // Wird später von der App gesetzt
 
-    // Get app version (will be available after system-ready)
-    version: null,
-
-    // Theme management
+    // ===== THEME MANAGEMENT =====
     theme: {
-        get: () => localStorage.getItem('app-theme') || 'auto',
-        set: (theme) => {
-            localStorage.setItem('app-theme', theme);
-            document.body.className = document.body.className.replace(/theme-\w+/g, '');
-            if (theme !== 'auto') {
-                document.body.classList.add(`theme-${theme}`);
+        get: () => {
+            try {
+                return localStorage.getItem('wareneingang-theme') || 'auto';
+            } catch {
+                return 'auto';
             }
         },
+
+        set: (theme) => {
+            try {
+                localStorage.setItem('wareneingang-theme', theme);
+                document.body.className = document.body.className.replace(/theme-\w+/g, '');
+
+                if (theme === 'auto') {
+                    // System-Präferenz verwenden
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                        document.body.classList.add('theme-dark');
+                    } else {
+                        document.body.classList.add('theme-light');
+                    }
+                } else {
+                    document.body.classList.add(`theme-${theme}`);
+                }
+            } catch (error) {
+                console.warn('Theme setzen fehlgeschlagen:', error);
+            }
+        },
+
         toggle: () => {
             const current = config.theme.get();
-            const next = current === 'dark' ? 'light' : 'dark';
+            const next = current === 'dark' ? 'light' : current === 'light' ? 'auto' : 'dark';
             config.theme.set(next);
             return next;
         }
     }
 });
 
-// Error handling and diagnostics
+// ===== DIAGNOSTICS & ERROR HANDLING =====
 contextBridge.exposeInMainWorld('diagnostics', {
-    // Collect system information for bug reports
     collectSystemInfo: async () => {
         try {
             const systemInfo = await window.electronAPI.system.getInfo();
@@ -359,19 +512,33 @@ contextBridge.exposeInMainWorld('diagnostics', {
                 system: systemInfo,
                 status: systemStatus,
                 rfid: rfidStatus,
-                userAgent: navigator.userAgent,
+                browser: {
+                    userAgent: navigator.userAgent,
+                    language: navigator.language,
+                    cookieEnabled: navigator.cookieEnabled,
+                    onLine: navigator.onLine
+                },
                 screen: {
                     width: screen.width,
                     height: screen.height,
-                    colorDepth: screen.colorDepth
+                    colorDepth: screen.colorDepth,
+                    pixelDepth: screen.pixelDepth
                 },
-                performance: {
-                    memory: performance.memory ? {
-                        used: performance.memory.usedJSHeapSize,
-                        total: performance.memory.totalJSHeapSize,
-                        limit: performance.memory.jsHeapSizeLimit
-                    } : null
-                }
+                performance: performance.memory ? {
+                    used: Math.round(performance.memory.usedJSHeapSize / 1024 / 1024),
+                    total: Math.round(performance.memory.totalJSHeapSize / 1024 / 1024),
+                    limit: Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024)
+                } : null,
+                localStorage: (() => {
+                    try {
+                        return {
+                            available: typeof Storage !== 'undefined',
+                            theme: localStorage.getItem('wareneingang-theme')
+                        };
+                    } catch {
+                        return { available: false };
+                    }
+                })()
             };
         } catch (error) {
             return {
@@ -381,69 +548,95 @@ contextBridge.exposeInMainWorld('diagnostics', {
         }
     },
 
-    // Export logs for support
-    exportLogs: () => {
-        // This would collect console logs, errors, etc.
-        return {
-            timestamp: new Date().toISOString(),
-            logs: console.logs || [],
-            errors: console.errors || []
-        };
+    exportDiagnostics: async () => {
+        try {
+            const systemInfo = await diagnostics.collectSystemInfo();
+            const logs = window.logs || [];
+
+            return {
+                ...systemInfo,
+                logs: logs.slice(-100), // Letzte 100 Log-Einträge
+                exportTime: new Date().toISOString()
+            };
+        } catch (error) {
+            return {
+                error: error.message,
+                timestamp: new Date().toISOString()
+            };
+        }
     }
 });
 
-// Initialize when DOM is ready
+// ===== INITIALIZATION =====
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Preload script loaded, DOM ready');
+    console.log('Preload Script geladen, DOM bereit');
 
-    // Set initial theme
-    const savedTheme = localStorage.getItem('app-theme') || 'auto';
-    if (savedTheme === 'auto') {
-        // Use system preference
-        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            document.body.classList.add('theme-dark');
-        } else {
-            document.body.classList.add('theme-light');
-        }
-    } else {
-        document.body.classList.add(`theme-${savedTheme}`);
-    }
+    // Theme initialisieren
+    const savedTheme = localStorage.getItem('wareneingang-theme') || 'auto';
+    config.theme.set(savedTheme);
 
-    // Listen for theme changes
+    // System Theme Changes verfolgen
     if (window.matchMedia) {
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-            const savedTheme = localStorage.getItem('app-theme') || 'auto';
-            if (savedTheme === 'auto') {
-                document.body.className = document.body.className.replace(/theme-\w+/g, '');
-                if (e.matches) {
-                    document.body.classList.add('theme-dark');
-                } else {
-                    document.body.classList.add('theme-light');
-                }
+            const currentTheme = localStorage.getItem('wareneingang-theme') || 'auto';
+            if (currentTheme === 'auto') {
+                config.theme.set('auto'); // Theme neu anwenden
             }
         });
     }
 
-    // Add global error handler
+    // Global Error Handler
     window.addEventListener('error', (event) => {
-        console.error('Global error:', event.error);
-        utils.log('error', 'Global error', {
-            message: event.error?.message,
+        const errorInfo = {
+            message: event.error?.message || event.message,
             stack: event.error?.stack,
             filename: event.filename,
             lineno: event.lineno,
-            colno: event.colno
-        });
+            colno: event.colno,
+            timestamp: new Date().toISOString()
+        };
+
+        console.error('Global Error:', errorInfo);
+        utils.log('error', 'Global JavaScript Error', errorInfo);
     });
 
-    // Add unhandled promise rejection handler
+    // Unhandled Promise Rejections
     window.addEventListener('unhandledrejection', (event) => {
-        console.error('Unhandled promise rejection:', event.reason);
-        utils.log('error', 'Unhandled promise rejection', {
+        const errorInfo = {
             reason: event.reason,
-            promise: event.promise
-        });
+            promise: event.promise,
+            timestamp: new Date().toISOString()
+        };
+
+        console.error('Unhandled Promise Rejection:', errorInfo);
+        utils.log('error', 'Unhandled Promise Rejection', errorInfo);
     });
+
+    // Log-Array für Diagnostics
+    window.logs = window.logs || [];
+
+    // Console-Methoden erweitern für Log-Sammlung
+    const originalConsoleError = console.error;
+    console.error = (...args) => {
+        window.logs.push({
+            level: 'error',
+            message: args.join(' '),
+            timestamp: new Date().toISOString()
+        });
+        originalConsoleError.apply(console, args);
+    };
+
+    const originalConsoleWarn = console.warn;
+    console.warn = (...args) => {
+        window.logs.push({
+            level: 'warn',
+            message: args.join(' '),
+            timestamp: new Date().toISOString()
+        });
+        originalConsoleWarn.apply(console, args);
+    };
+
+    console.log('✅ Preload Script erfolgreich initialisiert');
 });
 
-console.log('Preload script executed successfully');
+console.log('Preload Script geladen');

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * RFID QR Wareneingang - Electron Setup Script (Fixed)
- * Automatisierte Installation und Konfiguration mit pnpm Support
+ * Wareneingang RFID QR - Vereinfachtes Setup Script
+ * Automatisierte Installation und Konfiguration
  */
 
 const fs = require('fs');
@@ -10,7 +10,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const readline = require('readline');
 
-class ElectronSetup {
+class WareneingangSetup {
     constructor() {
         this.rl = readline.createInterface({
             input: process.stdin,
@@ -19,17 +19,16 @@ class ElectronSetup {
 
         this.config = {
             database: {},
-            rfid: {},
             ui: {},
             application: {}
         };
 
-        // Detect package manager
+        // Package Manager erkennen
         this.packageManager = this.detectPackageManager();
     }
 
     detectPackageManager() {
-        // Check if pnpm is available and preferred
+        // pnpm bevorzugen wenn verfügbar
         try {
             execSync('pnpm --version', { stdio: 'ignore' });
             if (fs.existsSync('pnpm-lock.yaml')) {
@@ -37,26 +36,17 @@ class ElectronSetup {
             }
         } catch {}
 
-        // Check for yarn
-        try {
-            execSync('yarn --version', { stdio: 'ignore' });
-            if (fs.existsSync('yarn.lock')) {
-                return 'yarn';
-            }
-        } catch {}
-
-        // Default to npm
+        // Fallback auf npm
         return 'npm';
     }
 
     async run() {
-        console.log('🚀 RFID QR Wareneingang - Electron Setup (Fixed)');
-        console.log('==========================================');
+        console.log('🏭 Wareneingang RFID QR - Setup');
+        console.log('='.repeat(40));
         console.log();
 
         try {
             await this.checkPrerequisites();
-            await this.cleanupPrevious();
             await this.collectConfiguration();
             await this.installDependencies();
             await this.createEnvironmentFile();
@@ -75,9 +65,9 @@ class ElectronSetup {
     }
 
     async checkPrerequisites() {
-        console.log('🔍 Überprüfe Voraussetzungen...');
+        console.log('🔍 Überprüfe Systemvoraussetzungen...');
 
-        // Node.js Version prüfen
+        // Node.js Version
         const nodeVersion = process.version;
         const majorVersion = parseInt(nodeVersion.split('.')[0].substring(1));
 
@@ -86,7 +76,7 @@ class ElectronSetup {
         }
         console.log(`  ✅ Node.js ${nodeVersion}`);
 
-        // Package Manager prüfen
+        // Package Manager
         try {
             const pmVersion = execSync(`${this.packageManager} --version`, { encoding: 'utf8' }).trim();
             console.log(`  ✅ ${this.packageManager} ${pmVersion}`);
@@ -94,56 +84,57 @@ class ElectronSetup {
             throw new Error(`${this.packageManager} nicht gefunden`);
         }
 
-        // Betriebssystem prüfen
-        const platform = process.platform;
-        console.log(`  ✅ Betriebssystem: ${platform}`);
-
-        // Projektverzeichnis prüfen
+        // Projektverzeichnis
         if (!fs.existsSync('package.json')) {
-            throw new Error('package.json nicht gefunden - führen Sie Setup im Projektverzeichnis aus');
+            throw new Error('package.json nicht gefunden - Setup im Projektverzeichnis ausführen');
         }
         console.log(`  ✅ Projektverzeichnis: ${process.cwd()}`);
+
+        // ODBC Driver prüfen (optional)
+        try {
+            console.log('  🔍 Prüfe SQL Server ODBC Driver...');
+            // Vereinfachte Prüfung - nicht kritisch
+            console.log('  ✅ SQL Server Treiber (Prüfung übersprungen)');
+        } catch (error) {
+            console.log('  ⚠️  SQL Server ODBC Driver nicht erkannt - bitte manuell installieren');
+        }
 
         console.log();
     }
 
-    async cleanupPrevious() {
-        console.log('🧹 Bereinige vorherige Installation...');
+    async collectConfiguration() {
+        console.log('⚙️ Konfiguration sammeln...');
+        console.log();
 
-        // node_modules löschen falls vorhanden
-        if (fs.existsSync('node_modules')) {
-            console.log('  🗑️ Lösche node_modules...');
-            try {
-                if (process.platform === 'win32') {
-                    execSync('rmdir /s /q node_modules', { stdio: 'ignore' });
-                } else {
-                    execSync('rm -rf node_modules', { stdio: 'ignore' });
-                }
-            } catch (error) {
-                console.log('  ⚠️ Konnte node_modules nicht löschen - wird überschrieben');
-            }
+        // Vereinfachte Konfiguration für Wareneingang
+        console.log('📊 Datenbank-Einstellungen (SQL Server):');
+        this.config.database.server = await this.askQuestion('SQL Server Adresse [116.202.224.248]: ') || '116.202.224.248';
+        this.config.database.database = await this.askQuestion('Datenbank Name [RdScanner]: ') || 'RdScanner';
+        this.config.database.user = await this.askQuestion('Benutzername [sa]: ') || 'sa';
+        this.config.database.password = await this.askQuestion('Passwort: ', true);
+        this.config.database.port = await this.askQuestion('Port [1433]: ') || '1433';
+
+        console.log();
+
+        // UI-Konfiguration (vereinfacht)
+        console.log('🎨 Benutzeroberfläche:');
+        this.config.ui.width = await this.askQuestion('Fensterbreite [1400]: ') || '1400';
+        this.config.ui.height = await this.askQuestion('Fensterhöhe [900]: ') || '900';
+
+        const fullscreenChoice = await this.askYesNo('Vollbild-Modus empfohlen?', true);
+        if (fullscreenChoice) {
+            this.config.ui.width = '1920';
+            this.config.ui.height = '1080';
         }
 
-        // Package-Lock-Dateien löschen
-        const lockFiles = ['package-lock.json', 'yarn.lock'];
-        lockFiles.forEach(file => {
-            if (fs.existsSync(file) && file !== `${this.packageManager}-lock.yaml`) {
-                try {
-                    fs.unlinkSync(file);
-                    console.log(`  🗑️ ${file} gelöscht`);
-                } catch {}
-            }
-        });
+        console.log();
 
-        // npm cache clean
-        if (this.packageManager === 'npm') {
-            try {
-                console.log('  🧹 npm cache clean...');
-                execSync('npm cache clean --force', { stdio: 'ignore' });
-            } catch {}
-        }
+        // Wareneingang-spezifische Einstellungen
+        console.log('📦 Wareneingang-Einstellungen:');
+        this.config.application.scanCooldown = await this.askQuestion('QR-Scan Cooldown in Sekunden [300]: ') || '300';
+        this.config.application.audioFeedback = await this.askYesNo('Audio-Feedback bei Scans?', true);
+        this.config.application.maxRecentScans = await this.askQuestion('Anzahl Recent Scans [10]: ') || '10';
 
-        console.log('  ✅ Bereinigung abgeschlossen');
         console.log();
     }
 
@@ -154,34 +145,42 @@ class ElectronSetup {
             console.log(`  🔄 ${this.packageManager} install...`);
 
             let installCommand;
-            switch (this.packageManager) {
-                case 'pnpm':
-                    installCommand = 'pnpm install --prefer-offline';
-                    break;
-                case 'yarn':
-                    installCommand = 'yarn install --prefer-offline';
-                    break;
-                default:
-                    installCommand = 'npm install --prefer-offline --no-audit';
+            if (this.packageManager === 'pnpm') {
+                installCommand = 'pnpm install --prefer-offline';
+            } else {
+                installCommand = 'npm install --prefer-offline --no-audit';
             }
 
             execSync(installCommand, {
                 stdio: 'inherit',
-                timeout: 300000 // 5 Minuten Timeout
+                timeout: 300000 // 5 Minuten
             });
 
             console.log('  ✅ Dependencies installiert');
+
+            // Optional: Native Module rebuilden
+            const rebuildChoice = await this.askYesNo('Native Module rebuilden (empfohlen für RFID)?', true);
+            if (rebuildChoice) {
+                try {
+                    console.log('  🔧 Rebuilding native modules...');
+                    execSync(`${this.packageManager} run rebuild`, { stdio: 'inherit' });
+                    console.log('  ✅ Native Module erfolgreich rebuilt');
+                } catch (rebuildError) {
+                    console.log('  ⚠️  Native Module Rebuild fehlgeschlagen - RFID eventuell nicht verfügbar');
+                }
+            }
+
         } catch (error) {
             console.log('\n❌ Installation fehlgeschlagen!');
-            console.log('\n🔧 Lösungsversuche:');
 
             if (this.packageManager === 'pnpm') {
-                console.log('1. pnpm cache löschen: pnpm store prune');
-                console.log('2. Alternatives Registry: pnpm install --registry https://registry.npmjs.org/');
-            } else if (this.packageManager === 'npm') {
-                console.log('1. npm cache löschen: npm cache clean --force');
-                console.log('2. Registry zurücksetzen: npm config delete registry');
-                console.log('3. Als Administrator ausführen');
+                console.log('🔧 Versuchen Sie:');
+                console.log('1. pnpm store prune');
+                console.log('2. pnpm install --force');
+            } else {
+                console.log('🔧 Versuchen Sie:');
+                console.log('1. npm cache clean --force');
+                console.log('2. npm install --force');
             }
 
             throw new Error(`Dependency Installation fehlgeschlagen: ${error.message}`);
@@ -190,64 +189,13 @@ class ElectronSetup {
         console.log();
     }
 
-    async collectConfiguration() {
-        console.log('⚙️ Konfiguration sammeln...');
-        console.log();
-
-        // Datenbank Konfiguration
-        console.log('📊 Datenbank-Einstellungen:');
-        this.config.database.server = await this.askQuestion('SQL Server Adresse [116.202.224.248]: ') || '116.202.224.248';
-        this.config.database.database = await this.askQuestion('Datenbank Name [RdScanner]: ') || 'RdScanner';
-        this.config.database.user = await this.askQuestion('Benutzername [sa]: ') || 'sa';
-        this.config.database.password = await this.askQuestion('Passwort: ', true);
-        this.config.database.port = await this.askQuestion('Port [1433]: ') || '1433';
-
-        console.log();
-
-        // QR-Code Konfiguration
-        console.log('📸 QR-Scanner Einstellungen:');
-        const assignmentModes = ['last_login', 'round_robin', 'manual'];
-        console.log('Verfügbare Modi:');
-        assignmentModes.forEach((mode, index) => {
-            console.log(`  ${index + 1}. ${mode}`);
-        });
-
-        const modeChoice = await this.askQuestion('QR-Zuordnungsmodus [1-3, default: 1]: ') || '1';
-        this.config.qr = {
-            assignmentMode: assignmentModes[parseInt(modeChoice) - 1] || 'last_login',
-            duplicateCheck: await this.askYesNo('QR-Duplikat-Verhinderung aktivieren?', true),
-            globalCooldown: await this.askQuestion('Globales QR-Cooldown in Sekunden [300]: ') || '300'
-        };
-
-        console.log();
-
-        // UI Konfiguration
-        console.log('🎨 Benutzeroberfläche:');
-        this.config.ui = {
-            width: await this.askQuestion('Fensterbreite [1200]: ') || '1200',
-            height: await this.askQuestion('Fensterhöhe [800]: ') || '800',
-            theme: await this.askQuestion('Theme [default/dark/light, default: default]: ') || 'default'
-        };
-
-        console.log();
-
-        // RFID Konfiguration
-        console.log('🏷️ RFID-Reader Einstellungen:');
-        this.config.rfid = {
-            scanInterval: await this.askQuestion('Min. Scan-Interval in ms [1000]: ') || '1000',
-            inputTimeout: await this.askQuestion('Input-Timeout in ms [500]: ') || '500'
-        };
-
-        console.log();
-    }
-
     async createEnvironmentFile() {
-        console.log('📝 Erstelle .env Datei...');
+        console.log('📝 Erstelle .env Konfigurationsdatei...');
 
-        const envContent = `# RFID QR Wareneingang - Electron Konfiguration
-# Automatisch generiert von Setup Script am ${new Date().toISOString()}
+        const envContent = `# Wareneingang RFID QR - Konfiguration
+# Automatisch generiert am ${new Date().toISOString()}
 
-# Datenbank Konfiguration
+# ===== DATENBANK =====
 MSSQL_SERVER=${this.config.database.server}
 MSSQL_DATABASE=${this.config.database.database}
 MSSQL_USER=${this.config.database.user}
@@ -258,29 +206,33 @@ MSSQL_TRUST_CERT=true
 MSSQL_REQUEST_TIMEOUT=30000
 MSSQL_CONNECTION_TIMEOUT=15000
 
-# QR-Code Konfiguration
-QR_DEFAULT_ASSIGNMENT_MODE=${this.config.qr.assignmentMode}
-QR_DUPLICATE_CHECK=${this.config.qr.duplicateCheck}
-QR_GLOBAL_COOLDOWN=${this.config.qr.globalCooldown}
+# ===== RFID KONFIGURATION =====
+RFID_MIN_SCAN_INTERVAL=1000
+RFID_INPUT_TIMEOUT=500
+RFID_MAX_BUFFER_LENGTH=15
+
+# ===== QR-SCANNER =====
+QR_GLOBAL_COOLDOWN=${this.config.application.scanCooldown}
 QR_SESSION_COOLDOWN=3600
 QR_CROSS_USER_CHECK=true
 
-# RFID Konfiguration
-RFID_MIN_SCAN_INTERVAL=${this.config.rfid.scanInterval}
-RFID_INPUT_TIMEOUT=${this.config.rfid.inputTimeout}
-RFID_MAX_BUFFER_LENGTH=15
-
-# UI Konfiguration
+# ===== BENUTZEROBERFLÄCHE =====
 UI_WINDOW_WIDTH=${this.config.ui.width}
 UI_WINDOW_HEIGHT=${this.config.ui.height}
-UI_MIN_WIDTH=1000
-UI_MIN_HEIGHT=600
-UI_THEME=${this.config.ui.theme}
-UI_SHOW_DEBUG=false
+UI_MIN_WIDTH=1200
+UI_MIN_HEIGHT=700
+UI_THEME=auto
 UI_UPDATE_INTERVAL=1000
-UI_STATUS_TIMEOUT=5000
+UI_SHOW_DEBUG=false
 
-# Anwendung
+# ===== WARENEINGANG =====
+MAX_RECENT_SCANS=${this.config.application.maxRecentScans}
+SCAN_SUCCESS_DURATION=2000
+AUDIO_FEEDBACK=${this.config.application.audioFeedback}
+CAMERA_RESOLUTION_WIDTH=1280
+CAMERA_RESOLUTION_HEIGHT=720
+
+# ===== ANWENDUNG =====
 NODE_ENV=production
 APP_DEBUG=false
 LOG_LEVEL=info
@@ -295,9 +247,15 @@ AUTO_START_COMPONENTS=true
     async testConnections() {
         console.log('🔍 Teste Verbindungen...');
 
-        // Datenbank Test
+        // Datenbank-Test
         console.log('  🔄 Teste Datenbankverbindung...');
         try {
+            // Erst prüfen ob DB-Client verfügbar ist
+            if (!fs.existsSync('./db/db-client.js')) {
+                console.log('  ⚠️  DB-Client nicht gefunden - überspringe Test');
+                return;
+            }
+
             const DatabaseClient = require('./db/db-client');
             const dbClient = new DatabaseClient();
 
@@ -307,7 +265,7 @@ AUTO_START_COMPONENTS=true
             if (healthCheck.connected) {
                 console.log('  ✅ Datenbankverbindung erfolgreich');
                 console.log(`    Server: ${healthCheck.server?.DatabaseName}`);
-                console.log(`    Zeit: ${healthCheck.connectionTime}ms`);
+                console.log(`    Dauer: ${healthCheck.connectionTime}ms`);
             } else {
                 throw new Error(healthCheck.error);
             }
@@ -317,11 +275,11 @@ AUTO_START_COMPONENTS=true
         } catch (error) {
             console.log(`  ❌ Datenbankverbindung fehlgeschlagen: ${error.message}`);
 
-            const retry = await this.askYesNo('Möchten Sie die Datenbank-Einstellungen korrigieren?', true);
+            const retry = await this.askYesNo('Datenbankeinstellungen korrigieren?', true);
             if (retry) {
-                console.log('\n📊 Datenbank-Einstellungen korrigieren:');
-                this.config.database.server = await this.askQuestion(`SQL Server [${this.config.database.server}]: `) || this.config.database.server;
-                this.config.database.user = await this.askQuestion(`Benutzername [${this.config.database.user}]: `) || this.config.database.user;
+                console.log('\n📊 Korrigierte Datenbank-Einstellungen:');
+                this.config.database.server = await this.askQuestion(`Server [${this.config.database.server}]: `) || this.config.database.server;
+                this.config.database.user = await this.askQuestion(`Benutzer [${this.config.database.user}]: `) || this.config.database.user;
                 this.config.database.password = await this.askQuestion('Neues Passwort: ', true) || this.config.database.password;
 
                 // .env aktualisieren
@@ -330,7 +288,7 @@ AUTO_START_COMPONENTS=true
                 // Erneut testen
                 return this.testConnections();
             } else {
-                console.log('  ⚠️ Fahre ohne Datenbanktest fort');
+                console.log('  ⚠️  Fahre ohne Datenbanktest fort');
             }
         }
 
@@ -341,7 +299,7 @@ AUTO_START_COMPONENTS=true
         console.log('🎯 Finalisiere Setup...');
 
         // Verzeichnisse erstellen
-        const directories = ['logs', 'temp', 'backup', 'build'];
+        const directories = ['logs', 'temp', 'backup'];
         directories.forEach(dir => {
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
@@ -349,21 +307,33 @@ AUTO_START_COMPONENTS=true
             }
         });
 
-        // Einfaches Icon erstellen (falls nicht vorhanden)
-        const iconPath = path.join('build', 'icon.ico');
-        if (!fs.existsSync(iconPath)) {
-            console.log('  ℹ️ Kein Icon gefunden - erstellen Sie build/icon.ico für professionelle Builds');
-        }
-
         // Start-Script erstellen
         const startScript = `@echo off
-echo Starte RFID QR Wareneingang...
+echo.
+echo =======================================
+echo   Wareneingang RFID QR System
+echo   Shirtful GmbH
+echo =======================================
+echo.
+echo Starte Anwendung...
 cd /d "%~dp0"
 ${this.packageManager} start
-pause`;
+echo.
+echo Anwendung beendet. Druecken Sie eine Taste...
+pause > nul`;
 
         fs.writeFileSync('start.bat', startScript);
         console.log('  ✅ start.bat erstellt');
+
+        // Schnelltest-Script
+        const quickTestScript = `@echo off
+echo Teste Datenbank-Verbindung...
+cd /d "%~dp0"
+node scripts/quick-test.js
+pause`;
+
+        fs.writeFileSync('test-db.bat', quickTestScript);
+        console.log('  ✅ test-db.bat erstellt');
 
         console.log();
     }
@@ -371,7 +341,7 @@ pause`;
     async askQuestion(question, isPassword = false) {
         return new Promise((resolve) => {
             if (isPassword) {
-                // Simple password input (without hiding characters for simplicity)
+                // Vereinfachte Passwort-Eingabe
                 this.rl.question(question, (answer) => {
                     resolve(answer);
                 });
@@ -397,10 +367,25 @@ pause`;
     }
 }
 
-// Script starten wenn direkt aufgerufen
-if (require.main === module) {
-    const setup = new ElectronSetup();
-    setup.run().catch(console.error);
+// ===== MAIN EXECUTION =====
+async function main() {
+    console.log('🏭 Wareneingang RFID QR - Vereinfachtes Setup');
+    console.log('='.repeat(50));
+    console.log('Dieses Setup konfiguriert die Anwendung für den Wareneingang.');
+    console.log('');
+
+    try {
+        const setup = new WareneingangSetup();
+        await setup.run();
+    } catch (error) {
+        console.error('❌ Setup-Fehler:', error.message);
+        process.exit(1);
+    }
 }
 
-module.exports = ElectronSetup;
+// Script starten wenn direkt aufgerufen
+if (require.main === module) {
+    main();
+}
+
+module.exports = WareneingangSetup;

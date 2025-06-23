@@ -11,209 +11,121 @@
         img-src 'self' blob: data: https:;
         style-src 'self' 'unsafe-inline';
     ">
-    <title>RFID QR Wareneingang System</title>
+    <title>RFID Wareneingang - Shirtful</title>
     <link rel="stylesheet" href="styles.css">
-    <style>
-        /* Additional styles for camera test modal */
-        .camera-test-info {
-            margin-bottom: var(--spacing-lg);
-        }
-
-        .camera-test-info h4 {
-            font-size: var(--font-size-base);
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: var(--spacing-sm);
-            margin-top: var(--spacing-lg);
-        }
-
-        .camera-test-info h4:first-child {
-            margin-top: 0;
-        }
-
-        .camera-device {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-sm);
-            padding: var(--spacing-sm);
-            margin-bottom: var(--spacing-sm);
-            font-size: var(--font-size-sm);
-        }
-
-        .camera-device.error {
-            border-color: var(--color-error);
-            background: rgba(239, 68, 68, 0.1);
-            color: var(--color-error);
-        }
-
-        .permission-granted { color: var(--color-success); font-weight: 600; }
-        .permission-denied { color: var(--color-error); font-weight: 600; }
-        .permission-prompt { color: var(--color-warning); font-weight: 600; }
-        .permission-unknown { color: var(--text-muted); font-weight: 600; }
-
-        .btn-info {
-            background: var(--color-info);
-            color: white;
-            border-color: var(--color-info);
-        }
-
-        .btn-info:hover:not(:disabled) {
-            background: #0891b2;
-        }
-
-        /* Scanner improvements */
-        .scanner-info .info-item .value.success { color: var(--color-success); }
-        .scanner-info .info-item .value.error { color: var(--color-error); }
-        .scanner-info .info-item .value.warning { color: var(--color-warning); }
-    </style>
 </head>
 <body>
-<!-- Header Section -->
-<header class="app-header">
+<!-- Header -->
+<header class="main-header">
     <div class="header-content">
-        <div class="header-left">
-            <h1 class="app-title">
-                <span class="icon">🏷️</span>
-                RFID QR Wareneingang
-            </h1>
-            <div class="system-status" id="systemStatus">
-                <span class="status-dot"></span>
-                <span class="status-text">Initialisierung...</span>
-            </div>
+        <div class="company-info">
+            <h1 class="app-title">📦 Wareneingang</h1>
+            <div class="company-name">Shirtful GmbH</div>
         </div>
 
-        <div class="header-right">
-            <div class="stats-group">
-                <div class="stat-item">
-                    <span class="stat-label">Aktive Benutzer:</span>
-                    <span class="stat-value" id="activeUsersCount">0</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Heutige Scans:</span>
-                    <span class="stat-value" id="totalScansCount">0</span>
-                </div>
+        <div class="system-status">
+            <div class="status-indicator" id="systemStatus">
+                <div class="status-dot"></div>
+                <span class="status-text">System wird gestartet...</span>
             </div>
-
-            <div class="header-actions">
-                <button class="action-btn" id="cameraTestBtn" title="Kamera testen">
-                    <span class="icon">📷</span>
-                </button>
-                <button class="action-btn" id="minimizeBtn" title="Minimieren">
-                    <span class="icon">🗕</span>
-                </button>
-                <button class="action-btn close-btn" id="closeBtn" title="Schließen">
-                    <span class="icon">✕</span>
-                </button>
-            </div>
+            <div class="current-time" id="currentTime">--:--:--</div>
         </div>
     </div>
 </header>
 
 <!-- Main Content -->
-<main class="app-main">
-    <!-- Left Panel - Active Users -->
-    <section class="panel panel-users">
-        <div class="panel-header">
-            <h2 class="panel-title">
-                <span class="icon">👥</span>
-                Aktive Benutzer
-            </h2>
-            <div class="panel-actions">
-                <button class="btn btn-secondary" id="logoutAllBtn">
-                    Alle abmelden
-                </button>
-            </div>
-        </div>
-
-        <div class="panel-content">
-            <div class="users-list" id="usersList">
-                <div class="empty-state" id="usersEmptyState">
-                    <div class="empty-icon">🏷️</div>
-                    <h3>Keine aktiven Benutzer</h3>
-                    <p>Halten Sie Ihren RFID-Tag an den Reader</p>
-                </div>
+<main class="main-content">
+    <!-- Login Bereich -->
+    <section class="login-section" id="loginSection">
+        <div class="login-card">
+            <div class="login-icon">🏷️</div>
+            <h2>RFID-Tag scannen</h2>
+            <p>Halten Sie Ihren RFID-Tag an den Scanner</p>
+            <div class="login-status" id="loginStatus">
+                <div class="pulse-animation"></div>
+                Bereit zum Scannen...
             </div>
         </div>
     </section>
 
-    <!-- Center Panel - QR Scanner -->
-    <section class="panel panel-scanner">
-        <div class="panel-header">
-            <h2 class="panel-title">
-                <span class="icon">📸</span>
-                QR-Code Scanner
-            </h2>
-            <div class="scanner-controls">
-                <button class="btn btn-primary" id="startScannerBtn">
-                    Scanner starten
-                </button>
-                <button class="btn btn-secondary" id="stopScannerBtn" style="display: none;">
-                    Scanner stoppen
-                </button>
-                <button class="btn btn-info btn-small" id="testQRBtn" title="Test QR generieren">
-                    Test QR
+    <!-- Arbeitsbereich (nur sichtbar wenn Benutzer angemeldet) -->
+    <section class="workspace" id="workspace" style="display: none;">
+
+        <!-- Aktueller Benutzer -->
+        <div class="current-user-panel">
+            <div class="user-info">
+                <div class="user-avatar">👤</div>
+                <div class="user-details">
+                    <h3 class="user-name" id="currentUserName">Kein Benutzer</h3>
+                    <div class="user-session-info">
+                        <span class="session-time" id="sessionTime">00:00:00</span>
+                        <span class="session-scans">• <span id="sessionScans">0</span> Scans</span>
+                    </div>
+                </div>
+                <button class="logout-btn" id="logoutBtn" title="Abmelden">
+                    <span>🔓</span>
+                    Abmelden
                 </button>
             </div>
         </div>
 
-        <div class="panel-content">
-            <div class="scanner-container">
-                <div class="scanner-video-container" id="scannerVideoContainer">
-                    <video id="scannerVideo" autoplay playsinline muted></video>
-                    <div class="scanner-overlay">
-                        <div class="scanner-crosshair"></div>
-                        <div class="scanner-frame"></div>
-                    </div>
-                    <div class="scanner-status" id="scannerStatus">
-                        <span class="icon">📷</span>
-                        <span class="text">Klicken Sie "Scanner starten"</span>
-                    </div>
+        <!-- QR-Scanner Bereich -->
+        <div class="scanner-section">
+            <div class="scanner-header">
+                <h3>📸 QR-Code Scanner</h3>
+                <div class="scanner-controls">
+                    <button class="btn-primary" id="startScannerBtn">
+                        📹 Scanner starten
+                    </button>
+                    <button class="btn-secondary" id="stopScannerBtn" style="display: none;">
+                        ⏹️ Scanner stoppen
+                    </button>
                 </div>
-
-                <canvas id="scannerCanvas" style="display: none;"></canvas>
             </div>
 
+            <!-- Kamera-Vorschau -->
+            <div class="camera-container" id="cameraContainer">
+                <video id="scannerVideo" autoplay playsinline muted></video>
+                <div class="scanner-overlay">
+                    <div class="scanner-frame"></div>
+                    <div class="scan-target">
+                        <div class="corner tl"></div>
+                        <div class="corner tr"></div>
+                        <div class="corner bl"></div>
+                        <div class="corner br"></div>
+                    </div>
+                </div>
+                <div class="camera-status" id="cameraStatus">
+                    <div class="status-icon">📷</div>
+                    <div class="status-text">Klicken Sie "Scanner starten"</div>
+                </div>
+            </div>
+            <canvas id="scannerCanvas" style="display: none;"></canvas>
+
+            <!-- Scanner-Info -->
             <div class="scanner-info">
-                <div class="info-item">
-                    <span class="label">Status:</span>
-                    <span class="value" id="scannerStatusText">Bereit</span>
+                <div class="info-row">
+                    <span class="info-label">Status:</span>
+                    <span class="info-value" id="scannerStatusText">Bereit</span>
                 </div>
-                <div class="info-item">
-                    <span class="label">Letzter Scan:</span>
-                    <span class="value" id="lastScanTime">-</span>
-                </div>
-                <div class="info-item">
-                    <span class="label">Kamera:</span>
-                    <span class="value" id="cameraInfo">Nicht erkannt</span>
-                </div>
-                <div class="info-item">
-                    <span class="label">Auflösung:</span>
-                    <span class="value" id="resolutionInfo">-</span>
+                <div class="info-row">
+                    <span class="info-label">Letzter Scan:</span>
+                    <span class="info-value" id="lastScanTime">-</span>
                 </div>
             </div>
         </div>
-    </section>
 
-    <!-- Right Panel - Recent Scans -->
-    <section class="panel panel-scans">
-        <div class="panel-header">
-            <h2 class="panel-title">
-                <span class="icon">📋</span>
-                Letzte Scans
-            </h2>
-            <div class="panel-actions">
-                <button class="btn btn-secondary" id="clearScansBtn">
-                    Leeren
-                </button>
+        <!-- Letzte Scans -->
+        <div class="recent-scans-section">
+            <div class="scans-header">
+                <h3>📋 Letzte Scans</h3>
+                <button class="btn-secondary btn-small" id="clearScansBtn">🗑️ Leeren</button>
             </div>
-        </div>
 
-        <div class="panel-content">
             <div class="scans-list" id="scansList">
-                <div class="empty-state" id="scansEmptyState">
-                    <div class="empty-icon">📋</div>
-                    <h3>Keine Scans</h3>
-                    <p>QR-Codes erscheinen hier nach dem Scannen</p>
+                <div class="empty-scans" id="emptyScans">
+                    <div class="empty-icon">📄</div>
+                    <p>Noch keine QR-Codes gescannt</p>
                 </div>
             </div>
         </div>
@@ -221,47 +133,28 @@
 </main>
 
 <!-- Footer -->
-<footer class="app-footer">
+<footer class="main-footer">
     <div class="footer-content">
         <div class="footer-left">
-            <span class="footer-text" id="instructionsText">
-                💡 RFID scannen = Anmelden/Abmelden | QR-Code scannen = Wareneingang erfassen
-            </span>
+            <span id="instructionText">💡 RFID-Tag scannen = Anmelden • QR-Code scannen = Paket erfassen</span>
         </div>
-
         <div class="footer-right">
-            <span class="footer-text" id="versionText">v1.0.0</span>
-            <span class="footer-separator">|</span>
-            <span class="footer-text" id="timestampText"></span>
+            <span id="versionText">v1.0.0</span>
+            <span class="separator">•</span>
+            <span id="dateText">--.--.----</span>
         </div>
     </div>
 </footer>
 
-<!-- Modals -->
+<!-- Benachrichtigungen -->
+<div class="notifications" id="notifications"></div>
 
-<!-- QR Assignment Modal (for manual assignment) -->
-<div class="modal" id="qrAssignmentModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3 class="modal-title">QR-Code zuordnen</h3>
-            <button class="modal-close" id="qrAssignmentModalClose">✕</button>
-        </div>
-
-        <div class="modal-body">
-            <div class="qr-preview">
-                <h4>QR-Code Inhalt:</h4>
-                <div class="qr-content" id="qrAssignmentContent"></div>
-            </div>
-
-            <div class="user-selection">
-                <h4>Benutzer auswählen:</h4>
-                <div class="user-buttons" id="qrAssignmentUsers"></div>
-            </div>
-        </div>
-
-        <div class="modal-footer">
-            <button class="btn btn-secondary" id="qrAssignmentCancel">Abbrechen</button>
-        </div>
+<!-- Scan-Erfolg Overlay -->
+<div class="scan-success-overlay" id="scanSuccessOverlay">
+    <div class="success-content">
+        <div class="success-icon">✅</div>
+        <div class="success-text">QR-Code erfasst!</div>
+        <div class="success-details" id="scanSuccessDetails"></div>
     </div>
 </div>
 
@@ -275,50 +168,35 @@
             </h3>
             <button class="modal-close" id="errorModalClose">✕</button>
         </div>
-
         <div class="modal-body">
             <div class="error-message" id="errorMessage"></div>
         </div>
-
         <div class="modal-footer">
-            <button class="btn btn-primary" id="errorModalOk">OK</button>
+            <button class="btn-primary" id="errorModalOk">OK</button>
         </div>
     </div>
 </div>
 
-<!-- Camera Test Modal -->
-<div class="modal" id="cameraTestModal">
+<!-- Camera Permission Modal -->
+<div class="modal" id="cameraPermissionModal">
     <div class="modal-content">
         <div class="modal-header">
             <h3 class="modal-title">
                 <span class="icon">📷</span>
-                Kamera Test
+                Kamera-Berechtigung
             </h3>
-            <button class="modal-close" id="cameraTestModalClose">✕</button>
         </div>
-
         <div class="modal-body">
-            <div class="camera-test-info">
-                <h4>Verfügbare Kameras:</h4>
-                <div id="cameraList"></div>
-
-                <h4>Kamera Berechtigungen:</h4>
-                <div id="permissionStatus"></div>
-
-                <button class="btn btn-primary" id="requestPermissionBtn">Berechtigung anfordern</button>
-            </div>
+            <p>Die Anwendung benötigt Zugriff auf Ihre Kamera für das QR-Code-Scanning.</p>
+            <p>Bitte erlauben Sie den Kamera-Zugriff im nächsten Dialog.</p>
         </div>
-
         <div class="modal-footer">
-            <button class="btn btn-secondary" id="cameraTestModalCancel">Schließen</button>
+            <button class="btn-primary" id="grantCameraPermission">Kamera erlauben</button>
+            <button class="btn-secondary" id="cancelCameraPermission">Abbrechen</button>
         </div>
     </div>
 </div>
 
-<!-- Notification Container -->
-<div class="notifications" id="notifications"></div>
-
-<!-- Scripts -->
 <script src="app.js"></script>
 </body>
 </html>

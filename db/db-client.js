@@ -27,56 +27,55 @@ class DatabaseClient {
             }
         };
 
-        console.log('Database client initialized with config:', {
+        console.log('Database client initialisiert mit Konfiguration:', {
             server: this.config.server,
             database: this.config.database,
             user: this.config.user,
             port: this.config.port,
-            encrypt: this.config.options.encrypt,
-            trustServerCertificate: this.config.options.trustServerCertificate
+            encrypt: this.config.options.encrypt
         });
     }
 
     async connect() {
         if (this.isConnected && this.pool) {
-            console.log('Database already connected');
+            console.log('Datenbank bereits verbunden');
             return true;
         }
 
         try {
-            console.log('Connecting to SQL Server...');
+            console.log('Verbinde mit SQL Server...');
             console.log(`Server: ${this.config.server}:${this.config.port}`);
-            console.log(`Database: ${this.config.database}`);
-            console.log(`User: ${this.config.user}`);
+            console.log(`Datenbank: ${this.config.database}`);
+            console.log(`Benutzer: ${this.config.user}`);
 
-            // Create connection pool
+            // Connection Pool erstellen
             this.pool = await sql.connect(this.config);
 
-            // Test connection
-            const result = await this.pool.request().query('SELECT 1 as test');
+            // Verbindung testen
+            const result = await this.pool.request().query('SELECT 1 as test, GETDATE() as serverTime');
 
             if (result.recordset && result.recordset[0].test === 1) {
                 this.isConnected = true;
-                console.log('✅ Database connected successfully');
+                console.log('✅ Datenbank erfolgreich verbunden');
+                console.log(`Server-Zeit: ${result.recordset[0].serverTime}`);
 
-                // Test table existence
+                // Tabellen validieren
                 await this.validateTables();
-
                 return true;
             } else {
-                throw new Error('Connection test failed');
+                throw new Error('Verbindungstest fehlgeschlagen');
             }
 
         } catch (error) {
-            console.error('❌ Database connection failed:', error.message);
+            console.error('❌ Datenbankverbindung fehlgeschlagen:', error.message);
 
-            // Provide helpful error messages
+            // Hilfreiche Fehlermeldungen
             if (error.code === 'ELOGIN') {
-                console.error('💡 Login failed - check username/password in .env file');
+                console.error('💡 Anmeldung fehlgeschlagen - prüfen Sie Benutzername/Passwort in .env');
             } else if (error.code === 'ETIMEOUT') {
-                console.error('💡 Connection timeout - check server address and firewall');
+                console.error('💡 Verbindungs-Timeout - prüfen Sie Server-Adresse und Firewall');
             } else if (error.code === 'ENOTFOUND') {
-                console.error('💡 Server not found - check MSSQL_SERVER in .env file');
+                console.error('💡 Server nicht gefunden - prüfen Sie MSSQL_SERVER in .env');
             }
 
             this.isConnected = false;
@@ -93,55 +92,54 @@ class DatabaseClient {
             for (const tableName of requiredTables) {
                 try {
                     const result = await this.query(`
-                        SELECT COUNT(*) as [count] 
-                        FROM INFORMATION_SCHEMA.TABLES 
+                        SELECT COUNT(*) as tableCount
+                        FROM INFORMATION_SCHEMA.TABLES
                         WHERE TABLE_NAME = ? AND TABLE_SCHEMA = 'dbo'
                     `, [tableName]);
 
-                    if (result.recordset[0].count > 0) {
+                    if (result.recordset[0].tableCount > 0) {
                         existingTables.push(tableName);
 
-                        // Get row count for info - FIXED: SQL Server compatible alias
-                        const countResult = await this.query(`SELECT COUNT(*) as TableRowCount FROM dbo.[${tableName}]`);
-                        console.log(`✅ Table ${tableName}: ${countResult.recordset[0].TableRowCount} rows`);
+                        // Zeilen zählen für Info
+                        const countResult = await this.query(`SELECT COUNT(*) as rowCount FROM dbo.[${tableName}]`);
+                        console.log(`✅ Tabelle ${tableName}: ${countResult.recordset[0].rowCount} Einträge`);
                     } else {
                         missingTables.push(tableName);
                     }
                 } catch (error) {
-                    console.error(`❌ Error checking table ${tableName}:`, error.message);
+                    console.error(`❌ Fehler beim Prüfen der Tabelle ${tableName}:`, error.message);
                     missingTables.push(tableName);
                 }
             }
 
             if (missingTables.length > 0) {
-                console.warn(`⚠️ Missing tables: ${missingTables.join(', ')}`);
-                console.warn('💡 Run database setup script to create missing tables');
+                console.warn(`⚠️ Fehlende Tabellen: ${missingTables.join(', ')}`);
+                console.warn('💡 Führen Sie das Datenbank-Setup-Skript aus um fehlende Tabellen zu erstellen');
             }
 
             return { existingTables, missingTables };
 
         } catch (error) {
-            console.error('Error validating tables:', error);
+            console.error('Fehler bei Tabellen-Validierung:', error);
             return { existingTables: [], missingTables: [] };
         }
     }
 
     async query(queryString, parameters = []) {
         if (!this.isConnected || !this.pool) {
-            throw new Error('Database not connected');
+            throw new Error('Datenbank nicht verbunden');
         }
 
         try {
             const request = this.pool.request();
 
-            // Add parameters
+            // Parameter hinzufügen mit korrekten SQL-Typen
             parameters.forEach((param, index) => {
-                // Determine SQL type based on JavaScript type
                 let sqlType = sql.NVarChar;
 
                 if (typeof param === 'number') {
                     if (Number.isInteger(param)) {
-                        sqlType = sql.Int;
+                        sqlType = param > 2147483647 ? sql.BigInt : sql.Int;
                     } else {
                         sqlType = sql.Float;
                     }
@@ -156,24 +154,26 @@ class DatabaseClient {
                 request.input(`param${index}`, sqlType, param);
             });
 
-            // Replace ? placeholders with @param0, @param1, etc.
+            // ? Platzhalter durch @param0, @param1, etc. ersetzen
             let processedQuery = queryString;
             let paramIndex = 0;
             processedQuery = processedQuery.replace(/\?/g, () => `@param${paramIndex++}`);
 
-            console.log('Executing query:', processedQuery);
-            console.log('Parameters:', parameters);
+            console.log('Führe Query aus:', processedQuery);
+            if (parameters.length > 0) {
+                console.log('Parameter:', parameters);
+            }
 
             const result = await request.query(processedQuery);
 
-            console.log(`Query executed successfully. Rows affected: ${result.rowsAffected}, Records: ${result.recordset?.length || 0}`);
+            console.log(`Query erfolgreich. Betroffene Zeilen: ${result.rowsAffected}, Datensätze: ${result.recordset?.length || 0}`);
 
             return result;
 
         } catch (error) {
-            console.error('Database query error:', error.message);
+            console.error('Datenbank-Query-Fehler:', error.message);
             console.error('Query:', queryString);
-            console.error('Parameters:', parameters);
+            console.error('Parameter:', parameters);
             throw error;
         }
     }
@@ -184,126 +184,171 @@ class DatabaseClient {
                 await this.pool.close();
                 this.pool = null;
                 this.isConnected = false;
-                console.log('✅ Database connection closed');
+                console.log('✅ Datenbankverbindung geschlossen');
             } catch (error) {
-                console.error('Error closing database connection:', error);
+                console.error('Fehler beim Schließen der Datenbankverbindung:', error);
             }
         }
     }
 
-    // Convenience methods for common operations
-
+    // ===== BENUTZER-OPERATIONEN =====
     async getUserByEPC(epcHex) {
         try {
             const epcDecimal = parseInt(epcHex, 16);
+            console.log(`Suche Benutzer für EPC: ${epcHex} (${epcDecimal})`);
+
             const result = await this.query(`
                 SELECT ID, Vorname, Nachname, BenutzerName, Email, EPC
                 FROM dbo.ScannBenutzer
                 WHERE EPC = ? AND xStatus = 0
             `, [epcDecimal]);
 
-            return result.recordset.length > 0 ? result.recordset[0] : null;
+            if (result.recordset.length > 0) {
+                const user = result.recordset[0];
+                console.log(`✅ Benutzer gefunden: ${user.BenutzerName}`);
+                return user;
+            } else {
+                console.log(`❌ Kein Benutzer gefunden für EPC: ${epcHex}`);
+                return null;
+            }
         } catch (error) {
-            console.error('Error getting user by EPC:', error);
+            console.error('Fehler beim Abrufen des Benutzers nach EPC:', error);
             return null;
         }
     }
 
+    // ===== SESSION MANAGEMENT =====
     async createSession(userId) {
         try {
-            // First, end any existing active sessions for this user
+            console.log(`Erstelle neue Session für Benutzer ID: ${userId}`);
+
+            // Erst alle bestehenden aktiven Sessions des Benutzers beenden
             await this.query(`
                 UPDATE dbo.Sessions
                 SET EndTS = SYSDATETIME(), Active = 0
                 WHERE UserID = ? AND Active = 1
             `, [userId]);
 
-            // Create new session
+            // Neue Session erstellen mit deutscher Zeitzone-Behandlung
             const result = await this.query(`
                 INSERT INTO dbo.Sessions (UserID, StartTS, Active)
-                OUTPUT INSERTED.ID, INSERTED.StartTS
+                    OUTPUT INSERTED.ID, INSERTED.StartTS
                 VALUES (?, SYSDATETIME(), 1)
             `, [userId]);
 
-            return result.recordset.length > 0 ? result.recordset[0] : null;
+            if (result.recordset.length > 0) {
+                const session = result.recordset[0];
+                console.log(`✅ Session erstellt: ID ${session.ID}`);
+                return session;
+            }
+            return null;
         } catch (error) {
-            console.error('Error creating session:', error);
+            console.error('Fehler beim Erstellen der Session:', error);
             return null;
         }
     }
 
     async endSession(sessionId) {
         try {
+            console.log(`Beende Session: ${sessionId}`);
+
             const result = await this.query(`
                 UPDATE dbo.Sessions
                 SET EndTS = SYSDATETIME(), Active = 0
                 WHERE ID = ? AND Active = 1
             `, [sessionId]);
 
-            return result.rowsAffected && result.rowsAffected[0] > 0;
+            const success = result.rowsAffected && result.rowsAffected[0] > 0;
+
+            if (success) {
+                console.log(`✅ Session ${sessionId} erfolgreich beendet`);
+            } else {
+                console.log(`⚠️ Session ${sessionId} war bereits beendet oder nicht gefunden`);
+            }
+
+            return success;
         } catch (error) {
-            console.error('Error ending session:', error);
+            console.error('Fehler beim Beenden der Session:', error);
             return false;
         }
     }
 
-    async saveQRScan(sessionId, payload) {
+    async getActiveSession(userId) {
         try {
             const result = await this.query(`
-                INSERT INTO dbo.QrScans (SessionID, RawPayload, Valid)
-                OUTPUT INSERTED.ID, INSERTED.CapturedTS
-                VALUES (?, ?, 1)
-            `, [sessionId, payload]);
+                SELECT ID, StartTS,
+                       DATEDIFF(SECOND, StartTS, SYSDATETIME()) as DurationSeconds
+                FROM dbo.Sessions
+                WHERE UserID = ? AND Active = 1
+            `, [userId]);
 
             return result.recordset.length > 0 ? result.recordset[0] : null;
         } catch (error) {
-            console.error('Error saving QR scan:', error);
+            console.error('Fehler beim Abrufen der aktiven Session:', error);
             return null;
         }
     }
 
-    async getActiveSessions() {
+    // ===== QR-SCAN OPERATIONEN =====
+    async saveQRScan(sessionId, payload) {
         try {
-            const result = await this.query(`
-                SELECT s.ID, s.UserID, s.StartTS, u.BenutzerName, u.Email,
-                       DATEDIFF(SECOND, s.StartTS, SYSDATETIME()) as DurationSeconds,
-                       (SELECT COUNT(*) FROM dbo.QrScans WHERE SessionID = s.ID) as ScanCount
-                FROM dbo.Sessions s
-                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
-                WHERE s.Active = 1
-                ORDER BY s.StartTS DESC
-            `);
+            console.log(`Speichere QR-Scan für Session ${sessionId}`);
 
-            return result.recordset || [];
+            // Prüfe auf Duplikate (global für heute)
+            const isDuplicate = await this.checkQRDuplicate(payload);
+            if (isDuplicate) {
+                throw new Error('QR-Code wurde heute bereits gescannt (globales Duplikat)');
+            }
+
+            // QR-Scan speichern
+            const result = await this.query(`
+                INSERT INTO dbo.QrScans (SessionID, RawPayload, Valid, CapturedTS)
+                OUTPUT INSERTED.ID, INSERTED.CapturedTS
+                VALUES (?, ?, 1, SYSDATETIME())
+            `, [sessionId, payload]);
+
+            if (result.recordset.length > 0) {
+                const scan = result.recordset[0];
+                console.log(`✅ QR-Scan gespeichert: ID ${scan.ID}`);
+                return scan;
+            }
+            return null;
         } catch (error) {
-            console.error('Error getting active sessions:', error);
-            return [];
+            console.error('Fehler beim Speichern des QR-Scans:', error);
+            throw error; // Fehler weiterwerfen für Duplikat-Behandlung
         }
     }
 
-    async getRecentQRScans(limit = 20) {
+    async checkQRDuplicate(payload, timeWindowHours = 24) {
         try {
+            // Prüfe auf Duplikate in den letzten X Stunden (Standard: 24h)
             const result = await this.query(`
-                SELECT TOP(?) 
-                       q.ID, q.SessionID, q.RawPayload, q.PayloadJson, q.CapturedTS,
-                       u.BenutzerName as UserName
-                FROM dbo.QrScans q
-                INNER JOIN dbo.Sessions s ON q.SessionID = s.ID
-                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
-                ORDER BY q.CapturedTS DESC
-            `, [limit]);
+                SELECT COUNT(*) as duplicateCount
+                FROM dbo.QrScans
+                WHERE RawPayload = ?
+                  AND CapturedTS >= DATEADD(HOUR, -?, SYSDATETIME())
+                  AND Valid = 1
+            `, [payload, timeWindowHours]);
 
-            return result.recordset || [];
+            const count = result.recordset[0].duplicateCount;
+
+            if (count > 0) {
+                console.log(`⚠️ QR-Code Duplikat erkannt: ${count} mal in den letzten ${timeWindowHours}h`);
+                return true;
+            }
+
+            return false;
         } catch (error) {
-            console.error('Error getting recent QR scans:', error);
-            return [];
+            console.error('Fehler bei Duplikat-Prüfung:', error);
+            // Bei Fehler: Als neu behandeln (sicherer Fallback)
+            return false;
         }
     }
 
-    async getSessionScans(sessionId, limit = 100) {
+    async getSessionScans(sessionId, limit = 50) {
         try {
             const result = await this.query(`
-                SELECT TOP(?) ID, RawPayload, PayloadJson, CapturedTS, Valid
+                SELECT TOP(?) ID, RawPayload, CapturedTS, Valid
                 FROM dbo.QrScans
                 WHERE SessionID = ?
                 ORDER BY CapturedTS DESC
@@ -311,60 +356,109 @@ class DatabaseClient {
 
             return result.recordset || [];
         } catch (error) {
-            console.error('Error getting session scans:', error);
+            console.error('Fehler beim Abrufen der Session-Scans:', error);
             return [];
         }
     }
 
+    // ===== STATISTIKEN & BERICHTE =====
     async getDailyStats(date = null) {
         try {
             const targetDate = date || new Date().toISOString().split('T')[0];
 
             const result = await this.query(`
-                SELECT 
-                    (SELECT COUNT(*) FROM dbo.Sessions WHERE CAST(StartTS AS DATE) = ?) as TotalSessions,
-                    (SELECT COUNT(*) FROM dbo.QrScans WHERE CAST(CapturedTS AS DATE) = ?) as TotalScans,
-                    (SELECT COUNT(DISTINCT s.UserID) FROM dbo.Sessions s WHERE CAST(s.StartTS AS DATE) = ?) as UniqueUsers,
-                    (SELECT AVG(DATEDIFF(MINUTE, StartTS, ISNULL(EndTS, SYSDATETIME()))) 
-                     FROM dbo.Sessions WHERE CAST(StartTS AS DATE) = ?) as AvgSessionMinutes
+                SELECT
+                        (SELECT COUNT(*) FROM dbo.Sessions WHERE CAST(StartTS AS DATE) = ?) as TotalSessions,
+                        (SELECT COUNT(*) FROM dbo.QrScans WHERE CAST(CapturedTS AS DATE) = ? AND Valid = 1) as TotalScans,
+                        (SELECT COUNT(DISTINCT s.UserID) FROM dbo.Sessions s WHERE CAST(s.StartTS AS DATE) = ?) as UniqueUsers,
+                        (SELECT AVG(CAST(DATEDIFF(MINUTE, StartTS, ISNULL(EndTS, SYSDATETIME())) AS FLOAT))
+                         FROM dbo.Sessions WHERE CAST(StartTS AS DATE) = ?) as AvgSessionMinutes
             `, [targetDate, targetDate, targetDate, targetDate]);
 
             return result.recordset.length > 0 ? result.recordset[0] : null;
         } catch (error) {
-            console.error('Error getting daily stats:', error);
+            console.error('Fehler beim Abrufen der Tagesstatistiken:', error);
             return null;
         }
     }
 
-    // Health check and diagnostics
+    async getRecentActivity(hours = 8) {
+        try {
+            const result = await this.query(`
+                SELECT 
+                    'session' as EventType,
+                    s.StartTS as EventTime,
+                    u.BenutzerName as UserName,
+                    'Login' as Action,
+                    NULL as Details
+                FROM dbo.Sessions s
+                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                WHERE s.StartTS >= DATEADD(HOUR, -?, SYSDATETIME())
+                
+                UNION ALL
+                
+                SELECT 
+                    'session' as EventType,
+                    s.EndTS as EventTime,
+                    u.BenutzerName as UserName,
+                    'Logout' as Action,
+                    CAST(DATEDIFF(MINUTE, s.StartTS, s.EndTS) AS VARCHAR) + ' min' as Details
+                FROM dbo.Sessions s
+                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                WHERE s.EndTS >= DATEADD(HOUR, -?, SYSDATETIME())
+                AND s.EndTS IS NOT NULL
+                
+                UNION ALL
+                
+                SELECT 
+                    'qr_scan' as EventType,
+                    q.CapturedTS as EventTime,
+                    u.BenutzerName as UserName,
+                    'QR-Scan' as Action,
+                    LEFT(q.RawPayload, 50) as Details
+                FROM dbo.QrScans q
+                INNER JOIN dbo.Sessions s ON q.SessionID = s.ID
+                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                WHERE q.CapturedTS >= DATEADD(HOUR, -?, SYSDATETIME())
+                AND q.Valid = 1
+                
+                ORDER BY EventTime DESC
+            `, [hours, hours, hours]);
+
+            return result.recordset || [];
+        } catch (error) {
+            console.error('Fehler beim Abrufen der letzten Aktivitäten:', error);
+            return [];
+        }
+    }
+
+    // ===== HEALTH CHECK & DIAGNOSTICS =====
     async healthCheck() {
         try {
             const startTime = Date.now();
 
-            // Test basic connectivity
-            await this.query('SELECT 1 as test');
-
+            // Basis-Konnektivitätstest
+            const connectTest = await this.query('SELECT 1 as test, SYSDATETIME() as currentTime');
             const connectionTime = Date.now() - startTime;
 
-            // Get database info
+            // Server-Informationen
             const serverInfo = await this.query(`
                 SELECT 
                     @@VERSION as ServerVersion,
                     DB_NAME() as DatabaseName,
                     SUSER_NAME() as CurrentUser,
-                    GETDATE() as ServerTime
+                    SYSDATETIME() as ServerTime,
+                    @@SERVERNAME as ServerName
             `);
 
-            // Get table stats - FIXED: Use proper aliases
+            // Tabellen-Statistiken
             const tableStats = await this.query(`
-                SELECT 
-                    TABLE_NAME,
-                    (SELECT COUNT(*) FROM dbo.ScannBenutzer) as Users,
-                    (SELECT COUNT(*) FROM dbo.Sessions) as TotalSessions,
-                    (SELECT COUNT(*) FROM dbo.Sessions WHERE Active = 1) as ActiveSessions,
-                    (SELECT COUNT(*) FROM dbo.QrScans) as TotalScans
-                FROM INFORMATION_SCHEMA.TABLES 
-                WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'ScannBenutzer'
+                SELECT
+                        (SELECT COUNT(*) FROM dbo.ScannBenutzer WHERE xStatus = 0) as ActiveUsers,
+                        (SELECT COUNT(*) FROM dbo.Sessions) as TotalSessions,
+                        (SELECT COUNT(*) FROM dbo.Sessions WHERE Active = 1) as ActiveSessions,
+                        (SELECT COUNT(*) FROM dbo.QrScans WHERE Valid = 1) as TotalValidScans,
+                        (SELECT COUNT(*) FROM dbo.QrScans WHERE CAST(CapturedTS AS DATE) = CAST(SYSDATETIME() AS DATE) AND Valid = 1) as TodayScans
             `);
 
             return {
@@ -384,7 +478,7 @@ class DatabaseClient {
         }
     }
 
-    // Transaction support
+    // ===== TRANSACTION SUPPORT =====
     async transaction(callback) {
         const transaction = new sql.Transaction(this.pool);
 
@@ -401,13 +495,13 @@ class DatabaseClient {
             try {
                 await transaction.rollback();
             } catch (rollbackError) {
-                console.error('Error rolling back transaction:', rollbackError);
+                console.error('Fehler beim Rollback der Transaktion:', rollbackError);
             }
             throw error;
         }
     }
 
-    // Utility methods
+    // ===== UTILITY METHODS =====
     getConnectionStatus() {
         return {
             connected: this.isConnected,
@@ -423,17 +517,46 @@ class DatabaseClient {
 
     async testConnection() {
         try {
-            const result = await this.query('SELECT GETDATE() as currentTime, @@VERSION as version');
+            const result = await this.query('SELECT SYSDATETIME() as currentTime, @@VERSION as version');
             return {
                 success: true,
                 serverTime: result.recordset[0].currentTime,
-                version: result.recordset[0].version
+                version: result.recordset[0].version.split('\n')[0] // Nur erste Zeile
             };
         } catch (error) {
             return {
                 success: false,
                 error: error.message
             };
+        }
+    }
+
+    // ===== HELPER METHODS =====
+    formatSQLDateTime(date) {
+        // Formatiert JavaScript Date für SQL Server
+        return date.toISOString().slice(0, 19).replace('T', ' ');
+    }
+
+    parseSQLDateTime(sqlDateTime) {
+        // Parst SQL Server DateTime zu JavaScript Date
+        return new Date(sqlDateTime);
+    }
+
+    // ===== DEBUGGING METHODS =====
+    async debugInfo() {
+        try {
+            const health = await this.healthCheck();
+            const connectionStatus = this.getConnectionStatus();
+
+            console.log('=== DATABASE DEBUG INFO ===');
+            console.log('Connection Status:', connectionStatus);
+            console.log('Health Check:', health);
+            console.log('============================');
+
+            return { connectionStatus, health };
+        } catch (error) {
+            console.error('Debug Info Fehler:', error);
+            return { error: error.message };
         }
     }
 }

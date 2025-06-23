@@ -1,28 +1,38 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, globalShortcut } = require('electron');
 const path = require('path');
 require('dotenv').config();
 
-// Import our modules
-const RFIDListener = require('./rfid/rfid-listener-keyboard');
+// Import Module mit Error-Handling
+let RFIDListenerKeyboard;
+try {
+    RFIDListenerKeyboard = require('./rfid/rfid-listener-keyboard');
+} catch (error) {
+    console.warn('⚠️ RFID-Modul nicht verfügbar:', error.message);
+    console.log('💡 App läuft ohne RFID-Hardware-Support');
+}
 const DatabaseClient = require('./db/db-client');
 
-class MainApplication {
+class WareneingangMainApp {
     constructor() {
         this.mainWindow = null;
         this.rfidListener = null;
         this.dbClient = null;
-        this.activeSessions = new Map(); // userId -> sessionData
+
+        // Status-Tracking
         this.systemStatus = {
             database: false,
             rfid: false,
-            errors: []
+            lastError: null
         };
+
+        // Session-Management (vereinfacht)
+        this.currentSession = null;
 
         this.initializeApp();
     }
 
     initializeApp() {
-        // App ready event
+        // App bereit
         app.whenReady().then(() => {
             this.createMainWindow();
             this.initializeComponents();
@@ -34,7 +44,7 @@ class MainApplication {
             });
         });
 
-        // App window events
+        // App-Events
         app.on('window-all-closed', () => {
             this.cleanup();
             if (process.platform !== 'darwin') {
@@ -46,89 +56,109 @@ class MainApplication {
             this.cleanup();
         });
 
-        // Setup IPC handlers
-        this.setupIpcHandlers();
+        // IPC-Handler einrichten
+        this.setupIPCHandlers();
     }
 
     createMainWindow() {
+        const windowWidth = parseInt(process.env.UI_WINDOW_WIDTH) || 1400;
+        const windowHeight = parseInt(process.env.UI_WINDOW_HEIGHT) || 900;
+
         this.mainWindow = new BrowserWindow({
-            width: parseInt(process.env.UI_WINDOW_WIDTH) || 1200,
-            height: parseInt(process.env.UI_WINDOW_HEIGHT) || 800,
-            minWidth: parseInt(process.env.UI_MIN_WIDTH) || 1000,
-            minHeight: parseInt(process.env.UI_MIN_HEIGHT) || 600,
+            width: windowWidth,
+            height: windowHeight,
+            minWidth: 1200,
+            minHeight: 700,
             webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
                 preload: path.join(__dirname, 'preload.js'),
-                enableRemoteModule: false
+                enableRemoteModule: false,
+                webSecurity: true
             },
             show: false,
             icon: path.join(__dirname, 'assets/icon.png'),
-            title: 'RFID QR Wareneingang System'
+            title: 'RFID Wareneingang - Shirtful',
+            autoHideMenuBar: true, // Menüleiste automatisch ausblenden
+            frame: true,
+            titleBarStyle: 'default'
         });
 
-        // Load the renderer
+        // Renderer laden
         this.mainWindow.loadFile('renderer/index.html');
 
-        // Show when ready
+        // Fenster anzeigen wenn bereit
         this.mainWindow.once('ready-to-show', () => {
             this.mainWindow.show();
 
-            // Development mode
+            // Development Tools
             if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
                 this.mainWindow.webContents.openDevTools();
             }
         });
 
-        // Handle window closed
+        // Fenster geschlossen
         this.mainWindow.on('closed', () => {
             this.mainWindow = null;
+        });
+
+        // Prevent navigation away from the app
+        this.mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+            const parsedUrl = new URL(navigationUrl);
+            if (parsedUrl.origin !== 'file://') {
+                event.preventDefault();
+            }
         });
     }
 
     async initializeComponents() {
-        console.log('🚀 Starting component initialization...');
+        console.log('🚀 Initialisiere Systemkomponenten...');
 
-        // Initialize database first
+        // Datenbank zuerst
         await this.initializeDatabase();
 
-        // Initialize RFID listener (with fallback handling)
+        // RFID-Listener (mit Fallback)
         await this.initializeRFID();
 
-        // Notify renderer about system status
-        this.sendToRenderer('system-ready', {
-            database: this.systemStatus.database,
-            rfid: this.systemStatus.rfid,
-            errors: this.systemStatus.errors,
-            timestamp: new Date().toISOString()
-        });
+        // System-Status an Renderer senden
+        this.sendSystemStatus();
 
-        if (this.systemStatus.database) {
-            console.log('✅ System initialization completed');
-        } else {
-            console.error('❌ System initialization failed - database connection required');
-        }
+        console.log('✅ Systemkomponenten initialisiert');
     }
 
     async initializeDatabase() {
         try {
-            console.log('📊 Initializing database connection...');
+            console.log('📊 Initialisiere Datenbankverbindung...');
+
             this.dbClient = new DatabaseClient();
             await this.dbClient.connect();
 
+            // Health Check
+            const health = await this.dbClient.healthCheck();
+            if (!health.connected) {
+                throw new Error(health.error || 'Gesundheitsprüfung fehlgeschlagen');
+            }
+
             this.systemStatus.database = true;
-            console.log('✅ Database initialized successfully');
+            this.systemStatus.lastError = null;
+
+            console.log('✅ Datenbank erfolgreich verbunden');
 
         } catch (error) {
             this.systemStatus.database = false;
-            this.systemStatus.errors.push(`Database: ${error.message}`);
-            console.error('❌ Database initialization failed:', error);
+            this.systemStatus.lastError = `Datenbank: ${error.message}`;
 
-            // Show error dialog for critical database failure
+            console.error('❌ Datenbank-Initialisierung fehlgeschlagen:', error);
+
+            // Benutzer informieren
             if (this.mainWindow) {
                 dialog.showErrorBox(
-                    'Database Connection Failed',
-                    `Failed to connect to database: ${error.message}\n\nPlease check your .env configuration and try again.`
+                    'Datenbank-Verbindung fehlgeschlagen',
+                    `Verbindung zur Datenbank konnte nicht hergestellt werden:\n\n${error.message}\n\n` +
+                    'Bitte überprüfen Sie:\n' +
+                    '• Netzwerkverbindung\n' +
+                    '• .env Konfiguration\n' +
+                    '• SQL Server Verfügbarkeit'
                 );
             }
         }
@@ -136,9 +166,13 @@ class MainApplication {
 
     async initializeRFID() {
         try {
-            console.log('🏷️ Initializing RFID listener...');
+            console.log('🏷️ Initialisiere RFID-Listener...');
 
-            this.rfidListener = new RFIDListener((tagId) => {
+            if (!RFIDListenerKeyboard) {
+                throw new Error('RFID-Modul nicht verfügbar - Hardware-Support deaktiviert');
+            }
+
+            this.rfidListener = new RFIDListenerKeyboard((tagId) => {
                 this.handleRFIDScan(tagId);
             });
 
@@ -146,38 +180,35 @@ class MainApplication {
 
             if (started) {
                 this.systemStatus.rfid = true;
-                console.log('✅ RFID listener initialized successfully');
+                console.log('✅ RFID-Listener erfolgreich gestartet');
             } else {
-                throw new Error('RFID listener failed to start');
+                throw new Error('RFID-Listener konnte nicht gestartet werden');
             }
 
         } catch (error) {
             this.systemStatus.rfid = false;
-            this.systemStatus.errors.push(`RFID: ${error.message}`);
-            console.error('❌ RFID initialization failed:', error);
+            this.systemStatus.lastError = `RFID: ${error.message}`;
 
-            // Try to provide helpful suggestions
-            console.log('💡 RFID Troubleshooting:');
-            console.log('   1. Ensure RFID reader is connected via USB');
-            console.log('   2. Check if reader is configured as HID keyboard');
-            console.log('   3. Try rebuilding native modules: npm run rebuild');
-            console.log('   4. Consider using keyboard listener alternative');
+            console.error('❌ RFID-Initialisierung fehlgeschlagen:', error);
+            console.log('💡 RFID-Alternativen:');
+            console.log('   1. Tags manuell in der UI eingeben');
+            console.log('   2. Keyboard-Simulation verwenden');
+            console.log('   3. Build Tools installieren für Hardware-Support');
 
-            // Don't block the application for RFID failures - it can run without RFID
-            // The UI should show that RFID is not available
+            // RFID ist nicht kritisch - App kann ohne laufen
         }
     }
 
-    setupIpcHandlers() {
-        // Database operations
+    setupIPCHandlers() {
+        // ===== DATENBANK OPERATIONEN =====
         ipcMain.handle('db-query', async (event, query, params) => {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
-                    throw new Error('Database not connected');
+                    throw new Error('Datenbank nicht verbunden');
                 }
                 return await this.dbClient.query(query, params);
             } catch (error) {
-                console.error('Database query error:', error);
+                console.error('DB Query Fehler:', error);
                 throw error;
             }
         });
@@ -187,55 +218,37 @@ class MainApplication {
                 if (!this.dbClient || !this.systemStatus.database) {
                     return null;
                 }
-
-                const epcDecimal = parseInt(tagId, 16);
-                const query = `
-                    SELECT ID, Vorname, Nachname, BenutzerName, Email, EPC
-                    FROM dbo.ScannBenutzer
-                    WHERE EPC = ? AND xStatus = 0
-                `;
-                const result = await this.dbClient.query(query, [epcDecimal]);
-                return result.recordset.length > 0 ? result.recordset[0] : null;
+                return await this.dbClient.getUserByEPC(tagId);
             } catch (error) {
-                console.error('Get user by EPC error:', error);
+                console.error('Get User by EPC Fehler:', error);
                 return null;
             }
         });
 
-        // Session management
+        // ===== SESSION MANAGEMENT =====
         ipcMain.handle('session-create', async (event, userId) => {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
-                    throw new Error('Database not connected');
+                    throw new Error('Datenbank nicht verbunden');
                 }
 
-                // Close existing session if any
-                await this.endExistingSession(userId);
+                // Bestehende Session beenden
+                await this.endExistingUserSession(userId);
 
-                // Create new session
-                const query = `
-                    INSERT INTO dbo.Sessions (UserID, StartTS, Active)
-                    OUTPUT INSERTED.ID, INSERTED.StartTS
-                    VALUES (?, SYSDATETIME(), 1)
-                `;
-                const result = await this.dbClient.query(query, [userId]);
+                // Neue Session erstellen
+                const session = await this.dbClient.createSession(userId);
 
-                if (result.recordset.length > 0) {
-                    const session = result.recordset[0];
-
-                    // Store in memory
-                    this.activeSessions.set(userId, {
+                if (session) {
+                    this.currentSession = {
                         sessionId: session.ID,
                         userId: userId,
-                        startTime: session.StartTS,
-                        scanCount: 0
-                    });
-
-                    return session;
+                        startTime: session.StartTS
+                    };
                 }
-                return null;
+
+                return session;
             } catch (error) {
-                console.error('Session create error:', error);
+                console.error('Session Create Fehler:', error);
                 return null;
             }
         });
@@ -246,100 +259,74 @@ class MainApplication {
                     return false;
                 }
 
-                const query = `
-                    UPDATE dbo.Sessions
-                    SET EndTS = SYSDATETIME(), Active = 0
-                    WHERE ID = ? AND Active = 1
-                `;
-                await this.dbClient.query(query, [sessionId]);
+                const success = await this.dbClient.endSession(sessionId);
 
-                // Remove from memory
-                for (const [userId, sessionData] of this.activeSessions.entries()) {
-                    if (sessionData.sessionId === sessionId) {
-                        this.activeSessions.delete(userId);
-                        break;
-                    }
+                if (success && this.currentSession && this.currentSession.sessionId === sessionId) {
+                    this.currentSession = null;
                 }
 
-                return true;
+                return success;
             } catch (error) {
-                console.error('Session end error:', error);
+                console.error('Session End Fehler:', error);
                 return false;
             }
         });
 
-        // QR Code operations
+        // ===== QR-CODE OPERATIONEN =====
         ipcMain.handle('qr-scan-save', async (event, sessionId, payload) => {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
-                    throw new Error('Database not connected');
+                    throw new Error('Datenbank nicht verbunden');
                 }
 
-                const query = `
-                    INSERT INTO dbo.QrScans (SessionID, RawPayload, Valid)
-                    OUTPUT INSERTED.ID, INSERTED.CapturedTS
-                    VALUES (?, ?, 1)
-                `;
-                const result = await this.dbClient.query(query, [sessionId, payload]);
-
-                if (result.recordset.length > 0) {
-                    // Update scan count in memory
-                    for (const sessionData of this.activeSessions.values()) {
-                        if (sessionData.sessionId === sessionId) {
-                            sessionData.scanCount++;
-                            break;
-                        }
-                    }
-
-                    return result.recordset[0];
-                }
-                return null;
+                return await this.dbClient.saveQRScan(sessionId, payload);
             } catch (error) {
-                console.error('QR scan save error:', error);
+                console.error('QR Scan Save Fehler:', error);
                 return null;
             }
         });
 
-        // Get active sessions
-        ipcMain.handle('get-active-sessions', async (event) => {
-            try {
-                const sessions = Array.from(this.activeSessions.values());
-                return sessions;
-            } catch (error) {
-                console.error('Get active sessions error:', error);
-                return [];
-            }
-        });
-
-        // System status
+        // ===== SYSTEM STATUS =====
         ipcMain.handle('get-system-status', async (event) => {
             return {
-                ...this.systemStatus,
-                rfidStatus: this.rfidListener ? this.rfidListener.getStatus() : null,
-                databaseStatus: this.dbClient ? this.dbClient.getConnectionStatus() : null,
-                activeSessions: this.activeSessions.size,
-                uptime: process.uptime()
+                database: this.systemStatus.database,
+                rfid: this.systemStatus.rfid,
+                lastError: this.systemStatus.lastError,
+                currentSession: this.currentSession,
+                uptime: Math.floor(process.uptime()),
+                timestamp: new Date().toISOString()
             };
         });
 
-        // RFID operations
-        ipcMain.handle('rfid-simulate-tag', async (event, tagId) => {
-            try {
-                if (!this.rfidListener) {
-                    throw new Error('RFID listener not available');
-                }
-                return this.rfidListener.simulateTag(tagId);
-            } catch (error) {
-                console.error('RFID simulate error:', error);
-                return false;
-            }
+        ipcMain.handle('get-system-info', async (event) => {
+            return {
+                version: app.getVersion(),
+                electronVersion: process.versions.electron,
+                nodeVersion: process.versions.node,
+                platform: process.platform,
+                arch: process.arch,
+                env: process.env.NODE_ENV || 'production'
+            };
         });
 
+        // ===== RFID OPERATIONEN =====
         ipcMain.handle('rfid-get-status', async (event) => {
             return this.rfidListener ? this.rfidListener.getStatus() : null;
         });
 
-        // Application controls
+        ipcMain.handle('rfid-simulate-tag', async (event, tagId) => {
+            try {
+                if (!this.rfidListener) {
+                    throw new Error('RFID-Listener nicht verfügbar');
+                }
+                return this.rfidListener.simulateTag(tagId);
+            } catch (error) {
+                console.error('RFID Simulate Fehler:', error);
+                return false;
+            }
+        });
+
+        // ===== APP STEUERUNG =====
         ipcMain.handle('app-minimize', () => {
             if (this.mainWindow) {
                 this.mainWindow.minimize();
@@ -354,61 +341,58 @@ class MainApplication {
             app.relaunch();
             app.exit();
         });
-
-        // System info
-        ipcMain.handle('get-system-info', () => {
-            return {
-                version: app.getVersion(),
-                electronVersion: process.versions.electron,
-                nodeVersion: process.versions.node,
-                platform: process.platform,
-                arch: process.arch,
-                env: process.env.NODE_ENV || 'production'
-            };
-        });
     }
 
+    // ===== RFID HANDLING =====
     async handleRFIDScan(tagId) {
-        console.log(`🏷️ RFID Tag gescannt: ${tagId}`);
+        console.log(`🏷️ RFID-Tag gescannt: ${tagId}`);
 
         try {
             if (!this.systemStatus.database) {
-                throw new Error('Database not connected - cannot process RFID scan');
+                throw new Error('Datenbank nicht verbunden - RFID-Scan kann nicht verarbeitet werden');
             }
 
-            // Get user by EPC
-            const user = await this.getUserByEPC(tagId);
+            // Benutzer anhand EPC finden
+            const user = await this.dbClient.getUserByEPC(tagId);
 
             if (!user) {
                 this.sendToRenderer('rfid-scan-error', {
                     tagId,
-                    message: 'Unbekannter RFID-Tag',
+                    message: `Unbekannter RFID-Tag: ${tagId}`,
                     timestamp: new Date().toISOString()
                 });
                 return;
             }
 
-            const userId = user.ID;
+            // Prüfen ob Benutzer bereits eine aktive Session hat
+            const hasActiveSession = this.currentSession && this.currentSession.userId === user.ID;
 
-            // Check if user is already logged in
-            if (this.activeSessions.has(userId)) {
-                // Logout user
-                const sessionData = this.activeSessions.get(userId);
-                await this.endSession(sessionData.sessionId);
+            if (hasActiveSession) {
+                // Benutzer abmelden
+                const success = await this.dbClient.endSession(this.currentSession.sessionId);
 
-                this.sendToRenderer('user-logout', {
-                    user,
-                    sessionId: sessionData.sessionId,
-                    timestamp: new Date().toISOString()
-                });
+                if (success) {
+                    this.currentSession = null;
 
-                console.log(`👋 Benutzer abgemeldet: ${user.BenutzerName}`);
+                    this.sendToRenderer('user-logout', {
+                        user,
+                        sessionId: this.currentSession ? this.currentSession.sessionId : null,
+                        timestamp: new Date().toISOString()
+                    });
 
+                    console.log(`👋 Benutzer abgemeldet: ${user.BenutzerName}`);
+                }
             } else {
-                // Login user
-                const session = await this.createSession(userId);
+                // Benutzer anmelden
+                const session = await this.dbClient.createSession(user.ID);
 
                 if (session) {
+                    this.currentSession = {
+                        sessionId: session.ID,
+                        userId: user.ID,
+                        startTime: session.StartTS
+                    };
+
                     this.sendToRenderer('user-login', {
                         user,
                         session,
@@ -426,7 +410,7 @@ class MainApplication {
             }
 
         } catch (error) {
-            console.error('RFID scan handling error:', error);
+            console.error('RFID-Scan Verarbeitung fehlgeschlagen:', error);
             this.sendToRenderer('rfid-scan-error', {
                 tagId,
                 message: error.message,
@@ -435,128 +419,111 @@ class MainApplication {
         }
     }
 
-    async getUserByEPC(tagId) {
+    async endExistingUserSession(userId) {
         try {
-            const epcDecimal = parseInt(tagId, 16);
-            const query = `
-                SELECT ID, Vorname, Nachname, BenutzerName, Email, EPC
-                FROM dbo.ScannBenutzer
-                WHERE EPC = ? AND xStatus = 0
-            `;
-            const result = await this.dbClient.query(query, [epcDecimal]);
-            return result.recordset.length > 0 ? result.recordset[0] : null;
-        } catch (error) {
-            console.error('Get user by EPC error:', error);
-            return null;
-        }
-    }
-
-    async createSession(userId) {
-        try {
-            // Close existing session
-            await this.endExistingSession(userId);
-
-            // Create new session
-            const query = `
-                INSERT INTO dbo.Sessions (UserID, StartTS, Active)
-                OUTPUT INSERTED.ID, INSERTED.StartTS
-                VALUES (?, SYSDATETIME(), 1)
-            `;
-            const result = await this.dbClient.query(query, [userId]);
-
-            if (result.recordset.length > 0) {
-                const session = result.recordset[0];
-
-                // Store in memory
-                this.activeSessions.set(userId, {
-                    sessionId: session.ID,
-                    userId: userId,
-                    startTime: session.StartTS,
-                    scanCount: 0
-                });
-
-                return session;
-            }
-            return null;
-        } catch (error) {
-            console.error('Create session error:', error);
-            return null;
-        }
-    }
-
-    async endSession(sessionId) {
-        try {
-            const query = `
-                UPDATE dbo.Sessions
-                SET EndTS = SYSDATETIME(), Active = 0
-                WHERE ID = ? AND Active = 1
-            `;
-            await this.dbClient.query(query, [sessionId]);
-
-            // Remove from memory
-            for (const [userId, sessionData] of this.activeSessions.entries()) {
-                if (sessionData.sessionId === sessionId) {
-                    this.activeSessions.delete(userId);
-                    break;
-                }
+            if (this.currentSession && this.currentSession.userId === userId) {
+                await this.dbClient.endSession(this.currentSession.sessionId);
+                this.currentSession = null;
             }
 
-            return true;
-        } catch (error) {
-            console.error('End session error:', error);
-            return false;
-        }
-    }
-
-    async endExistingSession(userId) {
-        try {
-            const query = `
+            // Zusätzlich: Alle aktiven Sessions des Benutzers in DB beenden
+            await this.dbClient.query(`
                 UPDATE dbo.Sessions
                 SET EndTS = SYSDATETIME(), Active = 0
                 WHERE UserID = ? AND Active = 1
-            `;
-            await this.dbClient.query(query, [userId]);
+            `, [userId]);
 
-            // Remove from memory
-            this.activeSessions.delete(userId);
         } catch (error) {
-            console.error('End existing session error:', error);
+            console.error('Bestehende Session beenden fehlgeschlagen:', error);
         }
     }
 
+    // ===== COMMUNICATION =====
     sendToRenderer(channel, data) {
         if (this.mainWindow && this.mainWindow.webContents) {
             this.mainWindow.webContents.send(channel, data);
         }
     }
 
+    sendSystemStatus() {
+        this.sendToRenderer('system-ready', {
+            database: this.systemStatus.database,
+            rfid: this.systemStatus.rfid,
+            lastError: this.systemStatus.lastError,
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    // ===== CLEANUP =====
     async cleanup() {
-        console.log('🧹 Cleaning up...');
+        console.log('🧹 Anwendung wird bereinigt...');
 
         try {
-            // End all active sessions
-            for (const sessionData of this.activeSessions.values()) {
-                await this.endSession(sessionData.sessionId);
+            // Aktuelle Session beenden
+            if (this.currentSession) {
+                await this.dbClient.endSession(this.currentSession.sessionId);
+                this.currentSession = null;
             }
 
-            // Stop RFID listener
+            // RFID-Listener stoppen
             if (this.rfidListener) {
                 await this.rfidListener.stop();
                 this.rfidListener = null;
             }
 
-            // Close database connection
+            // Alle globalen Shortcuts entfernen
+            globalShortcut.unregisterAll();
+
+            // Datenbankverbindung schließen
             if (this.dbClient) {
                 await this.dbClient.close();
                 this.dbClient = null;
             }
 
-            console.log('✅ Cleanup completed');
+            console.log('✅ Cleanup abgeschlossen');
+
         } catch (error) {
-            console.error('❌ Cleanup error:', error);
+            console.error('❌ Cleanup-Fehler:', error);
         }
+    }
+
+    // ===== ERROR HANDLING =====
+    handleGlobalError(error) {
+        console.error('Globaler Anwendungsfehler:', error);
+
+        this.sendToRenderer('system-error', {
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 }
 
-// Create and start the application
-new MainApplication();
+// ===== ERROR HANDLING =====
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    app.quit();
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// ===== APP INSTANCE =====
+const wareneingangApp = new WareneingangMainApp();
+
+// Prevent multiple instances
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+        // Someone tried to run a second instance, focus our window instead
+        if (wareneingangApp.mainWindow) {
+            if (wareneingangApp.mainWindow.isMinimized()) {
+                wareneingangApp.mainWindow.restore();
+            }
+            wareneingangApp.mainWindow.focus();
+        }
+    });
+}
