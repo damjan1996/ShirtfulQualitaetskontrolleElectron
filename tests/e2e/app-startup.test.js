@@ -1,531 +1,684 @@
 // tests/e2e/app-startup.test.js
 /**
- * End-to-End Tests für App-Startup und Grundfunktionen
+ * End-to-End Tests für Application Startup
+ * Testet den kompletten App-Start-Prozess
  */
 
-const { Application } = require('spectron');
-const path = require('path');
 const { mockElectron } = require('../mocks/electron.mock');
+const MockDatabaseClient = require('../mocks/db-client.mock');
+const MockRFIDListener = require('../mocks/rfid-listener.mock');
+const { MockQRScanner } = require('../mocks/qr-scanner.mock');
 
-describe('Application Startup E2E', () => {
+// Mock alle externen Dependencies
+jest.mock('electron', () => mockElectron);
+jest.mock('mssql', () => global.mockMSSql);
+jest.mock('node-hid', () => global.mockNodeHid);
+
+describe('E2E: Application Startup', () => {
     let app;
+    let mainWindow;
+    let systemComponents;
 
-    beforeEach(async () => {
-        // Mock Electron für E2E Tests
-        jest.mock('electron', () => mockElectron);
+    beforeEach(() => {
+        // Reset alle Mocks
+        jest.clearAllMocks();
 
-        app = new Application({
-            path: require('electron'),
-            args: [path.join(__dirname, '../../main.js')],
-            env: {
-                NODE_ENV: 'test',
-                ELECTRON_IS_DEV: '0'
+        // Mock Application State
+        app = {
+            version: '1.0.1',
+            isReady: false,
+            mainWindow: null,
+            systemComponents: {
+                database: null,
+                rfidListener: null,
+                qrScanner: null
             },
-            startTimeout: 30000,
-            waitTimeout: 30000
-        });
-    }, 30000);
+            config: {
+                database: {
+                    server: 'localhost',
+                    database: 'RdScanner_Test',
+                    user: 'test_user',
+                    password: 'test_password'
+                },
+                window: {
+                    width: 1200,
+                    height: 800,
+                    minWidth: 800,
+                    minHeight: 600
+                },
+                rfid: {
+                    enabled: true,
+                    inputTimeout: 200,
+                    maxBufferLength: 15
+                }
+            },
+            stats: {
+                startTime: null,
+                readyTime: null,
+                componentInitTimes: {}
+            }
+        };
+
+        // Mock System Components
+        systemComponents = {
+            database: new MockDatabaseClient(),
+            rfidListener: new MockRFIDListener(),
+            qrScanner: new MockQRScanner()
+        };
+
+        // Setup Environment
+        process.env.NODE_ENV = 'test';
+    });
 
     afterEach(async () => {
-        if (app && app.isRunning()) {
-            await app.stop();
+        // Cleanup
+        if (systemComponents.qrScanner && systemComponents.qrScanner.isScanning) {
+            await systemComponents.qrScanner.stop();
+        }
+        if (systemComponents.rfidListener && systemComponents.rfidListener.isListening) {
+            await systemComponents.rfidListener.stop();
+        }
+        if (systemComponents.database && systemComponents.database.isConnected) {
+            await systemComponents.database.close();
         }
     });
 
-    describe('Application Launch', () => {
-        test('should launch application successfully', async () => {
-            // Mock-basierter Test ohne echte Electron-App
-            const mockApp = {
-                isRunning: jest.fn(() => true),
-                client: {
-                    getWindowCount: jest.fn(() => Promise.resolve(1)),
-                    browserWindow: {
-                        isVisible: jest.fn(() => Promise.resolve(true)),
-                        getTitle: jest.fn(() => Promise.resolve('RFID Wareneingang - Shirtful'))
-                    }
-                }
-            };
+    describe('Application Bootstrap', () => {
+        test('should initialize Electron app correctly', async () => {
+            app.stats.startTime = Date.now();
 
-            expect(mockApp.isRunning()).toBe(true);
+            // 1. App should request single instance lock
+            const hasSingleInstanceLock = mockElectron.app.requestSingleInstanceLock();
+            expect(hasSingleInstanceLock).toBe(true);
 
-            const windowCount = await mockApp.client.getWindowCount();
-            expect(windowCount).toBe(1);
+            // 2. App should wait for ready event
+            const readyPromise = mockElectron.app.whenReady();
+            await readyPromise;
 
-            const isVisible = await mockApp.client.browserWindow.isVisible();
-            expect(isVisible).toBe(true);
+            app.isReady = true;
+            app.stats.readyTime = Date.now();
 
-            const title = await mockApp.client.browserWindow.getTitle();
-            expect(title).toBe('RFID Wareneingang - Shirtful');
+            expect(app.isReady).toBe(true);
+            expect(app.stats.readyTime).toBeGreaterThan(app.stats.startTime);
         });
 
-        test('should have correct window properties', async () => {
-            const mockWindow = {
-                getMinimumSize: jest.fn(() => Promise.resolve([1200, 700])),
-                getSize: jest.fn(() => Promise.resolve([1400, 900])),
-                isResizable: jest.fn(() => Promise.resolve(true)),
-                isMinimized: jest.fn(() => Promise.resolve(false))
-            };
+        test('should create main window with correct configuration', async () => {
+            await mockElectron.app.whenReady();
 
-            const minSize = await mockWindow.getMinimumSize();
-            const currentSize = await mockWindow.getSize();
+            // Create main window
+            mainWindow = new mockElectron.BrowserWindow({
+                width: app.config.window.width,
+                height: app.config.window.height,
+                minWidth: app.config.window.minWidth,
+                minHeight: app.config.window.minHeight,
+                webPreferences: {
+                    nodeIntegration: false,
+                    contextIsolation: true,
+                    preload: 'preload.js'
+                },
+                show: false // Don't show until ready
+            });
 
-            expect(minSize).toEqual([1200, 700]);
-            expect(currentSize).toEqual([1400, 900]);
-            expect(await mockWindow.isResizable()).toBe(true);
-            expect(await mockWindow.isMinimized()).toBe(false);
+            app.mainWindow = mainWindow;
+
+            expect(mainWindow).toBeDefined();
+            expect(mainWindow.options.width).toBe(1200);
+            expect(mainWindow.options.height).toBe(800);
+            expect(mainWindow.options.webPreferences.contextIsolation).toBe(true);
+            expect(mainWindow.options.webPreferences.nodeIntegration).toBe(false);
         });
 
-        test('should load main interface correctly', async () => {
-            const mockClient = {
-                waitUntilWindowLoaded: jest.fn(() => Promise.resolve()),
-                element: jest.fn((selector) => ({
-                    isExisting: jest.fn(() => Promise.resolve(true)),
-                    isDisplayed: jest.fn(() => Promise.resolve(true))
-                }))
+        test('should load application files correctly', async () => {
+            await mockElectron.app.whenReady();
+
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
+
+            // Load main HTML file
+            await mainWindow.loadFile('renderer/index.html');
+
+            expect(mainWindow.loadFile).toHaveBeenCalledWith('renderer/index.html');
+        });
+
+        test('should handle window events correctly', async () => {
+            await mockElectron.app.whenReady();
+
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
+
+            // Setup window event handlers
+            const windowEventHandlers = {
+                ready: jest.fn(),
+                closed: jest.fn(),
+                minimize: jest.fn(),
+                maximize: jest.fn()
             };
 
-            await mockClient.waitUntilWindowLoaded();
+            mainWindow.on('ready-to-show', windowEventHandlers.ready);
+            mainWindow.on('closed', windowEventHandlers.closed);
+            mainWindow.on('minimize', windowEventHandlers.minimize);
+            mainWindow.on('maximize', windowEventHandlers.maximize);
 
-            const loginSection = mockClient.element('#loginSection');
-            const workspace = mockClient.element('#workspace');
-            const header = mockClient.element('.main-header');
+            // Simulate events
+            mainWindow.emit('ready-to-show');
+            mainWindow.emit('minimize');
+            mainWindow.emit('maximize');
 
-            expect(await loginSection.isExisting()).toBe(true);
-            expect(await workspace.isExisting()).toBe(true);
-            expect(await header.isExisting()).toBe(true);
+            expect(windowEventHandlers.ready).toHaveBeenCalled();
+            expect(windowEventHandlers.minimize).toHaveBeenCalled();
+            expect(windowEventHandlers.maximize).toHaveBeenCalled();
         });
     });
 
     describe('System Components Initialization', () => {
+        beforeEach(async () => {
+            await mockElectron.app.whenReady();
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
+        });
+
         test('should initialize database connection', async () => {
-            const mockSystemStatus = {
-                database: true,
-                rfid: false,
-                lastError: null,
-                timestamp: new Date().toISOString()
-            };
+            const startTime = Date.now();
 
-            // Simuliere IPC-Aufruf
-            const mockIPC = {
-                callMain: jest.fn((channel) => {
-                    if (channel === 'get-system-status') {
-                        return Promise.resolve(mockSystemStatus);
-                    }
-                })
-            };
+            // Initialize database
+            const dbConnected = await systemComponents.database.connect();
+            app.systemComponents.database = systemComponents.database;
 
-            const status = await mockIPC.callMain('get-system-status');
-            expect(status.database).toBe(true);
+            const endTime = Date.now();
+            app.stats.componentInitTimes.database = endTime - startTime;
+
+            expect(dbConnected).toBe(true);
+            expect(systemComponents.database.isConnected).toBe(true);
+            expect(app.stats.componentInitTimes.database).toBeGreaterThan(0);
+
+            // Verify database health
+            const healthCheck = await systemComponents.database.healthCheck();
+            expect(healthCheck.connected).toBe(true);
+            expect(healthCheck.server.database).toBe('RdScanner_Test');
         });
 
-        test('should show system status in UI', async () => {
-            const mockClient = {
-                element: jest.fn((selector) => ({
-                    getText: jest.fn(() => {
-                        if (selector === '.status-text') {
-                            return Promise.resolve('System bereit');
-                        }
-                        return Promise.resolve('');
-                    }),
-                    getAttribute: jest.fn((attr) => {
-                        if (attr === 'class') {
-                            return Promise.resolve('status-dot active');
-                        }
-                        return Promise.resolve('');
-                    })
-                }))
-            };
+        test('should initialize RFID listener', async () => {
+            const startTime = Date.now();
 
-            const statusText = await mockClient.element('.status-text').getText();
-            const statusClass = await mockClient.element('.status-dot').getAttribute('class');
+            // Initialize RFID listener
+            const rfidStarted = await systemComponents.rfidListener.start();
+            app.systemComponents.rfidListener = systemComponents.rfidListener;
 
-            expect(statusText).toBe('System bereit');
-            expect(statusClass).toContain('active');
-        });
-    });
+            const endTime = Date.now();
+            app.stats.componentInitTimes.rfid = endTime - startTime;
 
-    describe('RFID Integration E2E', () => {
-        test('should handle RFID tag simulation', async () => {
-            const mockIPC = {
-                callMain: jest.fn((channel, ...args) => {
-                    if (channel === 'rfid-simulate-tag') {
-                        const tagId = args[0];
-                        return Promise.resolve(true);
-                    }
-                    if (channel === 'db-get-user-by-epc') {
-                        return Promise.resolve({
-                            ID: 1,
-                            BenutzerName: 'Test User',
-                            EPC: parseInt(args[0], 16)
-                        });
-                    }
-                    if (channel === 'session-create') {
-                        return Promise.resolve({
-                            ID: 1,
-                            UserID: args[0],
-                            StartTS: new Date().toISOString(),
-                            Active: 1
-                        });
-                    }
-                })
-            };
+            expect(rfidStarted).toBe(true);
+            expect(systemComponents.rfidListener.isListening).toBe(true);
+            expect(app.stats.componentInitTimes.rfid).toBeGreaterThan(0);
 
-            // Simuliere RFID-Tag-Scan
-            const tagId = '53004114';
-            const simulateResult = await mockIPC.callMain('rfid-simulate-tag', tagId);
-            expect(simulateResult).toBe(true);
-
-            // Simuliere Benutzer-Lookup
-            const user = await mockIPC.callMain('db-get-user-by-epc', tagId);
-            expect(user).toBeTruthy();
-            expect(user.BenutzerName).toBe('Test User');
-
-            // Simuliere Session-Erstellung
-            const session = await mockIPC.callMain('session-create', user.ID);
-            expect(session).toBeTruthy();
-            expect(session.UserID).toBe(user.ID);
+            // Verify RFID functionality
+            const rfidStats = systemComponents.rfidListener.getStats();
+            expect(rfidStats.isListening).toBe(true);
+            expect(rfidStats.registeredShortcuts).toBeDefined();
         });
 
-        test('should update UI on user login', async () => {
-            const mockClient = {
-                element: jest.fn((selector) => ({
-                    isDisplayed: jest.fn(() => {
-                        if (selector === '#workspace') return Promise.resolve(true);
-                        if (selector === '#loginSection') return Promise.resolve(false);
-                        return Promise.resolve(true);
-                    }),
-                    getText: jest.fn(() => {
-                        if (selector === '#currentUserName') return Promise.resolve('Test User');
-                        if (selector === '#sessionScans') return Promise.resolve('0');
-                        return Promise.resolve('');
-                    })
-                })),
-                waitUntil: jest.fn(() => Promise.resolve())
-            };
+        test('should initialize QR scanner', async () => {
+            const startTime = Date.now();
 
-            // Warte auf UI-Update
-            await mockClient.waitUntil();
+            // QR scanner is initialized on-demand, so just prepare it
+            app.systemComponents.qrScanner = systemComponents.qrScanner;
 
-            const workspaceVisible = await mockClient.element('#workspace').isDisplayed();
-            const loginVisible = await mockClient.element('#loginSection').isDisplayed();
-            const userName = await mockClient.element('#currentUserName').getText();
+            const endTime = Date.now();
+            app.stats.componentInitTimes.qrScanner = endTime - startTime;
 
-            expect(workspaceVisible).toBe(true);
-            expect(loginVisible).toBe(false);
-            expect(userName).toBe('Test User');
-        });
-    });
+            expect(app.systemComponents.qrScanner).toBeDefined();
+            expect(app.stats.componentInitTimes.qrScanner).toBeGreaterThan(0);
 
-    describe('QR Scanner E2E', () => {
-        test('should start QR scanner', async () => {
-            const mockClient = {
-                element: jest.fn((selector) => ({
-                    click: jest.fn(() => Promise.resolve()),
-                    isDisplayed: jest.fn(() => {
-                        if (selector === '#startScannerBtn') return Promise.resolve(false);
-                        if (selector === '#stopScannerBtn') return Promise.resolve(true);
-                        return Promise.resolve(true);
-                    }),
-                    getText: jest.fn(() => {
-                        if (selector === '#scannerStatusText') return Promise.resolve('Scanner aktiv');
-                        return Promise.resolve('');
-                    })
-                })),
-                waitUntil: jest.fn(() => Promise.resolve())
-            };
-
-            // Klicke Start-Button
-            await mockClient.element('#startScannerBtn').click();
-            await mockClient.waitUntil();
-
-            const startBtnVisible = await mockClient.element('#startScannerBtn').isDisplayed();
-            const stopBtnVisible = await mockClient.element('#stopScannerBtn').isDisplayed();
-            const statusText = await mockClient.element('#scannerStatusText').getText();
-
-            expect(startBtnVisible).toBe(false);
-            expect(stopBtnVisible).toBe(true);
-            expect(statusText).toBe('Scanner aktiv');
+            // Verify QR scanner can be started
+            const qrStarted = await systemComponents.qrScanner.start();
+            expect(qrStarted).toBe(true);
+            expect(systemComponents.qrScanner.isScanning).toBe(true);
         });
 
-        test('should process QR code scan', async () => {
-            const mockIPC = {
-                callMain: jest.fn((channel, ...args) => {
-                    if (channel === 'qr-scan-save') {
-                        return Promise.resolve({
-                            success: true,
-                            status: 'saved',
-                            data: {
-                                ID: 1,
-                                SessionID: args[0],
-                                RawPayload: args[1],
-                                CapturedTS: new Date().toISOString()
-                            },
-                            timestamp: new Date().toISOString()
-                        });
-                    }
-                })
-            };
+        test('should handle component initialization failures', async () => {
+            // Simulate database connection failure
+            jest.spyOn(systemComponents.database, 'connect')
+                .mockRejectedValueOnce(new Error('Database connection failed'));
 
-            const sessionId = 1;
-            const qrPayload = 'TEST_QR_CODE_E2E';
-
-            const result = await mockIPC.callMain('qr-scan-save', sessionId, qrPayload);
-
-            expect(result.success).toBe(true);
-            expect(result.data.RawPayload).toBe(qrPayload);
-            expect(result.data.SessionID).toBe(sessionId);
-        });
-
-        test('should update scan list in UI', async () => {
-            const mockClient = {
-                element: jest.fn((selector) => ({
-                    getText: jest.fn(() => {
-                        if (selector === '#sessionScans') return Promise.resolve('1');
-                        return Promise.resolve('');
-                    }),
-                    isDisplayed: jest.fn(() => Promise.resolve(true))
-                })),
-                elements: jest.fn((selector) => ({
-                    length: selector === '.scan-item' ? Promise.resolve(1) : Promise.resolve(0)
-                }))
-            };
-
-            const scanCount = await mockClient.element('#sessionScans').getText();
-            const scanItems = await mockClient.elements('.scan-item').length;
-
-            expect(scanCount).toBe('1');
-            expect(scanItems).toBe(1);
-        });
-    });
-
-    describe('Complete Workflow E2E', () => {
-        test('should complete full user workflow', async () => {
-            const mockWorkflow = {
-                // 1. User login
-                loginUser: async (tagId) => {
-                    return {
-                        user: { ID: 1, BenutzerName: 'E2E Test User' },
-                        session: { ID: 1, StartTS: new Date().toISOString() }
-                    };
-                },
-
-                // 2. Start scanner
-                startScanner: async () => {
-                    return { success: true, status: 'Scanner gestartet' };
-                },
-
-                // 3. Scan QR codes
-                scanQRCode: async (sessionId, payload) => {
-                    return {
-                        success: true,
-                        status: 'saved',
-                        data: { ID: Date.now(), RawPayload: payload }
-                    };
-                },
-
-                // 4. User logout
-                logoutUser: async (sessionId) => {
-                    return { success: true };
-                }
-            };
-
-            // Execute workflow
-            const tagId = '53004114';
-            const loginResult = await mockWorkflow.loginUser(tagId);
-            expect(loginResult.user.BenutzerName).toBe('E2E Test User');
-
-            const scannerResult = await mockWorkflow.startScanner();
-            expect(scannerResult.success).toBe(true);
-
-            const qrResult = await mockWorkflow.scanQRCode(loginResult.session.ID, 'TEST_QR_E2E');
-            expect(qrResult.success).toBe(true);
-
-            const logoutResult = await mockWorkflow.logoutUser(loginResult.session.ID);
-            expect(logoutResult.success).toBe(true);
-        });
-
-        test('should handle error recovery', async () => {
-            const mockErrorRecovery = {
-                simulateDBError: jest.fn(() => {
-                    throw new Error('Database connection lost');
-                }),
-
-                attemptReconnection: jest.fn(() => {
-                    return Promise.resolve({ success: true, message: 'Reconnected' });
-                }),
-
-                showErrorToUser: jest.fn((error) => {
-                    return { displayed: true, error: error.message };
-                })
-            };
-
-            // Simuliere Fehler
+            let dbError = null;
             try {
-                mockErrorRecovery.simulateDBError();
+                await systemComponents.database.connect();
             } catch (error) {
-                const errorDisplay = mockErrorRecovery.showErrorToUser(error);
-                expect(errorDisplay.displayed).toBe(true);
-                expect(errorDisplay.error).toBe('Database connection lost');
+                dbError = error;
             }
 
-            // Simuliere Recovery
-            const recovery = await mockErrorRecovery.attemptReconnection();
-            expect(recovery.success).toBe(true);
+            expect(dbError).toBeDefined();
+            expect(dbError.message).toBe('Database connection failed');
+            expect(systemComponents.database.isConnected).toBe(false);
+
+            // App should continue with degraded functionality
+            app.systemComponents.database = null;
+
+            // Other components should still work
+            const rfidStarted = await systemComponents.rfidListener.start();
+            expect(rfidStarted).toBe(true);
         });
     });
 
-    describe('Performance E2E', () => {
-        test('should maintain performance under load', async () => {
-            const mockPerformanceTest = {
-                rapidQRScans: async (count) => {
-                    const startTime = Date.now();
-                    const results = [];
+    describe('IPC Setup and Communication', () => {
+        beforeEach(async () => {
+            await mockElectron.app.whenReady();
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
 
-                    for (let i = 0; i < count; i++) {
-                        results.push({
-                            success: true,
-                            data: { ID: i, RawPayload: `QR_${i}` },
-                            processingTime: Math.random() * 10 // 0-10ms
-                        });
-                    }
+            // Initialize components
+            await systemComponents.database.connect();
+            await systemComponents.rfidListener.start();
 
-                    const endTime = Date.now();
-                    return {
-                        totalTime: endTime - startTime,
-                        averageTime: (endTime - startTime) / count,
-                        successCount: results.filter(r => r.success).length
-                    };
-                }
-            };
-
-            const result = await mockPerformanceTest.rapidQRScans(100);
-
-            expect(result.successCount).toBe(100);
-            expect(result.averageTime).toBeLessThan(50); // Under 50ms per scan
-            expect(result.totalTime).toBeLessThan(5000); // Under 5 seconds total
+            app.systemComponents = systemComponents;
         });
 
-        test('should handle memory usage efficiently', async () => {
-            const mockMemoryTest = {
-                simulateExtendedUsage: async () => {
-                    const initialMemory = 60; // MB
-                    let currentMemory = initialMemory;
+        test('should register all IPC handlers', () => {
+            const ipcHandlers = new Map();
 
-                    // Simulate 8 hours of usage
-                    for (let hour = 0; hour < 8; hour++) {
-                        // Memory should not grow excessively
-                        currentMemory += Math.random() * 5; // Max 5MB per hour
+            // Register database handlers
+            ipcHandlers.set('db-get-user-by-epc', async (event, tagId) => {
+                return await app.systemComponents.database.getUserByEPC(tagId);
+            });
 
-                        // Simulate garbage collection
-                        if (currentMemory > 100) {
-                            currentMemory *= 0.8; // 20% reduction
-                        }
-                    }
+            ipcHandlers.set('db-health-check', async () => {
+                return await app.systemComponents.database.healthCheck();
+            });
 
-                    return {
-                        initialMemory,
-                        finalMemory: currentMemory,
-                        memoryGrowth: currentMemory - initialMemory
-                    };
+            // Register session handlers
+            ipcHandlers.set('session-create', async (event, userId) => {
+                return await app.systemComponents.database.createSession(userId);
+            });
+
+            ipcHandlers.set('session-end', async (event, sessionId) => {
+                return await app.systemComponents.database.endSession(sessionId);
+            });
+
+            // Register QR handlers
+            ipcHandlers.set('qr-scan-save', async (event, sessionId, payload) => {
+                return await app.systemComponents.database.saveQRScan(sessionId, payload);
+            });
+
+            // Register RFID handlers
+            ipcHandlers.set('rfid-get-stats', async () => {
+                return app.systemComponents.rfidListener.getStats();
+            });
+
+            // Register window handlers
+            ipcHandlers.set('window-minimize', () => {
+                app.mainWindow.minimize();
+                return true;
+            });
+
+            ipcHandlers.set('window-maximize', () => {
+                app.mainWindow.maximize();
+                return true;
+            });
+
+            // Verify all handlers are registered
+            expect(ipcHandlers.size).toBe(8);
+            expect(ipcHandlers.has('db-get-user-by-epc')).toBe(true);
+            expect(ipcHandlers.has('session-create')).toBe(true);
+            expect(ipcHandlers.has('qr-scan-save')).toBe(true);
+            expect(ipcHandlers.has('window-minimize')).toBe(true);
+        });
+
+        test('should handle IPC communication correctly', async () => {
+            // Mock IPC handler registration
+            const mockIpcHandlers = new Map();
+
+            mockElectron.ipcMain.handle.mockImplementation((channel, handler) => {
+                mockIpcHandlers.set(channel, handler);
+            });
+
+            // Register a test handler
+            const testHandler = async (event, testData) => {
+                return { success: true, data: testData };
+            };
+
+            mockElectron.ipcMain.handle('test-channel', testHandler);
+
+            expect(mockElectron.ipcMain.handle).toHaveBeenCalledWith('test-channel', testHandler);
+        });
+
+        test('should handle renderer events correctly', () => {
+            const mockWebContents = app.mainWindow.webContents;
+
+            // Test sending events to renderer
+            const testEventData = {
+                type: 'system-status',
+                status: {
+                    database: true,
+                    rfid: true,
+                    qrScanner: false
                 }
             };
 
-            const memoryResult = await mockMemoryTest.simulateExtendedUsage();
+            mockWebContents.send('system-status-update', testEventData);
 
-            expect(memoryResult.finalMemory).toBeLessThan(150); // Under 150MB
-            expect(memoryResult.memoryGrowth).toBeLessThan(100); // Under 100MB growth
+            expect(mockWebContents.send).toHaveBeenCalledWith('system-status-update', testEventData);
         });
     });
 
-    describe('Accessibility E2E', () => {
-        test('should support keyboard navigation', async () => {
-            const mockAccessibilityTest = {
-                tabNavigation: async () => {
-                    const focusableElements = [
-                        '#startScannerBtn',
-                        '#stopScannerBtn',
-                        '#logoutBtn',
-                        '#clearScansBtn'
-                    ];
+    describe('Application Ready State', () => {
+        test('should complete full startup sequence', async () => {
+            const startupSteps = [];
 
-                    const navigationResults = focusableElements.map(selector => ({
-                        element: selector,
-                        focusable: true,
-                        tabIndex: 0
-                    }));
+            // 1. Electron app initialization
+            startupSteps.push('electron-init');
+            await mockElectron.app.whenReady();
+            app.isReady = true;
 
-                    return navigationResults;
+            // 2. Window creation
+            startupSteps.push('window-creation');
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
+
+            // 3. System components initialization
+            startupSteps.push('components-init');
+            await systemComponents.database.connect();
+            await systemComponents.rfidListener.start();
+            app.systemComponents = systemComponents;
+
+            // 4. IPC setup
+            startupSteps.push('ipc-setup');
+            // IPC handlers would be registered here
+
+            // 5. Load renderer
+            startupSteps.push('renderer-load');
+            await mainWindow.loadFile('renderer/index.html');
+
+            // 6. Show window
+            startupSteps.push('window-show');
+            mainWindow.show();
+
+            // Verify complete startup
+            expect(startupSteps).toEqual([
+                'electron-init',
+                'window-creation',
+                'components-init',
+                'ipc-setup',
+                'renderer-load',
+                'window-show'
+            ]);
+
+            expect(app.isReady).toBe(true);
+            expect(app.mainWindow).toBeDefined();
+            expect(systemComponents.database.isConnected).toBe(true);
+            expect(systemComponents.rfidListener.isListening).toBe(true);
+        });
+
+        test('should provide system health status', async () => {
+            // Complete startup
+            await mockElectron.app.whenReady();
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
+
+            await systemComponents.database.connect();
+            await systemComponents.rfidListener.start();
+            app.systemComponents = systemComponents;
+
+            // Get system health
+            const systemHealth = {
+                app: {
+                    ready: app.isReady,
+                    version: app.version,
+                    uptime: Date.now() - (app.stats.startTime || Date.now())
                 },
-
-                keyboardShortcuts: async () => {
-                    const shortcuts = [
-                        { key: 'F1', action: 'start-scanner', supported: true },
-                        { key: 'F2', action: 'stop-scanner', supported: true },
-                        { key: 'Escape', action: 'logout', supported: true }
-                    ];
-
-                    return shortcuts;
+                components: {
+                    database: {
+                        connected: systemComponents.database.isConnected,
+                        health: await systemComponents.database.healthCheck()
+                    },
+                    rfid: {
+                        listening: systemComponents.rfidListener.isListening,
+                        stats: systemComponents.rfidListener.getStats()
+                    },
+                    qrScanner: {
+                        available: true,
+                        scanning: systemComponents.qrScanner.isScanning
+                    }
+                },
+                window: {
+                    created: app.mainWindow !== null,
+                    visible: app.mainWindow ? app.mainWindow.isVisible() : false
                 }
             };
 
-            const tabResults = await mockAccessibilityTest.tabNavigation();
-            const shortcutResults = await mockAccessibilityTest.keyboardShortcuts();
-
-            expect(tabResults.every(r => r.focusable)).toBe(true);
-            expect(shortcutResults.every(s => s.supported)).toBe(true);
+            expect(systemHealth.app.ready).toBe(true);
+            expect(systemHealth.app.version).toBe('1.0.1');
+            expect(systemHealth.components.database.connected).toBe(true);
+            expect(systemHealth.components.rfid.listening).toBe(true);
+            expect(systemHealth.window.created).toBe(true);
         });
 
-        test('should have proper ARIA labels', async () => {
-            const mockAriaTest = {
-                checkAriaLabels: async () => {
-                    return [
-                        { element: '#startScannerBtn', ariaLabel: 'QR-Scanner starten', present: true },
-                        { element: '#logoutBtn', ariaLabel: 'Vom System abmelden', present: true },
-                        { element: '#workspace', ariaLabel: 'Arbeitsbereich', present: true }
-                    ];
-                }
-            };
+        test('should handle graceful shutdown', async () => {
+            // Complete startup
+            await mockElectron.app.whenReady();
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
 
-            const ariaResults = await mockAriaTest.checkAriaLabels();
-            expect(ariaResults.every(r => r.present)).toBe(true);
+            await systemComponents.database.connect();
+            await systemComponents.rfidListener.start();
+            app.systemComponents = systemComponents;
+
+            // Simulate shutdown
+            const shutdownSteps = [];
+
+            // 1. Stop QR scanner if running
+            if (systemComponents.qrScanner.isScanning) {
+                shutdownSteps.push('qr-scanner-stop');
+                await systemComponents.qrScanner.stop();
+            }
+
+            // 2. Stop RFID listener
+            shutdownSteps.push('rfid-stop');
+            await systemComponents.rfidListener.stop();
+
+            // 3. Close database connection
+            shutdownSteps.push('database-close');
+            await systemComponents.database.close();
+
+            // 4. Close window
+            shutdownSteps.push('window-close');
+            mainWindow.close();
+
+            // 5. Quit app
+            shutdownSteps.push('app-quit');
+            mockElectron.app.quit();
+
+            // Verify graceful shutdown
+            expect(shutdownSteps).toContain('rfid-stop');
+            expect(shutdownSteps).toContain('database-close');
+            expect(shutdownSteps).toContain('window-close');
+            expect(shutdownSteps).toContain('app-quit');
+
+            expect(systemComponents.rfidListener.isListening).toBe(false);
+            expect(systemComponents.database.isConnected).toBe(false);
+            expect(mockElectron.app.quit).toHaveBeenCalled();
         });
     });
 
-    describe('Cross-Platform E2E', () => {
-        test('should work on Windows', async () => {
-            const mockPlatformTest = {
-                platform: 'win32',
-                testWindowsFeatures: async () => {
-                    return {
-                        windowsIntegration: true,
-                        nativeMenus: true,
-                        systemTray: false, // Not implemented
-                        fileAssociations: false // Not implemented
-                    };
-                }
-            };
+    describe('Error Handling and Recovery', () => {
+        test('should handle startup errors gracefully', async () => {
+            const errors = [];
 
-            const windowsResults = await mockPlatformTest.testWindowsFeatures();
-            expect(windowsResults.windowsIntegration).toBe(true);
+            try {
+                // Simulate database connection failure
+                jest.spyOn(systemComponents.database, 'connect')
+                    .mockRejectedValueOnce(new Error('Database unavailable'));
+
+                await systemComponents.database.connect();
+            } catch (error) {
+                errors.push({ component: 'database', error: error.message });
+            }
+
+            try {
+                // Simulate RFID hardware failure
+                jest.spyOn(systemComponents.rfidListener, 'start')
+                    .mockRejectedValueOnce(new Error('RFID hardware not found'));
+
+                await systemComponents.rfidListener.start();
+            } catch (error) {
+                errors.push({ component: 'rfid', error: error.message });
+            }
+
+            // App should continue with degraded functionality
+            await mockElectron.app.whenReady();
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
+
+            expect(errors.length).toBe(2);
+            expect(errors.find(e => e.component === 'database')).toBeDefined();
+            expect(errors.find(e => e.component === 'rfid')).toBeDefined();
+            expect(app.mainWindow).toBeDefined(); // Window should still be created
         });
 
-        test('should handle different display scales', async () => {
-            const mockDisplayTest = {
-                testDisplayScales: async () => {
-                    const scales = [1.0, 1.25, 1.5, 2.0];
-                    const results = scales.map(scale => ({
-                        scale,
-                        uiScales: true,
-                        textReadable: true,
-                        elementsAligned: true
-                    }));
+        test('should provide fallback functionality', async () => {
+            // Startup with some components failing
+            await mockElectron.app.whenReady();
+            mainWindow = new mockElectron.BrowserWindow();
+            app.mainWindow = mainWindow;
 
-                    return results;
-                }
+            // Only database succeeds
+            await systemComponents.database.connect();
+            app.systemComponents.database = systemComponents.database;
+            app.systemComponents.rfidListener = null; // Failed
+            app.systemComponents.qrScanner = null; // Not available
+
+            // Check fallback status
+            const fallbackStatus = {
+                database: app.systemComponents.database !== null,
+                rfid: app.systemComponents.rfidListener !== null,
+                qrScanner: app.systemComponents.qrScanner !== null,
+                basicFunctionality: app.mainWindow !== null
             };
 
-            const scaleResults = await mockDisplayTest.testDisplayScales();
-            expect(scaleResults.every(r => r.uiScales && r.textReadable)).toBe(true);
+            expect(fallbackStatus.database).toBe(true);
+            expect(fallbackStatus.rfid).toBe(false);
+            expect(fallbackStatus.qrScanner).toBe(false);
+            expect(fallbackStatus.basicFunctionality).toBe(true);
+        });
+
+        test('should retry failed component initialization', async () => {
+            let connectionAttempts = 0;
+
+            // Mock database connection that fails first time, succeeds second time
+            jest.spyOn(systemComponents.database, 'connect')
+                .mockImplementation(async () => {
+                    connectionAttempts++;
+                    if (connectionAttempts === 1) {
+                        throw new Error('Connection timeout');
+                    }
+                    // Call original implementation for second attempt
+                    return true;
+                });
+
+            // First attempt fails
+            try {
+                await systemComponents.database.connect();
+            } catch (error) {
+                expect(error.message).toBe('Connection timeout');
+            }
+
+            expect(connectionAttempts).toBe(1);
+            expect(systemComponents.database.isConnected).toBe(false);
+
+            // Retry succeeds
+            systemComponents.database.connect.mockRestore();
+            const retryResult = await systemComponents.database.connect();
+
+            expect(retryResult).toBe(true);
+            expect(systemComponents.database.isConnected).toBe(true);
+        });
+    });
+
+    describe('Performance Monitoring', () => {
+        test('should track startup performance', async () => {
+            const performanceMetrics = {
+                startTime: Date.now(),
+                milestones: {}
+            };
+
+            // Track each startup phase
+            performanceMetrics.milestones.electronReady = Date.now();
+            await mockElectron.app.whenReady();
+
+            performanceMetrics.milestones.windowCreated = Date.now();
+            mainWindow = new mockElectron.BrowserWindow();
+
+            performanceMetrics.milestones.databaseConnected = Date.now();
+            await systemComponents.database.connect();
+
+            performanceMetrics.milestones.rfidStarted = Date.now();
+            await systemComponents.rfidListener.start();
+
+            performanceMetrics.milestones.rendererLoaded = Date.now();
+            await mainWindow.loadFile('renderer/index.html');
+
+            performanceMetrics.milestones.appReady = Date.now();
+
+            // Calculate durations
+            const durations = {
+                electronInit: performanceMetrics.milestones.electronReady - performanceMetrics.startTime,
+                windowCreation: performanceMetrics.milestones.windowCreated - performanceMetrics.milestones.electronReady,
+                databaseInit: performanceMetrics.milestones.databaseConnected - performanceMetrics.milestones.windowCreated,
+                rfidInit: performanceMetrics.milestones.rfidStarted - performanceMetrics.milestones.databaseConnected,
+                rendererLoad: performanceMetrics.milestones.rendererLoaded - performanceMetrics.milestones.rfidStarted,
+                totalStartup: performanceMetrics.milestones.appReady - performanceMetrics.startTime
+            };
+
+            expect(durations.electronInit).toBeGreaterThan(0);
+            expect(durations.windowCreation).toBeGreaterThan(0);
+            expect(durations.databaseInit).toBeGreaterThan(0);
+            expect(durations.rfidInit).toBeGreaterThan(0);
+            expect(durations.rendererLoad).toBeGreaterThan(0);
+            expect(durations.totalStartup).toBeGreaterThan(0);
+
+            // Startup should be reasonably fast (in test environment)
+            expect(durations.totalStartup).toBeLessThan(5000); // Less than 5 seconds
+        });
+
+        test('should monitor memory usage during startup', async () => {
+            const memorySnapshots = [];
+
+            // Take memory snapshot at start
+            memorySnapshots.push({
+                phase: 'start',
+                memory: process.memoryUsage()
+            });
+
+            await mockElectron.app.whenReady();
+            memorySnapshots.push({
+                phase: 'electron-ready',
+                memory: process.memoryUsage()
+            });
+
+            mainWindow = new mockElectron.BrowserWindow();
+            memorySnapshots.push({
+                phase: 'window-created',
+                memory: process.memoryUsage()
+            });
+
+            await systemComponents.database.connect();
+            await systemComponents.rfidListener.start();
+            memorySnapshots.push({
+                phase: 'components-initialized',
+                memory: process.memoryUsage()
+            });
+
+            // Verify memory usage is reasonable
+            expect(memorySnapshots.length).toBe(4);
+            expect(memorySnapshots.every(s => s.memory.heapUsed > 0)).toBe(true);
+            expect(memorySnapshots.every(s => s.memory.heapTotal > 0)).toBe(true);
+
+            // Memory usage should increase during startup but not excessively
+            const startMemory = memorySnapshots[0].memory.heapUsed;
+            const endMemory = memorySnapshots[memorySnapshots.length - 1].memory.heapUsed;
+            const memoryIncrease = endMemory - startMemory;
+
+            expect(memoryIncrease).toBeGreaterThan(0); // Should use some memory
+            expect(memoryIncrease).toBeLessThan(100 * 1024 * 1024); // But not more than 100MB
         });
     });
 });
