@@ -41,6 +41,34 @@ describe('DatabaseClient', () => {
             await expect(dbClient.connect()).rejects.toThrow('Connection failed');
             expect(dbClient.isConnected).toBe(false);
         });
+
+        test('should not connect twice', async () => {
+            await dbClient.connect();
+            const secondConnect = await dbClient.connect();
+
+            expect(secondConnect).toBe(true);
+            expect(dbClient.isConnected).toBe(true);
+        });
+
+        test('should handle close when not connected', async () => {
+            const result = await dbClient.close();
+            expect(result).toBe(true);
+        });
+
+        test('should test connection successfully', async () => {
+            await dbClient.connect();
+            const testResult = await dbClient.testConnection();
+
+            expect(testResult.success).toBe(true);
+            expect(testResult.server).toBe('localhost');
+            expect(testResult.database).toBe('RdScanner_Test');
+            expect(testResult.connectionTime).toBeGreaterThan(0);
+        });
+
+        test('should fail test connection when not connected', async () => {
+            await expect(dbClient.testConnection())
+                .rejects.toThrow('Not connected to database');
+        });
     });
 
     describe('User Management', () => {
@@ -72,6 +100,77 @@ describe('DatabaseClient', () => {
             expect(user.ID).toBe(2);
             expect(user.BenutzerName).toBe('Test User 2');
         });
+
+        test('should not find inactive user', async () => {
+            const user = await dbClient.getUserByEPC('DEADBEEF');
+            expect(user).toBeNull();
+        });
+
+        test('should find user by ID', async () => {
+            const user = await dbClient.getUserById(1);
+            expect(user).toBeTruthy();
+            expect(user.ID).toBe(1);
+            expect(user.BenutzerName).toBe('Test User 1');
+        });
+
+        test('should return null for unknown user ID', async () => {
+            const user = await dbClient.getUserById(999);
+            expect(user).toBeNull();
+        });
+
+        test('should get all active users', async () => {
+            const users = await dbClient.getAllActiveUsers();
+            expect(users.length).toBe(2);
+            expect(users.every(u => u.xStatus === 0)).toBe(true);
+        });
+
+        test('should create new user', async () => {
+            const userData = {
+                BenutzerName: 'New Test User',
+                EPC: 0x12345678,
+                Email: 'newuser@example.com',
+                Rolle: 'Mitarbeiter'
+            };
+
+            const newUser = await dbClient.createUser(userData);
+
+            expect(newUser.ID).toBeDefined();
+            expect(newUser.BenutzerName).toBe(userData.BenutzerName);
+            expect(newUser.EPC).toBe(userData.EPC);
+            expect(newUser.Email).toBe(userData.Email);
+            expect(newUser.xStatus).toBe(0);
+            expect(newUser.ErstelltAm).toBeDefined();
+        });
+
+        test('should update existing user', async () => {
+            const updateData = {
+                BenutzerName: 'Updated Name',
+                Email: 'updated@example.com'
+            };
+
+            const updatedUser = await dbClient.updateUser(1, updateData);
+
+            expect(updatedUser.ID).toBe(1);
+            expect(updatedUser.BenutzerName).toBe(updateData.BenutzerName);
+            expect(updatedUser.Email).toBe(updateData.Email);
+        });
+
+        test('should fail to update non-existent user', async () => {
+            await expect(dbClient.updateUser(999, { BenutzerName: 'Test' }))
+                .rejects.toThrow('User with ID 999 not found');
+        });
+
+        test('should deactivate user', async () => {
+            const deactivatedUser = await dbClient.deactivateUser(1);
+
+            expect(deactivatedUser.ID).toBe(1);
+            expect(deactivatedUser.xStatus).toBe(1);
+        });
+
+        test('should fail to deactivate non-existent user', async () => {
+            await expect(dbClient.deactivateUser(999))
+                .rejects.toThrow('User with ID 999 not found');
+        });
     });
 
     describe('Session Management', () => {
@@ -80,283 +179,539 @@ describe('DatabaseClient', () => {
         });
 
         test('should create new session', async () => {
-            const session = await dbClient.createSession(1);
+            const userId = 1;
+            const session = await dbClient.createSession(userId);
 
-            expect(session).toBeTruthy();
-            expect(session.ID).toBeTruthy();
-            expect(session.UserID).toBe(1);
-            expect(session.StartTS).toBeTruthy();
+            expect(session.ID).toBeDefined();
+            expect(session.UserID).toBe(userId);
+            expect(session.StartTS).toBeDefined();
+            expect(session.EndTS).toBeNull();
             expect(session.Active).toBe(1);
         });
 
-        test('should end session successfully', async () => {
-            const session = await dbClient.createSession(1);
-            const result = await dbClient.endSession(session.ID);
+        test('should close existing session when creating new one', async () => {
+            const userId = 1;
 
-            expect(result).toBe(true);
+            // Erstelle erste Session
+            const session1 = await dbClient.createSession(userId);
+            expect(session1.Active).toBe(1);
+
+            // Erstelle zweite Session - sollte erste schließen
+            const session2 = await dbClient.createSession(userId);
+            expect(session2.Active).toBe(1);
+
+            // Überprüfe dass erste Session geschlossen wurde
+            const closedSession = dbClient.mockData.sessions.find(s => s.ID === session1.ID);
+            expect(closedSession.Active).toBe(0);
+            expect(closedSession.EndTS).toBeDefined();
         });
 
-        test('should return false when ending non-existent session', async () => {
-            const result = await dbClient.endSession(999);
-            expect(result).toBe(false);
+        test('should end session', async () => {
+            const userId = 1;
+            const session = await dbClient.createSession(userId);
+
+            const endedSession = await dbClient.endSession(session.ID);
+
+            expect(endedSession.ID).toBe(session.ID);
+            expect(endedSession.EndTS).toBeDefined();
+            expect(endedSession.Active).toBe(0);
         });
 
-        test('should handle multiple sessions for same user', async () => {
-            const session1 = await dbClient.createSession(1);
-            const session2 = await dbClient.createSession(1);
+        test('should fail to end non-existent session', async () => {
+            await expect(dbClient.endSession(999))
+                .rejects.toThrow('Session with ID 999 not found');
+        });
 
-            expect(session1.ID).not.toBe(session2.ID);
-            expect(session1.UserID).toBe(session2.UserID);
+        test('should fail to end already closed session', async () => {
+            const userId = 1;
+            const session = await dbClient.createSession(userId);
+            await dbClient.endSession(session.ID);
+
+            await expect(dbClient.endSession(session.ID))
+                .rejects.toThrow('Session 1 is already closed');
+        });
+
+        test('should get active session for user', async () => {
+            const userId = 1;
+            const session = await dbClient.createSession(userId);
+
+            const activeSession = await dbClient.getActiveSession(userId);
+
+            expect(activeSession).toBeTruthy();
+            expect(activeSession.ID).toBe(session.ID);
+            expect(activeSession.Active).toBe(1);
+        });
+
+        test('should return null when no active session exists', async () => {
+            const activeSession = await dbClient.getActiveSession(1);
+            expect(activeSession).toBeNull();
+        });
+
+        test('should get all active sessions', async () => {
+            await dbClient.createSession(1);
+            await dbClient.createSession(2);
+
+            const activeSessions = await dbClient.getAllActiveSessions();
+
+            expect(activeSessions.length).toBe(2);
+            expect(activeSessions.every(s => s.Active === 1)).toBe(true);
+        });
+
+        test('should get sessions by user', async () => {
+            const userId = 1;
+
+            // Erstelle und schließe mehrere Sessions
+            const session1 = await dbClient.createSession(userId);
+            await dbClient.endSession(session1.ID);
+
+            const session2 = await dbClient.createSession(userId);
+            await dbClient.endSession(session2.ID);
+
+            const userSessions = await dbClient.getSessionsByUser(userId, 10);
+
+            expect(userSessions.length).toBe(2);
+            expect(userSessions.every(s => s.UserID === userId)).toBe(true);
+
+            // Überprüfe Sortierung (neueste zuerst)
+            expect(new Date(userSessions[0].StartTS) >= new Date(userSessions[1].StartTS)).toBe(true);
+        });
+
+        test('should calculate session duration', async () => {
+            const userId = 1;
+            const session = await dbClient.createSession(userId);
+
+            // Warte kurz und beende Session
+            await new Promise(resolve => setTimeout(resolve, 50));
+            await dbClient.endSession(session.ID);
+
+            const duration = await dbClient.getSessionDuration(session.ID);
+
+            expect(duration).toBeTruthy();
+            expect(duration.sessionId).toBe(session.ID);
+            expect(duration.startTime).toBeDefined();
+            expect(duration.endTime).toBeDefined();
+            expect(duration.duration).toBeGreaterThan(0);
+            expect(duration.isActive).toBe(false);
+            expect(duration.formattedDuration).toContain('s');
+        });
+
+        test('should calculate duration for active session', async () => {
+            const userId = 1;
+            const session = await dbClient.createSession(userId);
+
+            const duration = await dbClient.getSessionDuration(session.ID);
+
+            expect(duration.isActive).toBe(true);
+            expect(duration.endTime).toBeNull();
+            expect(duration.duration).toBeGreaterThan(0);
         });
     });
 
-    describe('QR Code Scanning', () => {
-        let sessionId;
+    describe('QR Scan Management', () => {
+        let userId, sessionId;
 
         beforeEach(async () => {
             await dbClient.connect();
-            const session = await dbClient.createSession(1);
+            userId = 1;
+            const session = await dbClient.createSession(userId);
             sessionId = session.ID;
         });
 
-        test('should save QR scan successfully', async () => {
-            const payload = 'TEST_QR_CODE_123';
+        test('should save QR scan', async () => {
+            const payload = 'TEST_QR_CODE_001';
             const result = await dbClient.saveQRScan(sessionId, payload);
 
             expect(result.success).toBe(true);
-            expect(result.status).toBe('saved');
-            expect(result.data).toBeTruthy();
-            expect(result.data.RawPayload).toBe(payload);
             expect(result.data.SessionID).toBe(sessionId);
+            expect(result.data.RawPayload).toBe(payload);
+            expect(result.data.ScannTS).toBeDefined();
+            expect(result.data.PayloadAsJSON).toBeNull(); // Kein gültiges JSON
         });
 
-        test('should detect duplicate QR codes', async () => {
-            const payload = 'DUPLICATE_QR_CODE';
+        test('should save QR scan with JSON payload', async () => {
+            const jsonPayload = JSON.stringify({ id: 'PKG001', type: 'package', order: '12345' });
+            const result = await dbClient.saveQRScan(sessionId, jsonPayload);
 
-            // Erste Speicherung
-            const result1 = await dbClient.saveQRScan(sessionId, payload);
-            expect(result1.success).toBe(true);
-
-            // Zweite Speicherung (Duplikat)
-            const result2 = await dbClient.saveQRScan(sessionId, payload);
-            expect(result2.success).toBe(false);
-            expect(result2.status).toBe('duplicate_cache');
-            expect(result2.duplicateInfo).toBeTruthy();
+            expect(result.success).toBe(true);
+            expect(result.data.RawPayload).toBe(jsonPayload);
+            expect(result.data.PayloadAsJSON).toEqual({ id: 'PKG001', type: 'package', order: '12345' });
         });
 
-        test('should handle different QR code formats', async () => {
-            const testCodes = [
-                'PLAIN_TEXT_QR',
-                '{"type":"json","data":"test"}',
-                '1234567890123',
-                'https://example.com/test'
-            ];
+        test('should prevent duplicate QR scans', async () => {
+            const payload = 'DUPLICATE_TEST';
 
-            for (const code of testCodes) {
-                const result = await dbClient.saveQRScan(sessionId, code);
-                expect(result.success).toBe(true);
-                expect(result.data.RawPayload).toBe(code);
+            // Erster Scan sollte erfolgreich sein
+            const firstScan = await dbClient.saveQRScan(sessionId, payload);
+            expect(firstScan.success).toBe(true);
+
+            // Zweiter Scan sollte fehlschlagen (Duplicate)
+            await expect(dbClient.saveQRScan(sessionId, payload))
+                .rejects.toThrow('Duplicate scan detected');
+        });
+
+        test('should allow duplicate after cooldown', async () => {
+            const payload = 'COOLDOWN_TEST';
+
+            // Setze kurzen Cooldown für Test
+            dbClient.duplicateCooldown = 100; // 100ms
+
+            // Erster Scan
+            await dbClient.saveQRScan(sessionId, payload);
+
+            // Warte Cooldown ab
+            await new Promise(resolve => setTimeout(resolve, 150));
+
+            // Zweiter Scan sollte jetzt erfolgreich sein
+            const secondScan = await dbClient.saveQRScan(sessionId, payload);
+            expect(secondScan.success).toBe(true);
+        });
+
+        test('should fail to save scan for inactive session', async () => {
+            await dbClient.endSession(sessionId);
+
+            await expect(dbClient.saveQRScan(sessionId, 'TEST'))
+                .rejects.toThrow('No active session found');
+        });
+
+        test('should get QR scans by session', async () => {
+            // Speichere mehrere Scans
+            await dbClient.saveQRScan(sessionId, 'SCAN_001');
+            await dbClient.saveQRScan(sessionId, 'SCAN_002');
+            await dbClient.saveQRScan(sessionId, 'SCAN_003');
+
+            const scans = await dbClient.getQRScansBySession(sessionId, 10);
+
+            expect(scans.length).toBe(3);
+            expect(scans.every(s => s.SessionID === sessionId)).toBe(true);
+
+            // Überprüfe Sortierung (neueste zuerst)
+            expect(new Date(scans[0].ScannTS) >= new Date(scans[1].ScannTS)).toBe(true);
+        });
+
+        test('should limit QR scans by session', async () => {
+            // Speichere mehr Scans als Limit
+            for (let i = 1; i <= 5; i++) {
+                await dbClient.saveQRScan(sessionId, `SCAN_${i.toString().padStart(3, '0')}`);
             }
+
+            const scans = await dbClient.getQRScansBySession(sessionId, 3);
+
+            expect(scans.length).toBe(3);
         });
 
-        test('should reject QR scan for invalid session', async () => {
-            const result = await dbClient.saveQRScan(999, 'TEST_CODE');
-            expect(result.success).toBe(false);
+        test('should get recent QR scans', async () => {
+            // Erstelle zweite Session
+            const session2 = await dbClient.createSession(2);
+
+            // Speichere Scans in beiden Sessions
+            await dbClient.saveQRScan(sessionId, 'SESSION1_SCAN');
+            await dbClient.saveQRScan(session2.ID, 'SESSION2_SCAN');
+
+            const recentScans = await dbClient.getRecentQRScans(10);
+
+            expect(recentScans.length).toBe(2);
+            expect(recentScans.some(s => s.RawPayload === 'SESSION1_SCAN')).toBe(true);
+            expect(recentScans.some(s => s.RawPayload === 'SESSION2_SCAN')).toBe(true);
         });
 
-        test('should handle special characters in QR codes', async () => {
-            const specialCodes = [
-                'ÄÖÜäöüß',
-                '日本語',
-                '🎉✅❌',
-                'Line1\nLine2\nLine3'
-            ];
+        test('should get QR scan by ID', async () => {
+            const result = await dbClient.saveQRScan(sessionId, 'FIND_BY_ID_TEST');
+            const scanId = result.data.ID;
 
-            for (const code of specialCodes) {
-                const result = await dbClient.saveQRScan(sessionId, code);
-                expect(result.success).toBe(true);
-                expect(result.data.RawPayload).toBe(code);
-            }
+            const foundScan = await dbClient.getQRScanById(scanId);
+
+            expect(foundScan).toBeTruthy();
+            expect(foundScan.ID).toBe(scanId);
+            expect(foundScan.RawPayload).toBe('FIND_BY_ID_TEST');
+        });
+
+        test('should return null for non-existent scan ID', async () => {
+            const scan = await dbClient.getQRScanById(999);
+            expect(scan).toBeNull();
+        });
+
+        test('should delete QR scan', async () => {
+            const result = await dbClient.saveQRScan(sessionId, 'DELETE_TEST');
+            const scanId = result.data.ID;
+
+            const deletedScan = await dbClient.deleteQRScan(scanId);
+
+            expect(deletedScan.ID).toBe(scanId);
+            expect(deletedScan.RawPayload).toBe('DELETE_TEST');
+
+            // Überprüfe dass Scan entfernt wurde
+            const remainingScans = await dbClient.getQRScansBySession(sessionId);
+            expect(remainingScans.some(s => s.ID === scanId)).toBe(false);
+        });
+
+        test('should fail to delete non-existent scan', async () => {
+            await expect(dbClient.deleteQRScan(999))
+                .rejects.toThrow('QR scan with ID 999 not found');
         });
     });
 
-    describe('Health Check', () => {
-        test('should return health status when connected', async () => {
+    describe('Statistics and Reporting', () => {
+        let userId, sessionId;
+
+        beforeEach(async () => {
             await dbClient.connect();
+            userId = 1;
+            const session = await dbClient.createSession(userId);
+            sessionId = session.ID;
+        });
+
+        test('should get session statistics', async () => {
+            // Füge einige QR-Scans hinzu
+            await dbClient.saveQRScan(sessionId, 'STATS_SCAN_001');
+            await dbClient.saveQRScan(sessionId, 'STATS_SCAN_002');
+            await dbClient.saveQRScan(sessionId, 'STATS_SCAN_003');
+
+            const stats = await dbClient.getSessionStats(sessionId);
+
+            expect(stats).toBeTruthy();
+            expect(stats.sessionId).toBe(sessionId);
+            expect(stats.userId).toBe(userId);
+            expect(stats.totalScans).toBe(3);
+            expect(stats.isActive).toBe(true);
+            expect(stats.startTime).toBeDefined();
+        });
+
+        test('should return null for non-existent session stats', async () => {
+            const stats = await dbClient.getSessionStats(999);
+            expect(stats).toBeNull();
+        });
+
+        test('should get user statistics', async () => {
+            // Erstelle mehrere Sessions und Scans
+            await dbClient.saveQRScan(sessionId, 'USER_STATS_SCAN_1');
+            await dbClient.endSession(sessionId);
+
+            const session2 = await dbClient.createSession(userId);
+            await dbClient.saveQRScan(session2.ID, 'USER_STATS_SCAN_2');
+            await dbClient.saveQRScan(session2.ID, 'USER_STATS_SCAN_3');
+
+            const userStats = await dbClient.getUserStats(userId, 30);
+
+            expect(userStats.userId).toBe(userId);
+            expect(userStats.totalSessions).toBe(2);
+            expect(userStats.activeSessions).toBe(1);
+            expect(userStats.totalScans).toBe(3);
+            expect(userStats.avgScansPerSession).toBe(1.5);
+            expect(userStats.formattedWorkTime).toBeDefined();
+        });
+
+        test('should get daily statistics', async () => {
+            const today = new Date();
+
+            // Füge einige Daten für heute hinzu
+            await dbClient.saveQRScan(sessionId, 'DAILY_SCAN_1');
+            await dbClient.saveQRScan(sessionId, 'DAILY_SCAN_2');
+
+            const dailyStats = await dbClient.getDailyStats(today);
+
+            expect(dailyStats.date).toBe(today.toDateString());
+            expect(dailyStats.totalUsers).toBe(1);
+            expect(dailyStats.totalSessions).toBe(1);
+            expect(dailyStats.activeSessions).toBe(1);
+            expect(dailyStats.totalScans).toBe(2);
+            expect(dailyStats.hourlyDistribution).toBeDefined();
+            expect(dailyStats.hourlyDistribution.length).toBe(24);
+        });
+
+        test('should perform health check', async () => {
             const health = await dbClient.healthCheck();
 
             expect(health.connected).toBe(true);
-            expect(health.connectionTime).toBeDefined();
-            expect(health.server).toBeDefined();
-            expect(health.stats).toBeDefined();
+            expect(health.connectionTime).toBeGreaterThan(0);
+            expect(health.server.name).toBe('localhost');
+            expect(health.server.database).toBe('RdScanner_Test');
+            expect(health.stats.activeUsers).toBe(2);
+            expect(health.performance).toBeDefined();
             expect(health.timestamp).toBeDefined();
         });
-
-        test('should return disconnected status when not connected', async () => {
-            const health = await dbClient.healthCheck();
-            expect(health.connected).toBe(false);
-        });
-
-        test('should include database statistics', async () => {
-            await dbClient.connect();
-            const health = await dbClient.healthCheck();
-
-            expect(health.stats.ActiveUsers).toBeDefined();
-            expect(health.stats.TotalSessions).toBeDefined();
-            expect(health.stats.ActiveSessions).toBeDefined();
-            expect(health.stats.TotalValidScans).toBeDefined();
-        });
     });
 
-    describe('Data Validation', () => {
+    describe('Performance Tracking', () => {
         beforeEach(async () => {
             await dbClient.connect();
         });
 
-        test('should validate EPC format', () => {
-            const validEpcs = ['53004114', 'ABCDEF01', '12345678'];
-            const invalidEpcs = ['', 'invalid', '123', 'GHIJKLMN'];
+        test('should track query performance', async () => {
+            // Führe mehrere Queries aus
+            await dbClient.getUserByEPC('53004114');
+            await dbClient.getAllActiveUsers();
+            await dbClient.healthCheck();
 
-            validEpcs.forEach(epc => {
-                expect(() => parseInt(epc, 16)).not.toThrow();
-            });
+            const stats = dbClient.getPerformanceStats();
+
+            expect(stats.queries.total).toBeGreaterThanOrEqual(3);
+            expect(stats.queries.successful).toBeGreaterThan(0);
+            expect(stats.queries.avgDuration).toBeGreaterThan(0);
         });
 
-        test('should handle malformed QR payloads', async () => {
-            const session = await dbClient.createSession(1);
-            const malformedPayloads = [
-                '',
-                null,
-                undefined,
-                '\x00\x01\x02',
-                'x'.repeat(10000) // Sehr lang
+        test('should track failed queries', async () => {
+            // Simuliere Query-Fehler
+            jest.spyOn(dbClient, '_executeQuery').mockRejectedValueOnce(new Error('Query failed'));
+
+            try {
+                await dbClient.getUserByEPC('53004114');
+            } catch (error) {
+                // Fehler erwartet
+            }
+
+            const stats = dbClient.getPerformanceStats();
+            expect(stats.queries.failed).toBeGreaterThan(0);
+        });
+
+        test('should calculate average query duration', async () => {
+            const initialStats = dbClient.getPerformanceStats();
+
+            // Führe einige Queries aus
+            await dbClient.getUserByEPC('53004114');
+            await dbClient.getUserByEPC('87654321');
+
+            const finalStats = dbClient.getPerformanceStats();
+
+            expect(finalStats.queries.avgDuration).toBeGreaterThanOrEqual(initialStats.queries.avgDuration);
+            expect(finalStats.queries.total).toBeGreaterThan(initialStats.queries.total);
+        });
+    });
+
+    describe('Test Helper Methods', () => {
+        test('should reset mock data', () => {
+            // Ändere Mock-Daten
+            dbClient.mockData.users.push({ ID: 999, BenutzerName: 'Temp User' });
+
+            // Reset
+            dbClient.reset();
+
+            expect(dbClient.mockData.users.length).toBe(2); // Zurück zu ursprünglichen Test-Usern
+            expect(dbClient.mockData.sessions.length).toBe(0);
+            expect(dbClient.mockData.qrScans.length).toBe(0);
+        });
+
+        test('should add test user', () => {
+            const testUser = {
+                BenutzerName: 'Additional Test User',
+                EPC: 0xABCDEF12,
+                Email: 'additional@test.com'
+            };
+
+            const addedUser = dbClient.addTestUser(testUser);
+
+            expect(addedUser.ID).toBe(3); // Nach den 2 Standard-Test-Usern
+            expect(addedUser.BenutzerName).toBe(testUser.BenutzerName);
+            expect(addedUser.EPC).toBe(testUser.EPC);
+            expect(addedUser.xStatus).toBe(0);
+        });
+
+        test('should simulate connection error', () => {
+            const errorHandler = jest.fn();
+            dbClient.on('connection-lost', errorHandler);
+
+            dbClient.simulateConnectionError();
+
+            expect(dbClient.isConnected).toBe(false);
+            expect(errorHandler).toHaveBeenCalled();
+        });
+
+        test('should get mock data copy', () => {
+            const mockData = dbClient.getMockData();
+
+            expect(mockData).toEqual(dbClient.mockData);
+            expect(mockData).not.toBe(dbClient.mockData); // Sollte Kopie sein, nicht Referenz
+        });
+
+        test('should set network delay', () => {
+            dbClient.setNetworkDelay(50, 200);
+
+            expect(dbClient._networkDelayMin).toBe(50);
+            expect(dbClient._networkDelayMax).toBe(200);
+        });
+    });
+
+    describe('Edge Cases and Error Conditions', () => {
+        beforeEach(async () => {
+            await dbClient.connect();
+        });
+
+        test('should handle null and undefined inputs gracefully', async () => {
+            expect(await dbClient.getUserByEPC(null)).toBeNull();
+            expect(await dbClient.getUserByEPC(undefined)).toBeNull();
+            expect(await dbClient.getUserByEPC('')).toBeNull();
+
+            expect(await dbClient.getUserById(null)).toBeNull();
+            expect(await dbClient.getUserById(undefined)).toBeNull();
+        });
+
+        test('should handle concurrent operations', async () => {
+            const userId = 1;
+
+            // Starte mehrere Session-Operationen gleichzeitig
+            const promises = [
+                dbClient.createSession(userId),
+                dbClient.getActiveSession(userId),
+                dbClient.getAllActiveSessions()
             ];
 
-            for (const payload of malformedPayloads) {
-                if (payload === null || payload === undefined) continue;
+            const results = await Promise.all(promises);
 
-                const result = await dbClient.saveQRScan(session.ID, payload);
-                expect(result).toBeDefined();
-                expect(result.success).toBeDefined();
-            }
-        });
-    });
-
-    describe('Error Handling', () => {
-        test('should handle database connection loss', async () => {
-            await dbClient.connect();
-            dbClient.isConnected = false; // Simuliere Verbindungsabbruch
-
-            await expect(dbClient.query('SELECT 1')).rejects.toThrow();
+            expect(results[0]).toBeDefined(); // createSession
+            expect(results[1]).toBeDefined(); // getActiveSession (sollte neue Session finden)
+            expect(results[2]).toBeDefined(); // getAllActiveSessions
         });
 
-        test('should recover from transient errors', async () => {
-            await dbClient.connect();
+        test('should handle large datasets efficiently', async () => {
+            const userId = 1;
+            const session = await dbClient.createSession(userId);
 
-            // Simuliere temporären Fehler
-            const originalQuery = dbClient.query;
-            let callCount = 0;
-            dbClient.query = jest.fn().mockImplementation((...args) => {
-                callCount++;
-                if (callCount === 1) {
-                    throw new Error('Transient error');
-                }
-                return originalQuery.apply(dbClient, args);
-            });
-
-            // Zweiter Versuch sollte erfolgreich sein
-            try {
-                await dbClient.query('SELECT 1');
-            } catch (error) {
-                // Erster Versuch schlägt fehl
-                expect(error.message).toBe('Transient error');
-            }
-
-            // Zweiter Versuch
-            const result = await dbClient.query('SELECT 1');
-            expect(result).toBeDefined();
-        });
-    });
-
-    describe('Performance Tests', () => {
-        beforeEach(async () => {
-            await dbClient.connect();
-        });
-
-        test('should handle multiple concurrent QR scans', async () => {
-            const session = await dbClient.createSession(1);
+            // Erstelle viele QR-Scans
             const scanPromises = [];
+            for (let i = 0; i < 100; i++) {
+                scanPromises.push(dbClient.saveQRScan(session.ID, `BULK_SCAN_${i.toString().padStart(3, '0')}`));
+            }
+
+            const startTime = Date.now();
+            await Promise.all(scanPromises);
+            const endTime = Date.now();
+
+            // Performance-Check: Sollte nicht länger als 5 Sekunden dauern
+            expect(endTime - startTime).toBeLessThan(5000);
+
+            const allScans = await dbClient.getQRScansBySession(session.ID, 200);
+            expect(allScans.length).toBe(100);
+        });
+
+        test('should maintain data integrity under stress', async () => {
+            const user1 = 1;
+            const user2 = 2;
+
+            // Simuliere gleichzeitige Benutzeraktivitäten
+            const activities = [];
 
             for (let i = 0; i < 10; i++) {
-                scanPromises.push(
-                    dbClient.saveQRScan(session.ID, `QR_CODE_${i}`)
-                );
+                activities.push(async () => {
+                    const session1 = await dbClient.createSession(user1);
+                    const session2 = await dbClient.createSession(user2);
+
+                    await dbClient.saveQRScan(session1.ID, `USER1_SCAN_${i}`);
+                    await dbClient.saveQRScan(session2.ID, `USER2_SCAN_${i}`);
+
+                    await dbClient.endSession(session1.ID);
+                    await dbClient.endSession(session2.ID);
+                });
             }
 
-            const results = await Promise.all(scanPromises);
-            const successfulScans = results.filter(r => r.success);
+            await Promise.all(activities.map(activity => activity()));
 
-            expect(successfulScans.length).toBeGreaterThan(0);
-        });
+            // Überprüfe Datenintegrität
+            const user1Sessions = await dbClient.getSessionsByUser(user1);
+            const user2Sessions = await dbClient.getSessionsByUser(user2);
 
-        test('should handle rapid duplicate detection', async () => {
-            const session = await dbClient.createSession(1);
-            const payload = 'RAPID_DUPLICATE_TEST';
-
-            const scanPromises = Array(5).fill().map(() =>
-                dbClient.saveQRScan(session.ID, payload)
-            );
-
-            const results = await Promise.all(scanPromises);
-            const successfulScans = results.filter(r => r.success);
-            const duplicateScans = results.filter(r => !r.success && r.status.includes('duplicate'));
-
-            expect(successfulScans.length).toBe(1);
-            expect(duplicateScans.length).toBeGreaterThan(0);
-        });
-    });
-
-    describe('Cache Management', () => {
-        beforeEach(async () => {
-            await dbClient.connect();
-        });
-
-        test('should manage duplicate cache properly', async () => {
-            const session = await dbClient.createSession(1);
-            const payload = 'CACHE_TEST_QR';
-
-            // Cache sollte leer sein
-            expect(dbClient.duplicateCache.size).toBe(0);
-
-            // Ersten Scan hinzufügen
-            await dbClient.saveQRScan(session.ID, payload);
-            expect(dbClient.duplicateCache.size).toBe(1);
-
-            // Duplikat sollte im Cache erkannt werden
-            const result = await dbClient.saveQRScan(session.ID, payload);
-            expect(result.status).toBe('duplicate_cache');
-        });
-
-        test('should clean up old cache entries', () => {
-            // Test für Cache-Bereinigung
-            const oldTimestamp = Date.now() - (25 * 60 * 60 * 1000); // 25 Stunden alt
-            const newTimestamp = Date.now();
-
-            dbClient.duplicateCache.set('old_code', oldTimestamp);
-            dbClient.duplicateCache.set('new_code', newTimestamp);
-
-            expect(dbClient.duplicateCache.size).toBe(2);
-
-            // Simuliere Cache-Bereinigung
-            for (const [key, timestamp] of dbClient.duplicateCache.entries()) {
-                if (Date.now() - timestamp > 24 * 60 * 60 * 1000) {
-                    dbClient.duplicateCache.delete(key);
-                }
-            }
-
-            expect(dbClient.duplicateCache.size).toBe(1);
-            expect(dbClient.duplicateCache.has('new_code')).toBe(true);
-            expect(dbClient.duplicateCache.has('old_code')).toBe(false);
+            expect(user1Sessions.length).toBe(10);
+            expect(user2Sessions.length).toBe(10);
+            expect(user1Sessions.every(s => s.Active === 0)).toBe(true);
+            expect(user2Sessions.every(s => s.Active === 0)).toBe(true);
         });
     });
 });

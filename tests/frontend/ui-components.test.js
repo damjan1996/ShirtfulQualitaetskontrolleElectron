@@ -1,152 +1,141 @@
 // tests/frontend/ui-components.test.js
 /**
- * Frontend Tests für UI-Komponenten
+ * Frontend UI Component Tests
+ * Testet die Renderer-Prozess UI-Komponenten
  */
 
-// DOM-Mocking Setup
-import { JSDOM } from 'jsdom';
+const { JSDOM } = require('jsdom');
+const { MockQRScanner } = require('../mocks/qr-scanner.mock');
 
-// Mock für Electron APIs
-const mockElectronAPI = {
-    db: {
-        getUserByEPC: jest.fn(),
-        query: jest.fn()
-    },
-    session: {
-        create: jest.fn(),
-        end: jest.fn()
-    },
-    qr: {
-        saveScan: jest.fn()
-    },
-    rfid: {
-        getStatus: jest.fn(),
-        simulateTag: jest.fn()
-    },
-    system: {
-        getStatus: jest.fn(),
-        getInfo: jest.fn()
-    },
-    on: jest.fn(),
-    off: jest.fn(),
-    once: jest.fn()
-};
-
-// Mock für Camera API
-const mockCameraAPI = {
-    getUserMedia: jest.fn(() => Promise.resolve({
-        getTracks: () => [{ stop: jest.fn(), kind: 'video' }]
-    })),
-    getDevices: jest.fn(() => Promise.resolve([
-        { deviceId: 'camera1', kind: 'videoinput', label: 'Test Camera' }
-    ])),
-    checkPermissions: jest.fn(() => Promise.resolve('granted')),
-    getSupportedConstraints: jest.fn(() => ({ width: true, height: true })),
-    stopStream: jest.fn()
-};
-
-// Mock Utils
-const mockUtils = {
-    formatDuration: jest.fn((seconds) => {
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = seconds % 60;
-        return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
-    }),
-    formatTimestamp: jest.fn((ts) => new Date(ts).toLocaleString('de-DE')),
-    validateTagId: jest.fn((tag) => /^[0-9A-F]{8,12}$/i.test(tag)),
-    parseQRPayload: jest.fn((payload) => ({
-        type: 'text',
-        data: payload,
-        display: payload,
-        preview: payload.substring(0, 50)
-    }))
-};
-
-describe('WareneingangApp Frontend', () => {
-    let app;
+describe('Frontend UI Components', () => {
     let dom;
     let document;
     let window;
+    let app;
 
     beforeEach(() => {
         // Setup DOM
         dom = new JSDOM(`
             <!DOCTYPE html>
             <html>
+            <head>
+                <title>RFID QR Wareneingang</title>
+                <style>
+                    .hidden { display: none; }
+                    .notification { position: fixed; top: 20px; right: 20px; }
+                </style>
+            </head>
             <body>
+                <!-- Login Section -->
                 <div id="loginSection">
-                    <div class="login-status">Bereit zum Scannen...</div>
+                    <h1>RFID Login</h1>
+                    <p id="loginInstructions">Bitte RFID-Tag scannen...</p>
+                    <div id="loginStatus" class="hidden"></div>
                 </div>
-                <div id="workspace" style="display: none;">
-                    <div id="currentUserName">Kein Benutzer</div>
-                    <div id="sessionTime">00:00:00</div>
-                    <div id="sessionScans">0</div>
-                    <button id="logoutBtn">Abmelden</button>
-                    <button id="startScannerBtn">Scanner starten</button>
-                    <button id="stopScannerBtn" style="display: none;">Scanner stoppen</button>
-                    <video id="scannerVideo"></video>
-                    <canvas id="scannerCanvas" style="display: none;"></canvas>
-                    <div id="scansList"></div>
-                    <button id="clearScansBtn">Scans leeren</button>
+
+                <!-- Main Workspace -->
+                <div id="workspace" class="hidden">
+                    <!-- User Info -->
+                    <div id="userInfo">
+                        <h2 id="userName"></h2>
+                        <p id="userEmail"></p>
+                        <div id="sessionTimer">00:00:00</div>
+                        <button id="logoutBtn">Logout</button>
+                    </div>
+
+                    <!-- QR Scanner Section -->
+                    <div id="qrSection">
+                        <video id="qrVideo" width="400" height="300"></video>
+                        <canvas id="qrCanvas" width="400" height="300" class="hidden"></canvas>
+                        <div id="qrControls">
+                            <button id="startScannerBtn">Scanner Starten</button>
+                            <button id="stopScannerBtn" class="hidden">Scanner Stoppen</button>
+                        </div>
+                        <div id="scanResult" class="hidden"></div>
+                    </div>
+
+                    <!-- Scan History -->
+                    <div id="scanHistory">
+                        <h3>Letzte Scans</h3>
+                        <ul id="scanList"></ul>
+                        <div id="scanStats">
+                            <span id="scanCount">0</span> Scans heute
+                        </div>
+                    </div>
                 </div>
-                <div id="currentTime">--:--:--</div>
-                <div id="dateText">--.--.----</div>
-                <div id="versionText">v1.0.0</div>
-                <div id="systemStatus"></div>
-                <div id="scannerStatusText">Bereit</div>
-                <div id="lastScanTime">-</div>
+
+                <!-- Notifications -->
                 <div id="notifications"></div>
-                <div id="scanSuccessOverlay"></div>
-                <div id="errorModal"></div>
+
+                <!-- Debug Info -->
+                <div id="debugInfo" class="hidden">
+                    <h4>Debug Information</h4>
+                    <pre id="debugLog"></pre>
+                </div>
             </body>
             </html>
         `, {
             url: 'http://localhost',
-            pretendToBeVisual: true,
-            resources: 'usable'
+            referrer: 'http://localhost',
+            contentType: 'text/html',
+            includeNodeLocations: true,
+            storageQuota: 10000000
         });
 
         document = dom.window.document;
         window = dom.window;
 
-        // Setup global mocks
+        // Mock globals
         global.document = document;
         global.window = window;
         global.navigator = {
-            mediaDevices: mockCameraAPI,
-            permissions: { query: jest.fn(() => Promise.resolve({ state: 'granted' })) },
-            userAgent: 'Jest Test',
-            language: 'de-DE'
+            mediaDevices: {
+                getUserMedia: jest.fn(() => Promise.resolve({
+                    getTracks: () => [{ stop: jest.fn() }]
+                }))
+            }
         };
 
-        window.electronAPI = mockElectronAPI;
-        window.cameraAPI = mockCameraAPI;
-        window.utils = mockUtils;
-
-        // Mock audio context
-        window.AudioContext = jest.fn(() => ({
-            createOscillator: jest.fn(() => ({
-                connect: jest.fn(),
-                frequency: { setValueAtTime: jest.fn() },
+        // Mock Electron API
+        window.electronAPI = {
+            db: {
+                getUserByEPC: jest.fn(),
+                getUserById: jest.fn(),
+                getAllActiveUsers: jest.fn()
+            },
+            session: {
+                create: jest.fn(),
+                end: jest.fn(),
+                getActive: jest.fn(),
+                getStats: jest.fn()
+            },
+            qr: {
+                save: jest.fn(),
+                getBySession: jest.fn(),
+                getRecent: jest.fn()
+            },
+            rfid: {
                 start: jest.fn(),
-                stop: jest.fn()
-            })),
-            createGain: jest.fn(() => ({
-                connect: jest.fn(),
-                gain: { setValueAtTime: jest.fn(), exponentialRampToValueAtTime: jest.fn() }
-            })),
-            destination: {},
-            currentTime: 0
-        }));
+                stop: jest.fn(),
+                getStats: jest.fn()
+            },
+            window: {
+                minimize: jest.fn(),
+                maximize: jest.fn(),
+                close: jest.fn()
+            },
+            on: jest.fn(),
+            off: jest.fn()
+        };
 
-        // Load app (simplified mock)
+        // Mock App State
         app = {
             currentUser: null,
+            currentSession: null,
             sessionStartTime: null,
-            sessionTimer: null,
             scanCount: 0,
             recentScans: [],
+            sessionTimer: null,
             scannerActive: false,
             videoStream: null,
 
@@ -217,389 +206,506 @@ describe('WareneingangApp Frontend', () => {
 
         test('should update UI on login', () => {
             const userData = {
-                user: { ID: 1, BenutzerName: 'Test User' },
+                user: { ID: 1, BenutzerName: 'Test User', Email: 'test@example.com' },
                 session: { ID: 1, StartTS: new Date().toISOString() }
             };
 
-            // Simulate login
-            app.currentUser = {
-                id: userData.user.ID,
-                name: userData.user.BenutzerName,
-                sessionId: userData.session.ID
-            };
+            // Simuliere UI-Update
+            const userName = document.getElementById('userName');
+            const userEmail = document.getElementById('userEmail');
+            const loginSection = document.getElementById('loginSection');
+            const workspace = document.getElementById('workspace');
 
-            document.getElementById('currentUserName').textContent = userData.user.BenutzerName;
-            document.getElementById('workspace').style.display = 'grid';
-            document.getElementById('loginSection').style.display = 'none';
+            userName.textContent = userData.user.BenutzerName;
+            userEmail.textContent = userData.user.Email;
+            loginSection.classList.add('hidden');
+            workspace.classList.remove('hidden');
 
-            expect(document.getElementById('currentUserName').textContent).toBe('Test User');
-            expect(document.getElementById('workspace').style.display).toBe('grid');
-            expect(document.getElementById('loginSection').style.display).toBe('none');
+            expect(userName.textContent).toBe('Test User');
+            expect(userEmail.textContent).toBe('test@example.com');
+            expect(loginSection.classList.contains('hidden')).toBe(true);
+            expect(workspace.classList.contains('hidden')).toBe(false);
         });
 
         test('should handle user logout correctly', () => {
-            // Setup logged in state
-            app.currentUser = { id: 1, name: 'Test User', sessionId: 1 };
-            document.getElementById('workspace').style.display = 'grid';
-
-            app.handleUserLogout({ BenutzerName: 'Test User' });
-
+            app.handleUserLogout();
             expect(app.handleUserLogout).toHaveBeenCalled();
         });
 
         test('should reset UI on logout', () => {
-            // Simulate logout
-            app.currentUser = null;
-            app.sessionStartTime = null;
-            app.scanCount = 0;
+            const loginSection = document.getElementById('loginSection');
+            const workspace = document.getElementById('workspace');
+            const scanList = document.getElementById('scanList');
 
-            document.getElementById('workspace').style.display = 'none';
-            document.getElementById('loginSection').style.display = 'flex';
-            document.getElementById('currentUserName').textContent = 'Kein Benutzer';
-            document.getElementById('sessionTime').textContent = '00:00:00';
-            document.getElementById('sessionScans').textContent = '0';
+            // Simuliere Logout UI-Reset
+            loginSection.classList.remove('hidden');
+            workspace.classList.add('hidden');
+            scanList.innerHTML = '';
 
-            expect(document.getElementById('workspace').style.display).toBe('none');
-            expect(document.getElementById('loginSection').style.display).toBe('flex');
-            expect(document.getElementById('currentUserName').textContent).toBe('Kein Benutzer');
-        });
-    });
-
-    describe('QR Scanner UI', () => {
-        beforeEach(() => {
-            app.currentUser = { id: 1, name: 'Test User', sessionId: 1 };
+            expect(loginSection.classList.contains('hidden')).toBe(false);
+            expect(workspace.classList.contains('hidden')).toBe(true);
+            expect(scanList.innerHTML).toBe('');
         });
 
-        test('should start scanner when button clicked', async () => {
-            const startBtn = document.getElementById('startScannerBtn');
-            const stopBtn = document.getElementById('stopScannerBtn');
-
-            // Mock scanner start
-            app.startQRScanner.mockResolvedValue(true);
-            app.scannerActive = true;
-
-            await app.startQRScanner();
-
-            expect(app.startQRScanner).toHaveBeenCalled();
+        test('should display login instructions', () => {
+            const instructions = document.getElementById('loginInstructions');
+            expect(instructions.textContent).toContain('RFID-Tag scannen');
         });
 
-        test('should update scanner UI state', () => {
-            const startBtn = document.getElementById('startScannerBtn');
-            const stopBtn = document.getElementById('stopScannerBtn');
-            const statusText = document.getElementById('scannerStatusText');
+        test('should handle multiple user switches', () => {
+            const user1 = { ID: 1, BenutzerName: 'User 1' };
+            const user2 = { ID: 2, BenutzerName: 'User 2' };
 
-            // Scanner active state
-            app.scannerActive = true;
-            startBtn.style.display = 'none';
-            stopBtn.style.display = 'inline-flex';
-            statusText.textContent = 'Scanner aktiv';
+            app.handleUserLogin(user1, { ID: 1 });
+            app.handleUserLogin(user2, { ID: 2 });
 
-            expect(startBtn.style.display).toBe('none');
-            expect(stopBtn.style.display).toBe('inline-flex');
-            expect(statusText.textContent).toBe('Scanner aktiv');
-        });
-
-        test('should stop scanner when button clicked', async () => {
-            app.scannerActive = true;
-            app.stopQRScanner.mockResolvedValue(true);
-
-            await app.stopQRScanner();
-
-            expect(app.stopQRScanner).toHaveBeenCalled();
-        });
-
-        test('should handle camera permission request', async () => {
-            mockCameraAPI.getUserMedia.mockResolvedValue({
-                getTracks: () => [{ stop: jest.fn(), kind: 'video' }]
-            });
-
-            const stream = await mockCameraAPI.getUserMedia({ video: true });
-            expect(stream).toBeTruthy();
-            expect(mockCameraAPI.getUserMedia).toHaveBeenCalledWith({ video: true });
+            expect(app.handleUserLogin).toHaveBeenCalledTimes(2);
         });
     });
 
     describe('Session Timer', () => {
-        test('should format duration correctly', () => {
-            expect(mockUtils.formatDuration(0)).toBe('00:00:00');
-            expect(mockUtils.formatDuration(61)).toBe('00:01:01');
-            expect(mockUtils.formatDuration(3661)).toBe('01:01:01');
-        });
-
-        test('should update session time display', () => {
-            const sessionTimeElement = document.getElementById('sessionTime');
-            const testTime = '01:23:45';
-
-            sessionTimeElement.textContent = testTime;
-            expect(sessionTimeElement.textContent).toBe(testTime);
-        });
-
-        test('should start session timer on login', () => {
-            app.sessionStartTime = new Date();
+        test('should start session timer', () => {
             app.startSessionTimer();
-
             expect(app.startSessionTimer).toHaveBeenCalled();
         });
 
-        test('should stop session timer on logout', () => {
+        test('should stop session timer', () => {
             app.stopSessionTimer();
             expect(app.stopSessionTimer).toHaveBeenCalled();
+        });
+
+        test('should update timer display', () => {
+            const timerElement = document.getElementById('sessionTimer');
+
+            // Simuliere Timer-Update
+            const formatTime = (seconds) => {
+                const hours = Math.floor(seconds / 3600);
+                const minutes = Math.floor((seconds % 3600) / 60);
+                const secs = seconds % 60;
+                return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            };
+
+            timerElement.textContent = formatTime(3665); // 1:01:05
+
+            expect(timerElement.textContent).toBe('01:01:05');
+        });
+
+        test('should handle timer reset', () => {
+            const timerElement = document.getElementById('sessionTimer');
+            timerElement.textContent = '00:00:00';
+
+            expect(timerElement.textContent).toBe('00:00:00');
+        });
+    });
+
+    describe('QR Scanner Controls', () => {
+        test('should start QR scanner', () => {
+            app.startQRScanner();
+            expect(app.startQRScanner).toHaveBeenCalled();
+        });
+
+        test('should stop QR scanner', () => {
+            app.stopQRScanner();
+            expect(app.stopQRScanner).toHaveBeenCalled();
+        });
+
+        test('should toggle scanner controls', () => {
+            const startBtn = document.getElementById('startScannerBtn');
+            const stopBtn = document.getElementById('stopScannerBtn');
+
+            // Simuliere Scanner-Start
+            startBtn.classList.add('hidden');
+            stopBtn.classList.remove('hidden');
+
+            expect(startBtn.classList.contains('hidden')).toBe(true);
+            expect(stopBtn.classList.contains('hidden')).toBe(false);
+
+            // Simuliere Scanner-Stop
+            startBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+
+            expect(startBtn.classList.contains('hidden')).toBe(false);
+            expect(stopBtn.classList.contains('hidden')).toBe(true);
+        });
+
+        test('should handle video stream setup', async () => {
+            const videoElement = document.getElementById('qrVideo');
+
+            // Mock video stream
+            const mockStream = {
+                getTracks: () => [{ stop: jest.fn() }]
+            };
+
+            global.navigator.mediaDevices.getUserMedia.mockResolvedValueOnce(mockStream);
+
+            const stream = await global.navigator.mediaDevices.getUserMedia({ video: true });
+            videoElement.srcObject = stream;
+
+            expect(videoElement.srcObject).toBe(stream);
+            expect(global.navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ video: true });
+        });
+
+        test('should handle scanner errors', () => {
+            const scanResult = document.getElementById('scanResult');
+
+            // Simuliere Fehler-Anzeige
+            scanResult.textContent = 'Fehler: Kamera nicht verfügbar';
+            scanResult.classList.add('error');
+            scanResult.classList.remove('hidden');
+
+            expect(scanResult.textContent).toContain('Fehler');
+            expect(scanResult.classList.contains('error')).toBe(true);
+            expect(scanResult.classList.contains('hidden')).toBe(false);
         });
     });
 
     describe('QR Code Processing', () => {
-        beforeEach(() => {
-            app.currentUser = { id: 1, name: 'Test User', sessionId: 1 };
-        });
-
         test('should handle successful QR scan', () => {
-            const scanResult = {
+            const scanData = {
                 success: true,
-                status: 'saved',
-                data: { ID: 1, RawPayload: 'TEST_QR_CODE' },
-                timestamp: new Date().toISOString()
+                data: {
+                    ID: 1,
+                    RawPayload: 'PACKAGE_12345_ABC',
+                    ScannTS: new Date().toISOString()
+                }
             };
 
-            const scanItem = {
-                id: scanResult.data.ID,
-                timestamp: new Date(),
-                content: scanResult.data.RawPayload,
-                status: scanResult.status,
-                success: scanResult.success
-            };
+            // Simuliere erfolgreichen Scan
+            const scanResult = document.getElementById('scanResult');
+            scanResult.textContent = `QR-Code gespeichert: ${scanData.data.RawPayload}`;
+            scanResult.classList.add('success');
+            scanResult.classList.remove('hidden');
 
-            app.recentScans.unshift(scanItem);
-            app.scanCount++;
-
-            expect(app.recentScans.length).toBe(1);
-            expect(app.scanCount).toBe(1);
-            expect(app.recentScans[0].content).toBe('TEST_QR_CODE');
+            expect(scanResult.textContent).toContain('PACKAGE_12345_ABC');
+            expect(scanResult.classList.contains('success')).toBe(true);
         });
 
-        test('should handle duplicate QR scan', () => {
-            const duplicateResult = {
+        test('should handle QR scan errors', () => {
+            const errorData = {
                 success: false,
-                status: 'duplicate_cache',
-                message: 'QR-Code bereits vor 2 Minuten gescannt',
-                duplicateInfo: { minutesAgo: 2, source: 'cache' }
+                error: 'Duplicate scan detected'
             };
 
-            const scanItem = {
-                id: `temp_${Date.now()}`,
-                timestamp: new Date(),
-                content: 'DUPLICATE_QR',
-                status: duplicateResult.status,
-                success: duplicateResult.success
-            };
+            // Simuliere Scan-Fehler
+            const scanResult = document.getElementById('scanResult');
+            scanResult.textContent = `Fehler: ${errorData.error}`;
+            scanResult.classList.add('error');
+            scanResult.classList.remove('hidden');
 
-            app.recentScans.unshift(scanItem);
-
-            expect(app.recentScans[0].success).toBe(false);
-            expect(app.recentScans[0].status).toBe('duplicate_cache');
+            expect(scanResult.textContent).toContain('Duplicate scan detected');
+            expect(scanResult.classList.contains('error')).toBe(true);
         });
 
-        test('should clear recent scans', () => {
-            app.recentScans = [
-                { id: 1, content: 'QR1' },
-                { id: 2, content: 'QR2' }
-            ];
+        test('should update scan counter', () => {
+            const scanCount = document.getElementById('scanCount');
 
-            app.recentScans = [];
-            document.getElementById('scansList').innerHTML = '';
+            // Simuliere Scan-Counter-Update
+            let currentCount = parseInt(scanCount.textContent) || 0;
+            currentCount++;
+            scanCount.textContent = currentCount.toString();
 
-            expect(app.recentScans.length).toBe(0);
+            expect(scanCount.textContent).toBe('1');
+        });
+
+        test('should add scan to history list', () => {
+            const scanList = document.getElementById('scanList');
+            const scanData = {
+                ID: 1,
+                RawPayload: 'TEST_PACKAGE_001',
+                ScannTS: new Date().toISOString()
+            };
+
+            // Simuliere Hinzufügen zur Liste
+            const listItem = document.createElement('li');
+            listItem.textContent = `${scanData.RawPayload} - ${new Date(scanData.ScannTS).toLocaleTimeString()}`;
+            listItem.dataset.scanId = scanData.ID;
+
+            scanList.insertBefore(listItem, scanList.firstChild);
+
+            expect(scanList.children.length).toBe(1);
+            expect(scanList.firstChild.textContent).toContain('TEST_PACKAGE_001');
+        });
+
+        test('should limit scan history display', () => {
+            const scanList = document.getElementById('scanList');
+            const maxHistoryItems = 10;
+
+            // Simuliere viele Scans
+            for (let i = 1; i <= 15; i++) {
+                const listItem = document.createElement('li');
+                listItem.textContent = `SCAN_${i}`;
+                scanList.insertBefore(listItem, scanList.firstChild);
+            }
+
+            // Simuliere Begrenzung
+            while (scanList.children.length > maxHistoryItems) {
+                scanList.removeChild(scanList.lastChild);
+            }
+
+            expect(scanList.children.length).toBe(maxHistoryItems);
         });
     });
 
     describe('Notifications', () => {
-        test('should show success notification', () => {
-            const notification = {
-                type: 'success',
-                title: 'QR-Code gespeichert',
-                message: 'Paket erfolgreich erfasst'
-            };
+        test('should show notification', () => {
+            const message = 'Test notification';
+            app.showNotification(message);
 
-            app.showNotification(notification.type, notification.title, notification.message);
-
-            expect(app.showNotification).toHaveBeenCalledWith(
-                notification.type,
-                notification.title,
-                notification.message
-            );
+            expect(app.showNotification).toHaveBeenCalledWith(message);
         });
 
-        test('should show error notification', () => {
-            const notification = {
-                type: 'error',
-                title: 'Fehler',
-                message: 'Datenbank nicht erreichbar'
-            };
-
-            app.showNotification(notification.type, notification.title, notification.message);
-
-            expect(app.showNotification).toHaveBeenCalledWith(
-                notification.type,
-                notification.title,
-                notification.message
-            );
-        });
-
-        test('should auto-remove notifications', async () => {
+        test('should create notification element', () => {
             const notificationsContainer = document.getElementById('notifications');
 
-            // Add notification
+            // Simuliere Notification-Erstellung
             const notification = document.createElement('div');
             notification.className = 'notification success';
-            notification.innerHTML = 'Test notification';
+            notification.textContent = 'Benutzer erfolgreich angemeldet';
+
             notificationsContainer.appendChild(notification);
 
             expect(notificationsContainer.children.length).toBe(1);
+            expect(notification.textContent).toContain('erfolgreich angemeldet');
+            expect(notification.classList.contains('success')).toBe(true);
+        });
 
-            // Simulate auto-removal
+        test('should auto-hide notifications', (done) => {
+            const notificationsContainer = document.getElementById('notifications');
+
+            const notification = document.createElement('div');
+            notification.className = 'notification info';
+            notification.textContent = 'Auto-hide test';
+
+            notificationsContainer.appendChild(notification);
+
+            // Simuliere Auto-Hide nach 3 Sekunden
             setTimeout(() => {
-                notification.remove();
-            }, 100);
-
-            await waitFor(150);
-            expect(notificationsContainer.children.length).toBe(0);
-        });
-    });
-
-    describe('System Status Display', () => {
-        test('should update system status correctly', () => {
-            const statusElement = document.querySelector('.status-dot');
-            const textElement = document.querySelector('.status-text');
-
-            // Mock status update
-            if (statusElement) statusElement.className = 'status-dot active';
-            if (textElement) textElement.textContent = 'System bereit';
-
-            expect(statusElement?.className).toContain('active');
-            expect(textElement?.textContent).toBe('System bereit');
+                notification.style.opacity = '0';
+                setTimeout(() => {
+                    notificationsContainer.removeChild(notification);
+                    expect(notificationsContainer.children.length).toBe(0);
+                    done();
+                }, 300);
+            }, 100); // Verkürzt für Test
         });
 
-        test('should show error status', () => {
-            const statusElement = document.querySelector('.status-dot');
-            const textElement = document.querySelector('.status-text');
+        test('should handle multiple notifications', () => {
+            const notificationsContainer = document.getElementById('notifications');
 
-            if (statusElement) statusElement.className = 'status-dot error';
-            if (textElement) textElement.textContent = 'System-Fehler';
-
-            expect(statusElement?.className).toContain('error');
-            expect(textElement?.textContent).toBe('System-Fehler');
-        });
-    });
-
-    describe('Time Display', () => {
-        test('should update current time', () => {
-            const timeElement = document.getElementById('currentTime');
-            const dateElement = document.getElementById('dateText');
-
-            const now = new Date();
-            const timeString = now.toLocaleTimeString('de-DE');
-            const dateString = now.toLocaleDateString('de-DE');
-
-            timeElement.textContent = timeString;
-            dateElement.textContent = dateString;
-
-            expect(timeElement.textContent).toBe(timeString);
-            expect(dateElement.textContent).toBe(dateString);
-        });
-
-        test('should format German locale correctly', () => {
-            const now = new Date('2024-06-24T13:30:45');
-            const timeString = now.toLocaleTimeString('de-DE');
-            const dateString = now.toLocaleDateString('de-DE');
-
-            expect(timeString).toMatch(/\d{2}:\d{2}:\d{2}/);
-            expect(dateString).toMatch(/\d{2}\.\d{2}\.\d{4}/);
-        });
-    });
-
-    describe('Scan Success Animation', () => {
-        test('should show scan success overlay', () => {
-            const overlay = document.getElementById('scanSuccessOverlay');
-
-            overlay.classList.add('show');
-            overlay.style.background = 'rgba(40, 167, 69, 0.9)';
-
-            expect(overlay.classList.contains('show')).toBe(true);
-            expect(overlay.style.background).toBe('rgba(40, 167, 69, 0.9)');
-        });
-
-        test('should hide overlay after timeout', async () => {
-            const overlay = document.getElementById('scanSuccessOverlay');
-
-            overlay.classList.add('show');
-
-            setTimeout(() => {
-                overlay.classList.remove('show');
-            }, 100);
-
-            await waitFor(150);
-            expect(overlay.classList.contains('show')).toBe(false);
-        });
-    });
-
-    describe('Modal Handling', () => {
-        test('should show error modal', () => {
-            const modal = document.getElementById('errorModal');
-            modal.classList.add('show');
-
-            expect(modal.classList.contains('show')).toBe(true);
-        });
-
-        test('should hide modal on close', () => {
-            const modal = document.getElementById('errorModal');
-            modal.classList.add('show');
-            modal.classList.remove('show');
-
-            expect(modal.classList.contains('show')).toBe(false);
-        });
-    });
-
-    describe('Responsive Behavior', () => {
-        test('should handle window resize', () => {
-            // Simulate window resize
-            dom.window.innerWidth = 800;
-            dom.window.innerHeight = 600;
-
-            // UI should adapt (mock implementation)
-            const workspace = document.getElementById('workspace');
-            if (dom.window.innerWidth < 1200) {
-                workspace.style.gridTemplateColumns = '1fr';
+            // Erstelle mehrere Notifications
+            for (let i = 1; i <= 3; i++) {
+                const notification = document.createElement('div');
+                notification.className = 'notification info';
+                notification.textContent = `Notification ${i}`;
+                notificationsContainer.appendChild(notification);
             }
 
-            expect(workspace.style.gridTemplateColumns).toBe('1fr');
+            expect(notificationsContainer.children.length).toBe(3);
+        });
+    });
+
+    describe('Error Handling', () => {
+        test('should display connection errors', () => {
+            const loginStatus = document.getElementById('loginStatus');
+
+            // Simuliere Verbindungsfehler
+            loginStatus.textContent = 'Datenbankverbindung fehlgeschlagen';
+            loginStatus.classList.add('error');
+            loginStatus.classList.remove('hidden');
+
+            expect(loginStatus.textContent).toContain('fehlgeschlagen');
+            expect(loginStatus.classList.contains('error')).toBe(true);
+            expect(loginStatus.classList.contains('hidden')).toBe(false);
         });
 
-        test('should handle mobile viewport', () => {
-            dom.window.innerWidth = 480;
-            dom.window.innerHeight = 800;
+        test('should handle unknown user', () => {
+            const loginStatus = document.getElementById('loginStatus');
 
-            // Mobile adaptations would go here
-            expect(dom.window.innerWidth).toBe(480);
+            // Simuliere unbekannter Benutzer
+            loginStatus.textContent = 'RFID-Tag nicht erkannt. Bitte Administrator kontaktieren.';
+            loginStatus.classList.add('warning');
+            loginStatus.classList.remove('hidden');
+
+            expect(loginStatus.textContent).toContain('nicht erkannt');
+            expect(loginStatus.classList.contains('warning')).toBe(true);
+        });
+
+        test('should handle camera access denied', () => {
+            const scanResult = document.getElementById('scanResult');
+
+            // Simuliere Kamera-Zugriff verweigert
+            scanResult.textContent = 'Kamera-Zugriff verweigert. Bitte Berechtigungen prüfen.';
+            scanResult.classList.add('error');
+            scanResult.classList.remove('hidden');
+
+            expect(scanResult.textContent).toContain('Kamera-Zugriff verweigert');
+            expect(scanResult.classList.contains('error')).toBe(true);
+        });
+
+        test('should handle network errors gracefully', () => {
+            const debugLog = document.getElementById('debugLog');
+
+            // Simuliere Debug-Logging
+            const errorInfo = {
+                timestamp: new Date().toISOString(),
+                error: 'Network request failed',
+                details: 'Connection timeout after 5000ms'
+            };
+
+            debugLog.textContent = JSON.stringify(errorInfo, null, 2);
+
+            expect(debugLog.textContent).toContain('Network request failed');
+            expect(debugLog.textContent).toContain('timeout');
+        });
+    });
+
+    describe('Responsive Design', () => {
+        test('should handle window resize', () => {
+            const video = document.getElementById('qrVideo');
+            const canvas = document.getElementById('qrCanvas');
+
+            // Simuliere Fenster-Resize
+            const updateVideoSize = (width, height) => {
+                video.width = width;
+                video.height = height;
+                canvas.width = width;
+                canvas.height = height;
+            };
+
+            updateVideoSize(640, 480);
+
+            expect(video.width).toBe(640);
+            expect(video.height).toBe(480);
+            expect(canvas.width).toBe(640);
+            expect(canvas.height).toBe(480);
+        });
+
+        test('should adapt to small screens', () => {
+            const qrSection = document.getElementById('qrSection');
+
+            // Simuliere Mobile-Layout
+            qrSection.classList.add('mobile-layout');
+
+            expect(qrSection.classList.contains('mobile-layout')).toBe(true);
         });
     });
 
     describe('Accessibility', () => {
         test('should have proper ARIA labels', () => {
             const startBtn = document.getElementById('startScannerBtn');
+            const stopBtn = document.getElementById('stopScannerBtn');
+            const logoutBtn = document.getElementById('logoutBtn');
+
+            // Simuliere ARIA-Labels
             startBtn.setAttribute('aria-label', 'QR-Scanner starten');
+            stopBtn.setAttribute('aria-label', 'QR-Scanner stoppen');
+            logoutBtn.setAttribute('aria-label', 'Benutzer abmelden');
 
             expect(startBtn.getAttribute('aria-label')).toBe('QR-Scanner starten');
+            expect(stopBtn.getAttribute('aria-label')).toBe('QR-Scanner stoppen');
+            expect(logoutBtn.getAttribute('aria-label')).toBe('Benutzer abmelden');
         });
 
         test('should support keyboard navigation', () => {
             const buttons = document.querySelectorAll('button');
-            buttons.forEach(btn => {
-                btn.setAttribute('tabindex', '0');
+
+            buttons.forEach((button, index) => {
+                button.tabIndex = index + 1;
             });
 
-            expect(buttons.length).toBeGreaterThan(0);
-            buttons.forEach(btn => {
-                expect(btn.getAttribute('tabindex')).toBe('0');
-            });
+            expect(buttons[0].tabIndex).toBe(1);
+            expect(buttons[1].tabIndex).toBe(2);
+            expect(buttons[2].tabIndex).toBe(3);
+        });
+
+        test('should provide screen reader support', () => {
+            const loginInstructions = document.getElementById('loginInstructions');
+
+            loginInstructions.setAttribute('role', 'status');
+            loginInstructions.setAttribute('aria-live', 'polite');
+
+            expect(loginInstructions.getAttribute('role')).toBe('status');
+            expect(loginInstructions.getAttribute('aria-live')).toBe('polite');
+        });
+    });
+
+    describe('Performance', () => {
+        test('should handle rapid UI updates', () => {
+            const scanCount = document.getElementById('scanCount');
+
+            // Simuliere schnelle Updates
+            for (let i = 1; i <= 100; i++) {
+                scanCount.textContent = i.toString();
+            }
+
+            expect(scanCount.textContent).toBe('100');
+        });
+
+        test('should cleanup event listeners', () => {
+            const testButton = document.createElement('button');
+            const handler = jest.fn();
+
+            testButton.addEventListener('click', handler);
+            document.body.appendChild(testButton);
+
+            // Simuliere Cleanup
+            testButton.removeEventListener('click', handler);
+            document.body.removeChild(testButton);
+
+            expect(document.body.contains(testButton)).toBe(false);
+        });
+
+        test('should optimize scan history rendering', () => {
+            const scanList = document.getElementById('scanList');
+
+            // Simuliere Document Fragment für bessere Performance
+            const fragment = document.createDocumentFragment();
+
+            for (let i = 1; i <= 10; i++) {
+                const listItem = document.createElement('li');
+                listItem.textContent = `Scan ${i}`;
+                fragment.appendChild(listItem);
+            }
+
+            scanList.appendChild(fragment);
+
+            expect(scanList.children.length).toBe(10);
+        });
+    });
+
+    describe('Integration with Electron API', () => {
+        test('should call Electron API methods', async () => {
+            // Test DB API
+            window.electronAPI.db.getUserByEPC.mockResolvedValueOnce({ ID: 1, BenutzerName: 'Test' });
+            const user = await window.electronAPI.db.getUserByEPC('53004114');
+
+            expect(window.electronAPI.db.getUserByEPC).toHaveBeenCalledWith('53004114');
+            expect(user.BenutzerName).toBe('Test');
+        });
+
+        test('should handle session API calls', async () => {
+            window.electronAPI.session.create.mockResolvedValueOnce({ ID: 1, UserID: 1 });
+            const session = await window.electronAPI.session.create(1);
+
+            expect(window.electronAPI.session.create).toHaveBeenCalledWith(1);
+            expect(session.UserID).toBe(1);
+        });
+
+        test('should handle QR API calls', async () => {
+            const scanResult = { success: true, data: { ID: 1 } };
+            window.electronAPI.qr.save.mockResolvedValueOnce(scanResult);
+
+            const result = await window.electronAPI.qr.save(1, 'TEST_QR');
+
+            expect(window.electronAPI.qr.save).toHaveBeenCalledWith(1, 'TEST_QR');
+            expect(result.success).toBe(true);
+        });
+
+        test('should register event listeners', () => {
+            const handler = jest.fn();
+            window.electronAPI.on('user-login', handler);
+
+            expect(window.electronAPI.on).toHaveBeenCalledWith('user-login', handler);
         });
     });
 });
