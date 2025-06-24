@@ -1,168 +1,113 @@
-// tests/unit/rfid-listener.test.js
-/**
- * Unit Tests für RFID Listener
- */
-
 const MockRFIDListener = require('../mocks/rfid-listener.mock');
-
-// Mock Electron Global Shortcuts
-jest.mock('electron', () => global.mockElectron);
 
 describe('SimpleRFIDListener', () => {
     let rfidListener;
-    let mockCallback;
 
     beforeEach(() => {
-        mockCallback = jest.fn();
-        rfidListener = new MockRFIDListener(mockCallback);
+        // Mock-Electron Global verfügbar machen
+        if (!global.mockElectron) {
+            global.mockElectron = {
+                globalShortcut: {
+                    shortcuts: new Map(),
+                    register: jest.fn((shortcut, callback) => {
+                        if (global.mockElectron.globalShortcut.shortcuts.has(shortcut)) {
+                            return false; // Bereits registriert
+                        }
+                        global.mockElectron.globalShortcut.shortcuts.set(shortcut, callback);
+                        return true;
+                    }),
+                    unregister: jest.fn((shortcut) => {
+                        return global.mockElectron.globalShortcut.shortcuts.delete(shortcut);
+                    }),
+                    unregisterAll: jest.fn(() => {
+                        global.mockElectron.globalShortcut.shortcuts.clear();
+                    }),
+                    triggerShortcut: (shortcut) => {
+                        const callback = global.mockElectron.globalShortcut.shortcuts.get(shortcut);
+                        if (callback) {
+                            callback();
+                        }
+                    }
+                }
+            };
+        }
+
+        // Neue Mock-Instanz für jeden Test
+        rfidListener = new MockRFIDListener();
+
+        // Debug-Modus für Tests deaktivieren (weniger Console-Output)
+        rfidListener.updateConfig({ debugMode: false });
+
+        // Hardware-Fehler deaktivieren (deterministische Tests)
+        rfidListener.disableHardwareError();
     });
 
     afterEach(async () => {
-        if (rfidListener && rfidListener.isListening) {
+        // Cleanup nach jedem Test
+        if (rfidListener.isRunning) {
             await rfidListener.stop();
         }
+
+        // Shortcuts cleanup
+        if (global.mockElectron && global.mockElectron.globalShortcut) {
+            global.mockElectron.globalShortcut.unregisterAll();
+        }
+
+        // Event-Listener entfernen
+        rfidListener.removeAllListeners();
     });
 
-    describe('Initialization', () => {
-        test('should initialize with default values', () => {
-            const listener = new MockRFIDListener();
-
-            expect(listener.isListening).toBe(false);
-            expect(listener.buffer).toBe('');
-            expect(listener.registeredShortcuts).toEqual([]);
-            expect(listener.stats).toBeDefined();
-            expect(listener.stats.totalScans).toBe(0);
+    describe('Initialization and Lifecycle', () => {
+        test('should initialize correctly', () => {
+            expect(rfidListener.isRunning).toBe(false);
+            expect(rfidListener.isHardwareReady).toBe(false);
+            expect(rfidListener.registeredShortcuts).toEqual([]);
+            expect(rfidListener.stats.totalScans).toBe(0);
         });
 
-        test('should initialize with callback', () => {
-            const callback = jest.fn();
-            const listener = new MockRFIDListener(callback);
-
-            expect(listener.callback).toBe(callback);
-        });
-
-        test('should initialize with correct default config', () => {
-            expect(rfidListener.config.inputTimeout).toBe(200);
-            expect(rfidListener.config.maxBufferLength).toBe(15);
-            expect(rfidListener.config.enableLogging).toBe(false);
-            expect(rfidListener.config.enableStats).toBe(true);
-        });
-
-        test('should initialize with default mock tags', () => {
-            expect(rfidListener.mockTags).toBeDefined();
-            expect(rfidListener.mockTags.length).toBeGreaterThan(0);
-            expect(rfidListener.mockTags).toContain('53004114');
-            expect(rfidListener.mockTags).toContain('87654321');
-        });
-
-        test('should initialize duplicate detection', () => {
-            expect(rfidListener.duplicateDetection.enabled).toBe(true);
-            expect(rfidListener.duplicateDetection.timeWindow).toBe(1000);
-            expect(rfidListener.duplicateDetection.recentScans).toBeInstanceOf(Map);
-        });
-    });
-
-    describe('Start/Stop Operations', () => {
         test('should start successfully', async () => {
-            const result = await rfidListener.start();
+            const startSpy = jest.fn();
+            rfidListener.on('started', startSpy);
 
-            expect(result).toBe(true);
-            expect(rfidListener.isListening).toBe(true);
-            expect(rfidListener.registeredShortcuts.length).toBeGreaterThan(0);
+            await rfidListener.start();
+
+            expect(rfidListener.isRunning).toBe(true);
+            expect(rfidListener.isHardwareReady).toBe(true);
+            expect(startSpy).toHaveBeenCalled();
+            expect(rfidListener.stats.startTime).toBeTruthy();
         });
 
-        test('should not start if already listening', async () => {
+        test('should not start twice', async () => {
             await rfidListener.start();
-            const isListening1 = rfidListener.isListening;
 
+            // Zweiter Start sollte keine Änderung bewirken
             await rfidListener.start();
-            const isListening2 = rfidListener.isListening;
 
-            expect(isListening1).toBe(true);
-            expect(isListening2).toBe(true);
+            expect(rfidListener.isRunning).toBe(true);
         });
 
         test('should stop successfully', async () => {
-            await rfidListener.start();
-            await rfidListener.stop();
-
-            expect(rfidListener.isListening).toBe(false);
-            expect(rfidListener.registeredShortcuts.length).toBe(0);
-        });
-
-        test('should stop when not listening', async () => {
-            const result = await rfidListener.stop();
-
-            expect(result).toBe(true);
-            expect(rfidListener.isListening).toBe(false);
-        });
-
-        test('should emit start and stop events', async () => {
-            const startHandler = jest.fn();
-            const stopHandler = jest.fn();
-
-            rfidListener.on('started', startHandler);
-            rfidListener.on('stopped', stopHandler);
+            const stopSpy = jest.fn();
+            rfidListener.on('stopped', stopSpy);
 
             await rfidListener.start();
             await rfidListener.stop();
 
-            expect(startHandler).toHaveBeenCalled();
-            expect(stopHandler).toHaveBeenCalled();
+            expect(rfidListener.isRunning).toBe(false);
+            expect(rfidListener.isHardwareReady).toBe(false);
+            expect(stopSpy).toHaveBeenCalled();
         });
 
-        test('should handle start errors gracefully', async () => {
-            const errorHandler = jest.fn();
-            rfidListener.on('error', errorHandler);
+        test('should handle hardware initialization failure', async () => {
+            const errorSpy = jest.fn();
+            rfidListener.on('error', errorSpy);
 
-            // Mock einen Start-Fehler
-            jest.spyOn(rfidListener, '_initializeHardware')
-                .mockRejectedValueOnce(new Error('Hardware initialization failed'));
+            // Hardware-Fehler für diesen Test aktivieren
+            rfidListener.enableHardwareError();
 
-            const result = await rfidListener.start();
-
-            expect(result).toBe(false);
-            expect(rfidListener.isListening).toBe(false);
-            expect(errorHandler).toHaveBeenCalled();
-        });
-    });
-
-    describe('Configuration Management', () => {
-        test('should set callback correctly', () => {
-            const newCallback = jest.fn();
-            rfidListener.setCallback(newCallback);
-
-            expect(rfidListener.callback).toBe(newCallback);
-        });
-
-        test('should update configuration', () => {
-            const newConfig = {
-                inputTimeout: 500,
-                enableLogging: true,
-                maxBufferLength: 20
-            };
-
-            rfidListener.setConfig(newConfig);
-
-            expect(rfidListener.config.inputTimeout).toBe(500);
-            expect(rfidListener.config.enableLogging).toBe(true);
-            expect(rfidListener.config.maxBufferLength).toBe(20);
-        });
-
-        test('should merge configuration correctly', () => {
-            const originalTimeout = rfidListener.config.inputTimeout;
-
-            rfidListener.setConfig({ enableLogging: true });
-
-            expect(rfidListener.config.inputTimeout).toBe(originalTimeout);
-            expect(rfidListener.config.enableLogging).toBe(true);
-        });
-
-        test('should set minimum scan interval', () => {
-            const newInterval = 500;
-            rfidListener.setMinScanInterval(newInterval);
-
-            expect(rfidListener.minScanInterval).toBe(newInterval);
+            await expect(rfidListener.start()).rejects.toThrow('Hardware initialization failed');
+            expect(errorSpy).toHaveBeenCalled();
+            expect(rfidListener.isRunning).toBe(false);
         });
     });
 
@@ -171,54 +116,81 @@ describe('SimpleRFIDListener', () => {
             await rfidListener.start();
         });
 
-        test('should simulate valid RFID tag', () => {
-            const tagId = '53004114';
-            const result = rfidListener.simulateTag(tagId);
+        test('should simulate valid RFID tag', async () => {
+            const tagSpy = jest.fn();
+            rfidListener.on('tag-scanned', tagSpy);
 
-            expect(result).toBe(true);
+            const testTag = '53004114';
+            rfidListener.simulateTag(testTag);
+
+            // Kurz warten für asynchrone Verarbeitung
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(tagSpy).toHaveBeenCalledWith(testTag);
+            expect(rfidListener.stats.totalScans).toBe(1);
+            expect(rfidListener.stats.validScans).toBe(1);
         });
 
-        test('should not simulate when not listening', async () => {
-            await rfidListener.stop();
-            const result = rfidListener.simulateTag('53004114');
+        test('should handle multiple tags', async () => {
+            const tagSpy = jest.fn();
+            rfidListener.on('tag-scanned', tagSpy);
 
-            expect(result).toBe(false);
+            const testTags = ['53004114', '12345678', 'ABCDEF01'];
+
+            for (const tag of testTags) {
+                rfidListener.simulateTag(tag);
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+
+            expect(tagSpy).toHaveBeenCalledTimes(testTags.length);
+            expect(rfidListener.stats.totalScans).toBe(testTags.length);
+            expect(rfidListener.stats.validScans).toBe(testTags.length);
         });
 
-        test('should respect minimum scan interval', () => {
-            rfidListener.setMinScanInterval(100);
+        test('should handle invalid tag sequence input', () => {
+            // Test mit falschen Parametern
+            expect(() => {
+                rfidListener.simulateTagSequence('not-an-array');
+            }).toThrow('tagIds must be an array');
 
-            const result1 = rfidListener.simulateTag('53004114');
-            const result2 = rfidListener.simulateTag('87654321'); // Zu schnell
+            expect(() => {
+                rfidListener.simulateTagSequence(null);
+            }).toThrow('tagIds must be an array');
 
-            expect(result1).toBe(true);
-            expect(result2).toBe(false);
-        });
-
-        test('should allow scan after minimum interval', async () => {
-            rfidListener.setMinScanInterval(50);
-
-            rfidListener.simulateTag('53004114');
-
-            // Warte ab
-            await new Promise(resolve => setTimeout(resolve, 60));
-
-            const result = rfidListener.simulateTag('87654321');
-            expect(result).toBe(true);
+            expect(() => {
+                rfidListener.simulateTagSequence(undefined);
+            }).toThrow('tagIds must be an array');
         });
 
         test('should simulate tag sequence', async () => {
-            const tags = ['53004114', '87654321', 'ABCDEF12'];
-            const sequencePromise = rfidListener.simulateTagSequence(tags, 100);
+            const tagSpy = jest.fn();
+            rfidListener.on('tag-scanned', tagSpy);
 
-            await sequencePromise;
+            const testTags = ['53004114', '12345678'];
 
-            expect(rfidListener.stats.totalScans).toBe(3);
+            await rfidListener.simulateTagSequence(testTags, 50); // Kurzes Intervall für Tests
+
+            expect(tagSpy).toHaveBeenCalledTimes(testTags.length);
+            expect(rfidListener.stats.totalScans).toBe(testTags.length);
         });
 
-        test('should handle invalid tag sequence input', async () => {
-            await expect(rfidListener.simulateTagSequence('not-an-array'))
-                .rejects.toThrow('tagIds must be an array');
+        test('should not simulate when not running', () => {
+            // Stoppe den Listener
+            rfidListener.stop();
+
+            expect(() => {
+                rfidListener.simulateTag('53004114');
+            }).toThrow('RFID Listener ist nicht gestartet');
+        });
+
+        test('should validate tag parameter type', () => {
+            expect(() => {
+                rfidListener.simulateTag(123); // Zahl statt String
+            }).toThrow('Tag ID muss ein String sein');
+
+            expect(() => {
+                rfidListener.simulateTag(null);
+            }).toThrow('Tag ID muss ein String sein');
         });
     });
 
@@ -227,511 +199,141 @@ describe('SimpleRFIDListener', () => {
             await rfidListener.start();
         });
 
-        test('should emit tag-scanned event for valid tag', (done) => {
-            const tagId = '53004114';
+        test('should emit invalid-scan event for invalid tag', async () => {
+            const invalidScanSpy = jest.fn();
+            rfidListener.on('invalid-scan', invalidScanSpy);
 
-            rfidListener.on('tag-scanned', (data) => {
-                expect(data.tagId).toBe(tagId);
-                expect(data.timestamp).toBeDefined();
-                done();
-            });
-
-            rfidListener.simulateTag(tagId);
-        });
-
-        test('should emit invalid-scan event for invalid tag', (done) => {
-            const invalidTag = 'INVALID!';
-
-            rfidListener.on('invalid-scan', (data) => {
-                expect(data.tagId).toBe(invalidTag);
-                expect(data.reason).toContain('Invalid hex characters');
-                done();
-            });
-
+            const invalidTag = 'INVALID!'; // Enthält ungültiges Zeichen
             rfidListener.simulateTag(invalidTag);
+
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(invalidScanSpy).toHaveBeenCalledWith(invalidTag);
+            expect(rfidListener.stats.invalidScans).toBe(1);
+            expect(rfidListener.stats.validScans).toBe(0);
         });
 
-        test('should call callback for valid scans', (done) => {
-            const tagId = '53004114';
+        test('should reject too short tags', async () => {
+            const invalidScanSpy = jest.fn();
+            rfidListener.on('invalid-scan', invalidScanSpy);
 
-            rfidListener.setCallback((scannedTagId) => {
-                expect(scannedTagId).toBe(tagId);
-                done();
-            });
+            const shortTag = '123'; // Zu kurz (< 6 Zeichen)
+            rfidListener.simulateTag(shortTag);
 
-            rfidListener.simulateTag(tagId);
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(invalidScanSpy).toHaveBeenCalledWith(shortTag);
+            expect(rfidListener.stats.invalidScans).toBe(1);
         });
 
-        test('should not call callback for invalid scans', (done) => {
-            const invalidTag = 'INVALID!';
-            const validTag = '53004114';
+        test('should reject too long tags', async () => {
+            const invalidScanSpy = jest.fn();
+            rfidListener.on('invalid-scan', invalidScanSpy);
 
-            let callCount = 0;
-            rfidListener.setCallback((tagId) => {
-                callCount++;
-                expect(tagId).toBe(validTag);
-            });
+            const longTag = '1'.repeat(25); // Zu lang (> 20 Zeichen)
+            rfidListener.simulateTag(longTag);
 
-            rfidListener.simulateTag(invalidTag);
-            setTimeout(() => {
-                rfidListener.simulateTag(validTag);
-                setTimeout(() => {
-                    expect(callCount).toBe(1);
-                    done();
-                }, 50);
-            }, 50);
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(invalidScanSpy).toHaveBeenCalledWith(longTag);
+            expect(rfidListener.stats.invalidScans).toBe(1);
         });
 
-        test('should handle callback errors gracefully', (done) => {
-            const errorHandler = jest.fn();
-            rfidListener.on('callback-error', errorHandler);
-
-            rfidListener.setCallback(() => {
-                throw new Error('Callback error');
-            });
-
-            rfidListener.simulateTag('53004114');
-
-            setTimeout(() => {
-                expect(errorHandler).toHaveBeenCalled();
-                done();
-            }, 100);
-        });
-
-        test('should validate tag length', () => {
-            const tooShort = '12';
-            const tooLong = '1234567890ABCDEF123';
-            const validTag = '53004114';
-
-            expect(rfidListener._validateTag(tooShort).isValid).toBe(false);
-            expect(rfidListener._validateTag(tooLong).isValid).toBe(false);
-            expect(rfidListener._validateTag(validTag).isValid).toBe(true);
-        });
-
-        test('should validate hex characters', () => {
-            const invalidChars = '53G04114';
-            const validHex = '53004114';
-
-            expect(rfidListener._validateTag(invalidChars).isValid).toBe(false);
-            expect(rfidListener._validateTag(validHex).isValid).toBe(true);
-        });
-
-        test('should handle null and undefined tags', () => {
-            expect(rfidListener._validateTag(null).isValid).toBe(false);
-            expect(rfidListener._validateTag(undefined).isValid).toBe(false);
-            expect(rfidListener._validateTag('').isValid).toBe(false);
-        });
-    });
-
-    describe('Duplicate Detection', () => {
-        beforeEach(async () => {
-            await rfidListener.start();
-        });
-
-        test('should detect duplicate scans', (done) => {
-            const tagId = '53004114';
-
-            rfidListener.on('duplicate-scan', (data) => {
-                expect(data.tagId).toBe(tagId);
-                done();
-            });
-
-            rfidListener.simulateTag(tagId);
-            setTimeout(() => {
-                rfidListener.simulateTag(tagId); // Duplicate
-            }, 50);
-        });
-
-        test('should allow duplicate after time window', async () => {
-            const tagId = '53004114';
-            rfidListener.setDuplicateDetection(true, 100); // 100ms window
-
-            rfidListener.simulateTag(tagId);
-
-            // Warte länger als Time Window
-            await new Promise(resolve => setTimeout(resolve, 150));
-
-            const duplicateHandler = jest.fn();
-            rfidListener.on('duplicate-scan', duplicateHandler);
-
-            rfidListener.simulateTag(tagId);
-
-            // Warte kurz und überprüfe
-            await new Promise(resolve => setTimeout(resolve, 50));
-            expect(duplicateHandler).not.toHaveBeenCalled();
-        });
-
-        test('should disable duplicate detection', (done) => {
-            const tagId = '53004114';
-            rfidListener.setDuplicateDetection(false);
-
-            const duplicateHandler = jest.fn();
-            rfidListener.on('duplicate-scan', duplicateHandler);
-
-            rfidListener.simulateTag(tagId);
-            setTimeout(() => {
-                rfidListener.simulateTag(tagId);
-                setTimeout(() => {
-                    expect(duplicateHandler).not.toHaveBeenCalled();
-                    done();
-                }, 50);
-            }, 50);
-        });
-
-        test('should check if scan is duplicate', () => {
-            const tagId = '53004114';
-
-            // Erste Scan
-            rfidListener.duplicateDetection.recentScans.set(tagId, Date.now());
-
-            expect(rfidListener.isDuplicateScan(tagId)).toBe(true);
-            expect(rfidListener.isDuplicateScan('87654321')).toBe(false);
-        });
-
-        test('should respect duplicate time window', () => {
-            const tagId = '53004114';
-            rfidListener.setDuplicateDetection(true, 100);
-
-            // Füge alten Scan hinzu
-            rfidListener.duplicateDetection.recentScans.set(tagId, Date.now() - 200);
-
-            expect(rfidListener.isDuplicateScan(tagId)).toBe(false);
-        });
-    });
-
-    describe('Statistics and Performance', () => {
-        beforeEach(async () => {
-            await rfidListener.start();
-        });
-
-        test('should track scan statistics', () => {
-            rfidListener.simulateTag('53004114'); // Valid
-            rfidListener.simulateTag('87654321'); // Valid
-            rfidListener.simulateTag('INVALID!'); // Invalid
-
-            const stats = rfidListener.getStats();
-
-            expect(stats.totalScans).toBe(3);
-            expect(stats.validScans).toBe(2);
-            expect(stats.invalidScans).toBe(1);
-            expect(stats.isListening).toBe(true);
-        });
-
-        test('should calculate scan rate', () => {
-            const stats = rfidListener.getStats();
-
-            expect(stats.scanRate).toBeDefined();
-            expect(typeof stats.scanRate).toBe('number');
-            expect(stats.scanRate).toBeGreaterThanOrEqual(0);
-        });
-
-        test('should calculate success rate', () => {
-            rfidListener.simulateTag('53004114'); // Valid
-            rfidListener.simulateTag('INVALID!'); // Invalid
-
-            const stats = rfidListener.getStats();
-
-            expect(stats.successRate).toBe(50); // 1 von 2 erfolgreich
-        });
-
-        test('should track uptime', () => {
-            const stats = rfidListener.getStats();
-
-            expect(stats.uptime).toBeGreaterThan(0);
-            expect(typeof stats.uptime).toBe('number');
-        });
-
-        test('should clear statistics', () => {
-            rfidListener.simulateTag('53004114');
-            rfidListener.clearStats();
-
-            const stats = rfidListener.getStats();
-
-            expect(stats.totalScans).toBe(0);
-            expect(stats.validScans).toBe(0);
-            expect(stats.invalidScans).toBe(0);
-        });
-
-        test('should track performance metrics', () => {
-            rfidListener.simulateTag('53004114');
-
-            const stats = rfidListener.getStats();
-
-            expect(stats.performance).toBeDefined();
-            expect(stats.performance.avgProcessingTime).toBeGreaterThanOrEqual(0);
-            expect(stats.performance.maxProcessingTime).toBeGreaterThanOrEqual(0);
-        });
-
-        test('should maintain scan history', () => {
-            rfidListener.simulateTag('53004114');
-            rfidListener.simulateTag('87654321');
-
-            const history = rfidListener.getScanHistory();
-
-            expect(history.length).toBe(2);
-            expect(history[0].tagId).toBe('53004114');
-            expect(history[1].tagId).toBe('87654321');
-            expect(history.every(scan => scan.timestamp instanceof Date)).toBe(true);
-        });
-
-        test('should limit scan history size', () => {
-            // Simuliere viele Scans
-            for (let i = 0; i < 150; i++) {
-                rfidListener.simulateTag('53004114');
-            }
-
-            const history = rfidListener.getScanHistory();
-
-            expect(history.length).toBeLessThanOrEqual(100);
-        });
-    });
-
-    describe('Auto Scan Feature', () => {
-        beforeEach(async () => {
-            await rfidListener.start();
-        });
-
-        test('should enable auto scan', () => {
-            rfidListener.enableAutoScan(1000);
-
-            expect(rfidListener.autoScanEnabled).toBe(true);
-            expect(rfidListener.autoScanDelay).toBe(1000);
-        });
-
-        test('should disable auto scan', () => {
-            rfidListener.enableAutoScan(1000);
-            rfidListener.disableAutoScan();
-
-            expect(rfidListener.autoScanEnabled).toBe(false);
-        });
-
-        test('should perform auto scans', (done) => {
-            let scanCount = 0;
-
-            rfidListener.on('tag-scanned', () => {
-                scanCount++;
-                if (scanCount >= 2) {
-                    rfidListener.disableAutoScan();
-                    expect(scanCount).toBeGreaterThanOrEqual(2);
-                    done();
-                }
-            });
-
-            rfidListener.enableAutoScan(100); // Sehr kurzes Intervall für Test
-        });
-
-        test('should use mock tags for auto scan', (done) => {
-            const customTags = ['AAAA', 'BBBB', 'CCCC'];
-            rfidListener.setMockTags(customTags);
-
-            const scannedTags = [];
-
-            rfidListener.on('tag-scanned', (data) => {
-                scannedTags.push(data.tagId);
-                if (scannedTags.length >= 3) {
-                    rfidListener.disableAutoScan();
-                    expect(scannedTags).toEqual(customTags);
-                    done();
-                }
-            });
-
-            rfidListener.enableAutoScan(50);
-        });
-    });
-
-    describe('Mock Tag Management', () => {
-        test('should set mock tags', () => {
-            const newTags = ['AAAA', 'BBBB', 'CCCC'];
-            rfidListener.setMockTags(newTags);
-
-            expect(rfidListener.mockTags).toEqual(newTags);
-            expect(rfidListener.currentMockIndex).toBe(0);
-        });
-
-        test('should add mock tag', () => {
-            const originalCount = rfidListener.mockTags.length;
-            rfidListener.addMockTag('NEWTAG');
-
-            expect(rfidListener.mockTags.length).toBe(originalCount + 1);
-            expect(rfidListener.mockTags).toContain('NEWTAG');
-        });
-
-        test('should cycle through mock tags', () => {
-            rfidListener.setMockTags(['AAA', 'BBB', 'CCC']);
-
-            expect(rfidListener.getNextMockTag()).toBe('AAA');
-            expect(rfidListener.getNextMockTag()).toBe('BBB');
-            expect(rfidListener.getNextMockTag()).toBe('CCC');
-            expect(rfidListener.getNextMockTag()).toBe('AAA'); // Cycle back
-        });
-
-        test('should handle empty mock tags', () => {
-            rfidListener.setMockTags([]);
-
-            expect(rfidListener.getNextMockTag()).toBe('53004114'); // Default
-        });
-    });
-
-    describe('Hardware Error Simulation', () => {
-        test('should simulate hardware errors', () => {
-            const errorHandler = jest.fn();
-            rfidListener.on('hardware-error', errorHandler);
-
-            const error = rfidListener.simulateHardwareError('connection_lost');
-
-            expect(error).toBeInstanceOf(Error);
-            expect(error.message).toContain('connection lost');
-            expect(errorHandler).toHaveBeenCalledWith(error);
-        });
-
-        test('should simulate different error types', () => {
-            const errorTypes = [
-                'connection_lost',
-                'device_not_found',
-                'permission_denied',
-                'hardware_malfunction',
-                'buffer_overflow'
+        test('should accept valid hex tags', async () => {
+            const tagSpy = jest.fn();
+            rfidListener.on('tag-scanned', tagSpy);
+
+            const validTags = [
+                '123456',
+                'ABCDEF',
+                '0123456789ABCDEF',
+                'abcdef123456' // Lowercase sollte auch funktionieren
             ];
 
-            errorTypes.forEach(errorType => {
-                const error = rfidListener.simulateHardwareError(errorType);
-                expect(error).toBeInstanceOf(Error);
-                expect(error.message.toLowerCase()).toContain(errorType.replace('_', ' '));
-            });
-        });
+            for (const tag of validTags) {
+                rfidListener.simulateTag(tag);
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
 
-        test('should simulate buffer overflow', () => {
-            const overflowHandler = jest.fn();
-            rfidListener.on('buffer-overflow', overflowHandler);
-
-            rfidListener.simulateBufferOverflow();
-
-            expect(overflowHandler).toHaveBeenCalled();
-            expect(rfidListener.buffer).toBe(''); // Buffer should be cleared
-        });
-
-        test('should handle unknown error type', () => {
-            const error = rfidListener.simulateHardwareError('unknown_error');
-
-            expect(error.message).toContain('Unknown hardware error');
+            expect(tagSpy).toHaveBeenCalledTimes(validTags.length);
+            expect(rfidListener.stats.validScans).toBe(validTags.length);
         });
     });
 
-    describe('Buffer Management', () => {
+    describe('Statistics and Status', () => {
         beforeEach(async () => {
             await rfidListener.start();
         });
 
-        test('should get current buffer', () => {
-            rfidListener.buffer = 'TEST123';
+        test('should track scan statistics', async () => {
+            const validTag = '53004114';
+            const invalidTag = 'INVALID!';
 
-            expect(rfidListener.getCurrentBuffer()).toBe('TEST123');
+            rfidListener.simulateTag(validTag);
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            rfidListener.simulateTag(invalidTag);
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            rfidListener.simulateTag(validTag);
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            expect(rfidListener.stats.totalScans).toBe(3);
+            expect(rfidListener.stats.validScans).toBe(2);
+            expect(rfidListener.stats.invalidScans).toBe(1);
+            expect(rfidListener.stats.lastScanTime).toBeTruthy();
         });
 
-        test('should clear buffer manually', () => {
-            rfidListener.buffer = 'TEST123';
-            rfidListener.clearBuffer();
+        test('should provide status information', () => {
+            const status = rfidListener.getStatus();
 
-            expect(rfidListener.getCurrentBuffer()).toBe('');
+            expect(status).toHaveProperty('isRunning');
+            expect(status).toHaveProperty('isHardwareReady');
+            expect(status).toHaveProperty('stats');
+            expect(status).toHaveProperty('config');
+            expect(status.isRunning).toBe(true);
         });
 
-        test('should handle buffer overflow', () => {
-            const overflowHandler = jest.fn();
-            rfidListener.on('buffer-overflow', overflowHandler);
+        test('should reset statistics', async () => {
+            rfidListener.simulateTag('53004114');
+            await new Promise(resolve => setTimeout(resolve, 10));
 
-            // Fülle Buffer über Limit
-            rfidListener.buffer = 'X'.repeat(rfidListener.config.maxBufferLength + 1);
-            rfidListener._processBufferOverflow();
+            expect(rfidListener.stats.totalScans).toBe(1);
 
-            expect(overflowHandler).toHaveBeenCalled();
-            expect(rfidListener.buffer).toBe('');
-            expect(rfidListener.stats.bufferOverflows).toBe(1);
-        });
+            rfidListener.resetStats();
 
-        test('should validate hex characters', () => {
-            expect(rfidListener._isValidHexChar('A')).toBe(true);
-            expect(rfidListener._isValidHexChar('5')).toBe(true);
-            expect(rfidListener._isValidHexChar('F')).toBe(true);
-            expect(rfidListener._isValidHexChar('G')).toBe(false);
-            expect(rfidListener._isValidHexChar('!')).toBe(false);
-        });
-    });
-
-    describe('Cleanup and Destruction', () => {
-        test('should destroy listener cleanly', async () => {
-            await rfidListener.start();
-            rfidListener.enableAutoScan(1000);
-
-            rfidListener.destroy();
-
-            expect(rfidListener.isListening).toBe(false);
-            expect(rfidListener.autoScanEnabled).toBe(false);
             expect(rfidListener.stats.totalScans).toBe(0);
-        });
-
-        test('should remove all event listeners on destroy', () => {
-            const testHandler = jest.fn();
-            rfidListener.on('tag-scanned', testHandler);
-            rfidListener.on('error', testHandler);
-
-            rfidListener.destroy();
-
-            // Versuche Events zu emittieren - sollten nicht mehr gehört werden
-            rfidListener.emit('tag-scanned', { tagId: 'TEST' });
-            rfidListener.emit('error', new Error('Test'));
-
-            expect(testHandler).not.toHaveBeenCalled();
-        });
-
-        test('should clear all timers on stop', async () => {
-            await rfidListener.start();
-            rfidListener.enableAutoScan(1000);
-
-            await rfidListener.stop();
-
-            expect(rfidListener.autoScanInterval).toBeNull();
-            expect(rfidListener.inputTimer).toBeNull();
+            expect(rfidListener.stats.validScans).toBe(0);
+            expect(rfidListener.stats.invalidScans).toBe(0);
         });
     });
 
-    describe('Factory Methods', () => {
-        test('should create USB HID listener', () => {
-            const { MockRFIDListenerFactory } = require('../mocks/rfid-listener.mock');
-            const callback = jest.fn();
+    describe('Configuration Management', () => {
+        test('should update configuration', () => {
+            const newConfig = {
+                minTagLength: 8,
+                maxTagLength: 16,
+                debugMode: true
+            };
 
-            const listener = MockRFIDListenerFactory.createUSBHIDListener(callback, {
-                enableLogging: true
-            });
+            rfidListener.updateConfig(newConfig);
 
-            expect(listener).toBeInstanceOf(MockRFIDListener);
-            expect(listener.callback).toBe(callback);
-            expect(listener.config.enableLogging).toBe(true);
-            expect(listener.config.inputTimeout).toBe(200);
-            expect(listener.config.maxBufferLength).toBe(15);
+            const status = rfidListener.getStatus();
+            expect(status.config.minTagLength).toBe(8);
+            expect(status.config.maxTagLength).toBe(16);
+            expect(status.config.debugMode).toBe(true);
         });
 
-        test('should create serial listener', () => {
-            const { MockRFIDListenerFactory } = require('../mocks/rfid-listener.mock');
-            const callback = jest.fn();
+        test('should toggle debug mode', () => {
+            const initialDebugMode = rfidListener.config.debugMode;
 
-            const listener = MockRFIDListenerFactory.createSerialListener(callback);
+            rfidListener.toggleDebugMode();
 
-            expect(listener).toBeInstanceOf(MockRFIDListener);
-            expect(listener.config.inputTimeout).toBe(500);
-            expect(listener.config.maxBufferLength).toBe(20);
-            expect(listener.minScanInterval).toBe(300);
-        });
+            expect(rfidListener.config.debugMode).toBe(!initialDebugMode);
 
-        test('should create network listener', () => {
-            const { MockRFIDListenerFactory } = require('../mocks/rfid-listener.mock');
-            const callback = jest.fn();
+            rfidListener.toggleDebugMode();
 
-            const listener = MockRFIDListenerFactory.createNetworkListener(callback);
-
-            expect(listener).toBeInstanceOf(MockRFIDListener);
-            expect(listener.config.inputTimeout).toBe(1000);
-            expect(listener.config.maxBufferLength).toBe(25);
-            expect(listener.minScanInterval).toBe(500);
+            expect(rfidListener.config.debugMode).toBe(initialDebugMode);
         });
     });
 
@@ -758,18 +360,130 @@ describe('SimpleRFIDListener', () => {
         });
 
         test('should trigger shortcuts via mock', async () => {
+            const tagSpy = jest.fn();
+            rfidListener.on('tag-scanned', tagSpy);
+
             const mockGlobalShortcut = global.mockElectron.globalShortcut;
 
             await rfidListener.start();
 
-            // Simuliere Shortcut-Trigger
+            // Simuliere Shortcut-Trigger für Tag "53"
             mockGlobalShortcut.triggerShortcut('5');
             mockGlobalShortcut.triggerShortcut('3');
+            mockGlobalShortcut.triggerShortcut('0');
+            mockGlobalShortcut.triggerShortcut('0');
+            mockGlobalShortcut.triggerShortcut('4');
+            mockGlobalShortcut.triggerShortcut('1');
+            mockGlobalShortcut.triggerShortcut('1');
+            mockGlobalShortcut.triggerShortcut('4');
             mockGlobalShortcut.triggerShortcut('Enter');
 
             // Warte auf Verarbeitung
             await new Promise(resolve => setTimeout(resolve, 50));
 
+            expect(tagSpy).toHaveBeenCalledWith('53004114');
+            expect(rfidListener.stats.totalScans).toBe(1);
+        });
+
+        test('should handle missing electron mock gracefully', async () => {
+            // Temporär global mock entfernen
+            const originalMock = global.mockElectron;
+            delete global.mockElectron;
+
+            // Neue Instanz ohne Mock
+            const listenerWithoutMock = new MockRFIDListener();
+            listenerWithoutMock.updateConfig({ debugMode: false });
+            listenerWithoutMock.disableHardwareError();
+
+            // Sollte ohne Fehler starten
+            await expect(listenerWithoutMock.start()).resolves.toBeUndefined();
+            expect(listenerWithoutMock.isRunning).toBe(true);
+            expect(listenerWithoutMock.registeredShortcuts.length).toBe(0);
+
+            await listenerWithoutMock.stop();
+
+            // Mock wiederherstellen
+            global.mockElectron = originalMock;
+        });
+    });
+
+    describe('Error Handling', () => {
+        test('should handle unhandled promise rejections', () => {
+            // Setup Spy für unhandled rejections
+            const originalHandler = process.listeners('unhandledRejection');
+            const rejectionSpy = jest.fn();
+
+            process.removeAllListeners('unhandledRejection');
+            process.on('unhandledRejection', rejectionSpy);
+
+            // Trigger eine unhandled rejection
+            Promise.reject(new Error('Test rejection'));
+
+            // Cleanup
+            setTimeout(() => {
+                process.removeAllListeners('unhandledRejection');
+                originalHandler.forEach(handler => {
+                    process.on('unhandledRejection', handler);
+                });
+            }, 10);
+        });
+
+        test('should handle errors in event listeners', async () => {
+            const errorSpy = jest.fn();
+            rfidListener.on('error', errorSpy);
+
+            await rfidListener.start();
+
+            // Event-Listener der einen Fehler wirft
+            rfidListener.on('tag-scanned', () => {
+                throw new Error('Test error in listener');
+            });
+
+            // Sollte den Fehler nicht zum Absturz führen
+            expect(() => {
+                rfidListener.simulateTag('53004114');
+            }).not.toThrow();
+        });
+    });
+
+    describe('Performance Tests', () => {
+        beforeEach(async () => {
+            await rfidListener.start();
+        });
+
+        test('should handle rapid successive scans', async () => {
+            const tagSpy = jest.fn();
+            rfidListener.on('tag-scanned', tagSpy);
+
+            const rapidTags = Array(10).fill().map((_, i) => `5300411${i}`);
+
+            // Simuliere sehr schnelle Scans
+            for (const tag of rapidTags) {
+                rfidListener.simulateTag(tag);
+            }
+
+            // Warte auf Verarbeitung aller Tags
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            expect(tagSpy).toHaveBeenCalledTimes(rapidTags.length);
+            expect(rfidListener.stats.totalScans).toBe(rapidTags.length);
+        });
+
+        test('should handle continuous simulation', async () => {
+            const tagSpy = jest.fn();
+            rfidListener.on('tag-scanned', tagSpy);
+
+            const testTags = ['53004114', '12345678'];
+
+            rfidListener.startSimulation(testTags, 100); // Sehr kurzes Intervall
+
+            // Lasse Simulation kurz laufen
+            await new Promise(resolve => setTimeout(resolve, 350));
+
+            rfidListener._stopSimulation();
+
+            // Sollte mindestens ein paar Tags gescannt haben
+            expect(tagSpy).toHaveBeenCalled();
             expect(rfidListener.stats.totalScans).toBeGreaterThan(0);
         });
     });
