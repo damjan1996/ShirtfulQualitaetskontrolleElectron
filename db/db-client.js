@@ -1,8 +1,21 @@
 const sql = require('mssql');
 require('dotenv').config();
 
-// Console-Utils für bessere Ausgabe
-const console = require('../utils/console-utils');
+// Console-Utils für bessere Ausgabe - mit Fallback
+let customConsole;
+try {
+    customConsole = require('../utils/console-utils');
+} catch (error) {
+    // Fallback auf Standard-Console
+    customConsole = {
+        success: (msg, ...args) => console.log('[OK]', msg, ...args),
+        error: (msg, ...args) => console.error('[ERROR]', msg, ...args),
+        warning: (msg, ...args) => console.warn('[WARN]', msg, ...args),
+        info: (msg, ...args) => console.log('[INFO]', msg, ...args),
+        database: (msg, ...args) => console.log('[DB]', msg, ...args),
+        log: (level, msg, ...args) => console.log(`[${level.toUpperCase()}]`, msg, ...args)
+    };
+}
 
 class DatabaseClient {
     constructor() {
@@ -29,6 +42,7 @@ class DatabaseClient {
                 enableArithAbort: true,
                 requestTimeout: parseInt(process.env.MSSQL_REQUEST_TIMEOUT) || 30000,
                 connectionTimeout: parseInt(process.env.MSSQL_CONNECTION_TIMEOUT) || 15000,
+                useUTC: false // Wichtig für korrekte Zeitstempel-Behandlung
             },
             pool: {
                 max: parseInt(process.env.MSSQL_POOL_MAX) || 10,
@@ -37,12 +51,13 @@ class DatabaseClient {
             }
         };
 
-        console.database('Database client initialisiert mit Konfiguration:', {
+        customConsole.database('Database client initialisiert mit Konfiguration:', {
             server: this.config.server,
             database: this.config.database,
             user: this.config.user,
             port: this.config.port,
-            encrypt: this.config.options.encrypt
+            encrypt: this.config.options.encrypt,
+            useUTC: this.config.options.useUTC
         });
 
         // Cache-Cleanup alle 5 Minuten
@@ -68,32 +83,32 @@ class DatabaseClient {
         }
 
         if (cleanedCount > 0) {
-            console.log(`🧹 Duplikat-Cache bereinigt: ${cleanedCount} Einträge entfernt`);
+            console.log(`[CLEAN] Duplikat-Cache bereinigt: ${cleanedCount} Einträge entfernt`);
         }
     }
 
     async connect() {
         if (this.isConnected && this.pool) {
-            console.log('Datenbank bereits verbunden');
+            console.log('[INFO] Datenbank bereits verbunden');
             return true;
         }
 
         try {
-            console.database('Verbinde mit SQL Server...');
-            console.info(`Server: ${this.config.server}:${this.config.port}`);
-            console.info(`Datenbank: ${this.config.database}`);
-            console.info(`Benutzer: ${this.config.user}`);
+            customConsole.database('Verbinde mit SQL Server...');
+            customConsole.info(`Server: ${this.config.server}:${this.config.port}`);
+            customConsole.info(`Datenbank: ${this.config.database}`);
+            customConsole.info(`Benutzer: ${this.config.user}`);
 
             // Connection Pool erstellen
             this.pool = await sql.connect(this.config);
 
             // Verbindung testen
-            const result = await this.pool.request().query('SELECT 1 as test, GETDATE() as serverTime');
+            const result = await this.pool.request().query('SELECT 1 as test, SYSDATETIME() as serverTime');
 
             if (result.recordset && result.recordset[0].test === 1) {
                 this.isConnected = true;
-                console.success('Datenbank erfolgreich verbunden');
-                console.info(`Server-Zeit: ${result.recordset[0].serverTime}`);
+                customConsole.success('Datenbank erfolgreich verbunden');
+                customConsole.info(`Server-Zeit: ${result.recordset[0].serverTime}`);
 
                 // Tabellen validieren
                 await this.validateTables();
@@ -103,15 +118,15 @@ class DatabaseClient {
             }
 
         } catch (error) {
-            console.error('Datenbankverbindung fehlgeschlagen:', error.message);
+            customConsole.error('Datenbankverbindung fehlgeschlagen:', error.message);
 
             // Hilfreiche Fehlermeldungen
             if (error.code === 'ELOGIN') {
-                console.error('Anmeldung fehlgeschlagen - prüfen Sie Benutzername/Passwort in .env');
+                customConsole.error('Anmeldung fehlgeschlagen - prüfen Sie Benutzername/Passwort in .env');
             } else if (error.code === 'ETIMEOUT') {
-                console.error('Verbindungs-Timeout - prüfen Sie Server-Adresse und Firewall');
+                customConsole.error('Verbindungs-Timeout - prüfen Sie Server-Adresse und Firewall');
             } else if (error.code === 'ENOTFOUND') {
-                console.error('Server nicht gefunden - prüfen Sie MSSQL_SERVER in .env');
+                customConsole.error('Server nicht gefunden - prüfen Sie MSSQL_SERVER in .env');
             }
 
             this.isConnected = false;
@@ -139,28 +154,28 @@ class DatabaseClient {
                         // Zeilen zählen für Info - mit korrierter SQL-Syntax
                         try {
                             const countResult = await this.query(`SELECT COUNT(*) as [record_count] FROM dbo.[${tableName}]`);
-                            console.success(`Tabelle ${tableName}: ${countResult.recordset[0].record_count} Einträge`);
+                            customConsole.success(`Tabelle ${tableName}: ${countResult.recordset[0].record_count} Einträge`);
                         } catch (countError) {
-                            console.success(`Tabelle ${tableName}: vorhanden (Zählung fehlgeschlagen: ${countError.message})`);
+                            customConsole.success(`Tabelle ${tableName}: vorhanden (Zählung fehlgeschlagen: ${countError.message})`);
                         }
                     } else {
                         missingTables.push(tableName);
                     }
                 } catch (error) {
-                    console.error(`❌ Fehler beim Prüfen der Tabelle ${tableName}:`, error.message);
+                    customConsole.error(`Fehler beim Prüfen der Tabelle ${tableName}:`, error.message);
                     missingTables.push(tableName);
                 }
             }
 
             if (missingTables.length > 0) {
-                console.warn(`⚠️ Fehlende Tabellen: ${missingTables.join(', ')}`);
-                console.warn('💡 Führen Sie das Datenbank-Setup-Skript aus um fehlende Tabellen zu erstellen');
+                customConsole.warning(`Fehlende Tabellen: ${missingTables.join(', ')}`);
+                customConsole.warning('Führen Sie das Datenbank-Setup-Skript aus um fehlende Tabellen zu erstellen');
             }
 
             return { existingTables, missingTables };
 
         } catch (error) {
-            console.error('Fehler bei Tabellen-Validierung:', error);
+            customConsole.error('Fehler bei Tabellen-Validierung:', error);
             return { existingTables: [], missingTables: [] };
         }
     }
@@ -199,21 +214,21 @@ class DatabaseClient {
             let paramIndex = 0;
             processedQuery = processedQuery.replace(/\?/g, () => `@param${paramIndex++}`);
 
-            console.database('Führe Query aus:', processedQuery.substring(0, 200) + (processedQuery.length > 200 ? '...' : ''));
+            customConsole.database('Führe Query aus:', processedQuery.substring(0, 200) + (processedQuery.length > 200 ? '...' : ''));
             if (parameters.length > 0) {
-                console.info('Parameter:', parameters);
+                customConsole.info('Parameter:', parameters);
             }
 
             const result = await request.query(processedQuery);
 
-            console.success(`Query erfolgreich. Betroffene Zeilen: ${result.rowsAffected}, Datensätze: ${result.recordset?.length || 0}`);
+            customConsole.success(`Query erfolgreich. Betroffene Zeilen: ${result.rowsAffected}, Datensätze: ${result.recordset?.length || 0}`);
 
             return result;
 
         } catch (error) {
-            console.error('Datenbank-Query-Fehler:', error.message);
-            console.error('Query:', queryString.substring(0, 200));
-            console.error('Parameter:', parameters);
+            customConsole.error('Datenbank-Query-Fehler:', error.message);
+            customConsole.error('Query:', queryString.substring(0, 200));
+            customConsole.error('Parameter:', parameters);
             throw error;
         }
     }
@@ -229,9 +244,9 @@ class DatabaseClient {
                 await this.pool.close();
                 this.pool = null;
                 this.isConnected = false;
-                console.success('Datenbankverbindung geschlossen');
+                customConsole.success('Datenbankverbindung geschlossen');
             } catch (error) {
-                console.error('Fehler beim Schließen der Datenbankverbindung:', error);
+                customConsole.error('Fehler beim Schließen der Datenbankverbindung:', error);
             }
         }
     }
@@ -240,7 +255,7 @@ class DatabaseClient {
     async getUserByEPC(epcHex) {
         try {
             const epcDecimal = parseInt(epcHex, 16);
-            console.log(`Suche Benutzer für EPC: ${epcHex} (${epcDecimal})`);
+            console.log(`[INFO] Suche Benutzer für EPC: ${epcHex} (${epcDecimal})`);
 
             const result = await this.query(`
                 SELECT ID, Vorname, Nachname, BenutzerName, Email, EPC
@@ -250,14 +265,14 @@ class DatabaseClient {
 
             if (result.recordset.length > 0) {
                 const user = result.recordset[0];
-                console.log(`✅ Benutzer gefunden: ${user.BenutzerName}`);
+                customConsole.success(`Benutzer gefunden: ${user.BenutzerName}`);
                 return user;
             } else {
-                console.log(`❌ Kein Benutzer gefunden für EPC: ${epcHex}`);
+                console.log(`[WARN] Kein Benutzer gefunden für EPC: ${epcHex}`);
                 return null;
             }
         } catch (error) {
-            console.error('Fehler beim Abrufen des Benutzers nach EPC:', error);
+            customConsole.error('Fehler beim Abrufen des Benutzers nach EPC:', error);
             return null;
         }
     }
@@ -265,7 +280,7 @@ class DatabaseClient {
     // ===== SESSION MANAGEMENT =====
     async createSession(userId) {
         try {
-            console.log(`Erstelle neue Session für Benutzer ID: ${userId}`);
+            console.log(`[INFO] Erstelle neue Session für Benutzer ID: ${userId}`);
 
             // Erst alle bestehenden aktiven Sessions des Benutzers beenden
             await this.query(`
@@ -274,7 +289,7 @@ class DatabaseClient {
                 WHERE UserID = ? AND Active = 1
             `, [userId]);
 
-            // Neue Session erstellen mit deutscher Zeitzone-Behandlung
+            // Neue Session erstellen mit korrekter Zeitstempel-Behandlung
             const result = await this.query(`
                 INSERT INTO dbo.Sessions (UserID, StartTS, Active)
                     OUTPUT INSERTED.ID, INSERTED.StartTS
@@ -283,19 +298,26 @@ class DatabaseClient {
 
             if (result.recordset.length > 0) {
                 const session = result.recordset[0];
-                console.log(`✅ Session erstellt: ID ${session.ID}`);
-                return session;
+
+                // Zeitstempel normalisieren für konsistente Verarbeitung
+                const normalizedSession = {
+                    ...session,
+                    StartTS: this.normalizeTimestamp(session.StartTS)
+                };
+
+                customConsole.success(`Session erstellt: ID ${normalizedSession.ID}, Start: ${normalizedSession.StartTS}`);
+                return normalizedSession;
             }
             return null;
         } catch (error) {
-            console.error('Fehler beim Erstellen der Session:', error);
+            customConsole.error('Fehler beim Erstellen der Session:', error);
             return null;
         }
     }
 
     async endSession(sessionId) {
         try {
-            console.log(`Beende Session: ${sessionId}`);
+            console.log(`[INFO] Beende Session: ${sessionId}`);
 
             const result = await this.query(`
                 UPDATE dbo.Sessions
@@ -306,14 +328,14 @@ class DatabaseClient {
             const success = result.rowsAffected && result.rowsAffected[0] > 0;
 
             if (success) {
-                console.log(`✅ Session ${sessionId} erfolgreich beendet`);
+                customConsole.success(`Session ${sessionId} erfolgreich beendet`);
             } else {
-                console.log(`⚠️ Session ${sessionId} war bereits beendet oder nicht gefunden`);
+                console.log(`[WARN] Session ${sessionId} war bereits beendet oder nicht gefunden`);
             }
 
             return success;
         } catch (error) {
-            console.error('Fehler beim Beenden der Session:', error);
+            customConsole.error('Fehler beim Beenden der Session:', error);
             return false;
         }
     }
@@ -327,10 +349,88 @@ class DatabaseClient {
                 WHERE UserID = ? AND Active = 1
             `, [userId]);
 
-            return result.recordset.length > 0 ? result.recordset[0] : null;
-        } catch (error) {
-            console.error('Fehler beim Abrufen der aktiven Session:', error);
+            if (result.recordset.length > 0) {
+                const session = result.recordset[0];
+                return {
+                    ...session,
+                    StartTS: this.normalizeTimestamp(session.StartTS)
+                };
+            }
+
             return null;
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der aktiven Session:', error);
+            return null;
+        }
+    }
+
+    // ===== ZEITSTEMPEL-NORMALISIERUNG =====
+    normalizeTimestamp(timestamp) {
+        try {
+            if (!timestamp) {
+                console.warn('[WARN] Leerer Zeitstempel für Normalisierung');
+                return new Date().toISOString();
+            }
+
+            let date;
+
+            if (timestamp instanceof Date) {
+                date = timestamp;
+            } else if (typeof timestamp === 'string') {
+                // SQL Server DateTime strings richtig parsen
+                if (timestamp.includes('T')) {
+                    // ISO-Format
+                    date = new Date(timestamp);
+                } else {
+                    // SQL Server Format: "2024-06-24 13:01:30.000"
+                    const isoString = timestamp.replace(' ', 'T');
+                    date = new Date(isoString);
+                }
+            } else {
+                // Fallback für andere Typen
+                date = new Date(timestamp);
+            }
+
+            // Validierung
+            if (isNaN(date.getTime())) {
+                console.warn('[WARN] Ungültiger Zeitstempel für Normalisierung:', timestamp);
+                return new Date().toISOString();
+            }
+
+            // ISO-String zurückgeben für konsistente Verarbeitung
+            return date.toISOString();
+
+        } catch (error) {
+            customConsole.error('Fehler bei Zeitstempel-Normalisierung:', error, timestamp);
+            return new Date().toISOString();
+        }
+    }
+
+    // ===== ZEITSTEMPEL-HILFSMETHODEN =====
+    formatSQLDateTime(date) {
+        try {
+            if (!(date instanceof Date)) {
+                date = new Date(date);
+            }
+
+            if (isNaN(date.getTime())) {
+                throw new Error('Ungültiges Datum');
+            }
+
+            // Formatiert JavaScript Date für SQL Server (ISO-Format ohne T)
+            return date.toISOString().slice(0, 19).replace('T', ' ');
+        } catch (error) {
+            customConsole.error('Fehler bei SQL-DateTime-Formatierung:', error);
+            return new Date().toISOString().slice(0, 19).replace('T', ' ');
+        }
+    }
+
+    parseSQLDateTime(sqlDateTime) {
+        try {
+            return this.normalizeTimestamp(sqlDateTime);
+        } catch (error) {
+            customConsole.error('Fehler beim Parsen des SQL-DateTime:', error);
+            return new Date().toISOString();
         }
     }
 
@@ -339,72 +439,51 @@ class DatabaseClient {
         const cacheKey = `${sessionId}_${payload}`;
 
         try {
-            console.log(`Speichere QR-Scan für Session ${sessionId}`);
+            console.log(`[INFO] Speichere QR-Scan für Session ${sessionId}`);
 
             // 1. Prüfe ob bereits in Verarbeitung
             if (this.pendingScans.has(cacheKey)) {
-                return {
-                    success: false,
-                    status: 'processing',
-                    message: 'QR-Code wird bereits verarbeitet'
-                };
+                throw new Error('QR-Code wird bereits verarbeitet (Concurrent-Request)');
             }
 
             // 2. Markiere als in Verarbeitung
             this.pendingScans.set(cacheKey, Date.now());
 
-            // 3. Prüfe Cache (nur 5 Minuten)
+            // 3. Prüfe Cache
             const cachedTime = this.duplicateCache.get(payload);
             if (cachedTime) {
-                const minutesSinceCache = (Date.now() - cachedTime) / (1000 * 60);
-                if (minutesSinceCache < 5) { // Nur 5 Minuten statt 24 Stunden
-                    return {
-                        success: false,
-                        status: 'duplicate_cache',
-                        message: `QR-Code wurde vor ${Math.round(minutesSinceCache)} Minuten bereits gescannt`,
-                        duplicateInfo: {
-                            lastScan: new Date(cachedTime),
-                            minutesAgo: Math.round(minutesSinceCache)
-                        }
-                    };
+                const hoursSinceCache = (Date.now() - cachedTime) / (1000 * 60 * 60);
+                if (hoursSinceCache < 24) {
+                    throw new Error('QR-Code wurde heute bereits gescannt (Cache-Duplikat)');
                 }
             }
 
-            // 4. Prüfe auf Duplikate in Datenbank (nur 10 Minuten statt 24 Stunden)
-            const duplicateInfo = await this.checkQRDuplicate(payload, 10); // 10 Minuten statt 24 Stunden
-            if (duplicateInfo.isDuplicate) {
+            // 4. Prüfe auf Duplikate in Datenbank
+            const isDuplicate = await this.checkQRDuplicate(payload);
+            if (isDuplicate) {
                 // Cache-Update
                 this.duplicateCache.set(payload, Date.now());
-                return {
-                    success: false,
-                    status: 'duplicate_database',
-                    message: `QR-Code wurde bereits ${duplicateInfo.count} mal in den letzten 10 Minuten gescannt`,
-                    duplicateInfo: duplicateInfo
-                };
+                throw new Error('QR-Code wurde heute bereits gescannt (Datenbank-Duplikat)');
             }
 
             // 5. QR-Scan speichern mit Transaction für Atomarität
             const result = await this.transaction(async (request) => {
-                // Nochmalige Duplikat-Prüfung innerhalb der Transaction (nur 10 Minuten)
+                // Nochmalige Duplikat-Prüfung innerhalb der Transaction
                 const finalDupCheck = await request.query(`
                     SELECT COUNT(*) as duplicateCount
                     FROM dbo.QrScans
                     WHERE RawPayload = @payload
-                      AND CapturedTS >= DATEADD(MINUTE, -10, SYSDATETIME())
+                      AND CapturedTS >= DATEADD(HOUR, -24, SYSDATETIME())
                       AND Valid = 1
                 `, {
                     payload: { type: sql.NVarChar, value: payload }
                 });
 
                 if (finalDupCheck.recordset[0].duplicateCount > 0) {
-                    return {
-                        success: false,
-                        status: 'duplicate_transaction',
-                        message: 'QR-Code wurde zwischenzeitlich von anderem Scan erfasst'
-                    };
+                    throw new Error('QR-Code wurde heute bereits gescannt (Transaction-Duplikat-Check)');
                 }
 
-                // Einfügen
+                // Einfügen mit korrekter Zeitstempel-Behandlung
                 const insertResult = await request.query(`
                     INSERT INTO dbo.QrScans (SessionID, RawPayload, Valid, CapturedTS)
                         OUTPUT INSERTED.ID, INSERTED.CapturedTS
@@ -414,74 +493,56 @@ class DatabaseClient {
                     payload: { type: sql.NVarChar, value: payload }
                 });
 
+                const rawResult = insertResult.recordset[0];
+
+                // Zeitstempel normalisieren
                 return {
-                    success: true,
-                    status: 'saved',
-                    data: insertResult.recordset[0],
-                    message: 'QR-Code erfolgreich gespeichert'
+                    ...rawResult,
+                    CapturedTS: this.normalizeTimestamp(rawResult.CapturedTS)
                 };
             });
 
-            if (result.success) {
+            if (result) {
                 // Erfolgreich gespeichert - Cache aktualisieren
                 this.duplicateCache.set(payload, Date.now());
-                console.log(`✅ QR-Scan gespeichert: ID ${result.data.ID}`);
-            }
 
-            return result;
+                customConsole.success(`QR-Scan gespeichert: ID ${result.ID}, Zeit: ${result.CapturedTS}`);
+                return result;
+            }
+            return null;
 
         } catch (error) {
-            console.error('Fehler beim Speichern des QR-Scans:', error);
-            return {
-                success: false,
-                status: 'error',
-                message: `Speicherfehler: ${error.message}`,
-                error: error
-            };
+            customConsole.error('Fehler beim Speichern des QR-Scans:', error);
+            throw error; // Fehler weiterwerfen für UI-Behandlung
         } finally {
             // Immer aus Pending-Set entfernen
             this.pendingScans.delete(cacheKey);
         }
     }
 
-    async checkQRDuplicate(payload, timeWindowMinutes = 10) { // Geändert auf Minuten statt Stunden
+    async checkQRDuplicate(payload, timeWindowHours = 24) {
         try {
-            // Prüfe auf Duplikate in den letzten X Minuten (Standard: 10 Minuten)
+            // Prüfe auf Duplikate in den letzten X Stunden (Standard: 24h)
             const result = await this.query(`
-                SELECT COUNT(*) as duplicateCount,
-                       MAX(CapturedTS) as lastScanTime
+                SELECT COUNT(*) as duplicateCount
                 FROM dbo.QrScans
                 WHERE RawPayload = ?
-                  AND CapturedTS >= DATEADD(MINUTE, -?, SYSDATETIME())
+                  AND CapturedTS >= DATEADD(HOUR, -?, SYSDATETIME())
                   AND Valid = 1
-            `, [payload, timeWindowMinutes]);
+            `, [payload, timeWindowHours]);
 
             const count = result.recordset[0].duplicateCount;
-            const lastScanTime = result.recordset[0].lastScanTime;
 
             if (count > 0) {
-                console.log(`⚠️ QR-Code Duplikat erkannt: ${count} mal in den letzten ${timeWindowMinutes} Minuten`);
-                return {
-                    isDuplicate: true,
-                    count: count,
-                    lastScanTime: lastScanTime,
-                    timeWindowMinutes: timeWindowMinutes
-                };
+                console.log(`[WARN] QR-Code Duplikat erkannt: ${count} mal in den letzten ${timeWindowHours}h`);
+                return true;
             }
 
-            return {
-                isDuplicate: false,
-                count: 0,
-                timeWindowMinutes: timeWindowMinutes
-            };
+            return false;
         } catch (error) {
-            console.error('Fehler bei Duplikat-Prüfung:', error);
+            customConsole.error('Fehler bei Duplikat-Prüfung:', error);
             // Bei Fehler: Als neu behandeln (sicherer Fallback)
-            return {
-                isDuplicate: false,
-                count: 0,
-                error: error.message
-            };
+            return false;
         }
     }
 
@@ -494,9 +555,13 @@ class DatabaseClient {
                 ORDER BY CapturedTS DESC
             `, [limit, sessionId]);
 
-            return result.recordset || [];
+            // Zeitstempel in allen Scan-Ergebnissen normalisieren
+            return result.recordset.map(scan => ({
+                ...scan,
+                CapturedTS: this.normalizeTimestamp(scan.CapturedTS)
+            })) || [];
         } catch (error) {
-            console.error('Fehler beim Abrufen der Session-Scans:', error);
+            customConsole.error('Fehler beim Abrufen der Session-Scans:', error);
             return [];
         }
     }
@@ -517,7 +582,7 @@ class DatabaseClient {
 
             return result.recordset.length > 0 ? result.recordset[0] : null;
         } catch (error) {
-            console.error('Fehler beim Abrufen der Tagesstatistiken:', error);
+            customConsole.error('Fehler beim Abrufen der Tagesstatistiken:', error);
             return null;
         }
     }
@@ -565,9 +630,13 @@ class DatabaseClient {
                 ORDER BY EventTime DESC
             `, [hours, hours, hours]);
 
-            return result.recordset || [];
+            // Zeitstempel in Aktivitäten normalisieren
+            return result.recordset.map(activity => ({
+                ...activity,
+                EventTime: this.normalizeTimestamp(activity.EventTime)
+            })) || [];
         } catch (error) {
-            console.error('Fehler beim Abrufen der letzten Aktivitäten:', error);
+            customConsole.error('Fehler beim Abrufen der letzten Aktivitäten:', error);
             return [];
         }
     }
@@ -601,10 +670,16 @@ class DatabaseClient {
                         (SELECT COUNT(*) FROM dbo.QrScans WHERE CAST(CapturedTS AS DATE) = CAST(SYSDATETIME() AS DATE) AND Valid = 1) as TodayScans
             `);
 
+            // Zeitstempel in Server-Info normalisieren
+            const normalizedServerInfo = {
+                ...serverInfo.recordset[0],
+                ServerTime: this.normalizeTimestamp(serverInfo.recordset[0].ServerTime)
+            };
+
             return {
                 connected: true,
                 connectionTime: connectionTime,
-                server: serverInfo.recordset[0],
+                server: normalizedServerInfo,
                 stats: tableStats.recordset[0],
                 timestamp: new Date().toISOString(),
                 duplicateCache: {
@@ -654,7 +729,7 @@ class DatabaseClient {
             try {
                 await transaction.rollback();
             } catch (rollbackError) {
-                console.error('Fehler beim Rollback der Transaktion:', rollbackError);
+                customConsole.error('Fehler beim Rollback der Transaktion:', rollbackError);
             }
             throw error;
         }
@@ -669,7 +744,8 @@ class DatabaseClient {
                 server: this.config.server,
                 database: this.config.database,
                 user: this.config.user,
-                port: this.config.port
+                port: this.config.port,
+                useUTC: this.config.options.useUTC
             },
             cache: {
                 duplicates: this.duplicateCache.size,
@@ -683,7 +759,7 @@ class DatabaseClient {
             const result = await this.query('SELECT SYSDATETIME() as currentTime, @@VERSION as version');
             return {
                 success: true,
-                serverTime: result.recordset[0].currentTime,
+                serverTime: this.normalizeTimestamp(result.recordset[0].currentTime),
                 version: result.recordset[0].version.split('\n')[0] // Nur erste Zeile
             };
         } catch (error) {
@@ -694,31 +770,20 @@ class DatabaseClient {
         }
     }
 
-    // ===== HELPER METHODS =====
-    formatSQLDateTime(date) {
-        // Formatiert JavaScript Date für SQL Server
-        return date.toISOString().slice(0, 19).replace('T', ' ');
-    }
-
-    parseSQLDateTime(sqlDateTime) {
-        // Parst SQL Server DateTime zu JavaScript Date
-        return new Date(sqlDateTime);
-    }
-
     // ===== DEBUGGING METHODS =====
     async debugInfo() {
         try {
             const health = await this.healthCheck();
             const connectionStatus = this.getConnectionStatus();
 
-            console.log('=== DATABASE DEBUG INFO ===');
-            console.log('Connection Status:', connectionStatus);
-            console.log('Health Check:', health);
-            console.log('============================');
+            console.log('[INFO] === DATABASE DEBUG INFO ===');
+            console.log('[INFO] Connection Status:', connectionStatus);
+            console.log('[INFO] Health Check:', health);
+            console.log('[INFO] ============================');
 
             return { connectionStatus, health };
         } catch (error) {
-            console.error('Debug Info Fehler:', error);
+            customConsole.error('Debug Info Fehler:', error);
             return { error: error.message };
         }
     }
@@ -727,7 +792,7 @@ class DatabaseClient {
     clearDuplicateCache() {
         const oldSize = this.duplicateCache.size;
         this.duplicateCache.clear();
-        console.log(`🧹 Duplikat-Cache geleert: ${oldSize} Einträge entfernt`);
+        console.log(`[CLEAN] Duplikat-Cache geleert: ${oldSize} Einträge entfernt`);
     }
 
     getDuplicateCacheStats() {

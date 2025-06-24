@@ -149,7 +149,33 @@ class WareneingangApp {
             sessionId: session.ID
         };
 
-        this.sessionStartTime = new Date(session.StartTS);
+        // Korrigierte Zeitstempel-Behandlung
+        try {
+            // Session-Startzeit richtig parsen
+            if (session.StartTS) {
+                // Falls der Zeitstempel als ISO-String kommt
+                if (typeof session.StartTS === 'string') {
+                    this.sessionStartTime = new Date(session.StartTS);
+                } else {
+                    this.sessionStartTime = new Date(session.StartTS);
+                }
+
+                // Validierung der geparsten Zeit
+                if (isNaN(this.sessionStartTime.getTime())) {
+                    console.warn('Ungültiger Session-Zeitstempel, verwende aktuelle Zeit');
+                    this.sessionStartTime = new Date();
+                }
+            } else {
+                console.warn('Kein Session-Zeitstempel vorhanden, verwende aktuelle Zeit');
+                this.sessionStartTime = new Date();
+            }
+
+            console.log('Session-Startzeit gesetzt:', this.sessionStartTime.toISOString());
+        } catch (error) {
+            console.error('Fehler beim Parsen der Session-Startzeit:', error);
+            this.sessionStartTime = new Date(); // Fallback auf aktuelle Zeit
+        }
+
         this.scanCount = 0;
 
         // Reset alle Duplikat-Sets bei neuer Anmeldung
@@ -214,9 +240,14 @@ class WareneingangApp {
 
     // ===== SESSION TIMER =====
     startSessionTimer() {
+        // Bestehenden Timer stoppen falls vorhanden
+        this.stopSessionTimer();
+
         this.sessionTimer = setInterval(() => {
             this.updateSessionTime();
         }, 1000);
+
+        // Sofort einmal ausführen
         this.updateSessionTime();
     }
 
@@ -228,21 +259,49 @@ class WareneingangApp {
     }
 
     updateSessionTime() {
-        if (!this.sessionStartTime) return;
+        if (!this.sessionStartTime) {
+            document.getElementById('sessionTime').textContent = '00:00:00';
+            return;
+        }
 
-        const now = new Date();
-        const elapsed = Math.floor((now - this.sessionStartTime) / 1000);
-        const timeString = this.formatDuration(elapsed);
+        try {
+            const now = new Date();
+            const elapsedMs = now.getTime() - this.sessionStartTime.getTime();
 
-        document.getElementById('sessionTime').textContent = timeString;
+            // Negative Zeiten abfangen
+            if (elapsedMs < 0) {
+                console.warn('Negative Session-Zeit erkannt, korrigiere Startzeit');
+                this.sessionStartTime = new Date();
+                document.getElementById('sessionTime').textContent = '00:00:00';
+                return;
+            }
+
+            const elapsedSeconds = Math.floor(elapsedMs / 1000);
+            const timeString = this.formatDuration(elapsedSeconds);
+
+            document.getElementById('sessionTime').textContent = timeString;
+
+        } catch (error) {
+            console.error('Fehler bei Session-Zeit-Update:', error);
+            document.getElementById('sessionTime').textContent = '00:00:00';
+        }
     }
 
     formatDuration(seconds) {
+        // Sicherstellen dass seconds ein positiver Integer ist
+        if (!Number.isInteger(seconds) || seconds < 0) {
+            console.warn('Ungültige Sekunden für formatDuration:', seconds);
+            return '00:00:00';
+        }
+
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
         const secs = seconds % 60;
 
-        return [hours, minutes, secs]
+        // Maximale Anzeige begrenzen (999 Stunden)
+        const displayHours = Math.min(hours, 999);
+
+        return [displayHours, minutes, secs]
             .map(v => v.toString().padStart(2, '0'))
             .join(':');
     }
@@ -553,6 +612,18 @@ class WareneingangApp {
             return;
         }
 
+        // 4. Session-Duplikat-Prüfung
+        if (this.sessionScannedCodes.has(qrData)) {
+            this.showNotification('warning', 'Bereits gescannt', 'Dieser QR-Code wurde in dieser Session bereits erfasst');
+            return;
+        }
+
+        // 5. Globales Duplikat-Set prüfen
+        if (this.globalScannedCodes.has(qrData)) {
+            this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde heute bereits gescannt');
+            return;
+        }
+
         // Verarbeitung starten
         this.lastProcessedQR = qrData;
         this.lastProcessedTime = now;
@@ -562,11 +633,12 @@ class WareneingangApp {
         console.log('📄 QR-Code erkannt und wird verarbeitet:', qrData);
 
         try {
-            // In Datenbank speichern - mit strukturierter Rückgabe
+            // In Datenbank speichern
             const result = await window.electronAPI.qr.saveScan(this.currentUser.sessionId, qrData);
 
-            if (result.success) {
-                // Erfolgreiche Speicherung
+            if (result) {
+                // Erfolgreiche Speicherung - zu Duplikat-Sets hinzufügen
+                this.globalScannedCodes.add(qrData);
                 this.sessionScannedCodes.add(qrData);
 
                 // Scan-Count erhöhen
@@ -575,11 +647,10 @@ class WareneingangApp {
 
                 // Zu Recent Scans hinzufügen
                 this.addToRecentScans({
-                    id: result.data.ID,
-                    timestamp: new Date(result.data.CapturedTS),
+                    id: result.ID,
+                    timestamp: new Date(),
                     content: qrData,
-                    user: this.currentUser.name,
-                    status: 'success'
+                    user: this.currentUser.name
                 });
 
                 // Erfolgs-Feedback zeigen
@@ -589,82 +660,25 @@ class WareneingangApp {
                 document.getElementById('lastScanTime').textContent =
                     new Date().toLocaleTimeString('de-DE');
 
-                console.log(`✅ QR-Code gespeichert für ${this.currentUser.name} (ID: ${result.data.ID})`);
+                console.log(`✅ QR-Code gespeichert für ${this.currentUser.name} (ID: ${result.ID})`);
 
             } else {
-                // Behandle verschiedene Nicht-Erfolg-Status
-                this.handleScanResult(result, qrData);
+                throw new Error('QR-Code konnte nicht gespeichert werden');
             }
 
         } catch (error) {
             console.error('QR-Code Verarbeitung fehlgeschlagen:', error);
-            this.showNotification('error', 'Speicher-Fehler', error.message);
 
-            // Auch Fehlgeschlagene Scans in Historie zeigen
-            this.addToRecentScans({
-                id: null,
-                timestamp: new Date(),
-                content: qrData,
-                user: this.currentUser.name,
-                status: 'error',
-                error: error.message
-            });
+            // Bei Duplikat-Fehler zu lokalen Sets hinzufügen
+            if (error.message.includes('bereits gescannt') || error.message.includes('Duplikat')) {
+                this.globalScannedCodes.add(qrData);
+                this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde bereits erfasst');
+            } else {
+                this.showNotification('error', 'Speicher-Fehler', error.message);
+            }
         } finally {
             // Verarbeitung abgeschlossen - aus Pending-Set entfernen
             this.pendingScans.delete(qrData);
-        }
-    }
-
-    // ===== NEUE METHODE ZUR BEHANDLUNG VON SCAN-ERGEBNISSEN =====
-    handleScanResult(result, qrData) {
-        const { status, message, duplicateInfo } = result;
-
-        switch (status) {
-            case 'duplicate_cache':
-            case 'duplicate_database':
-            case 'duplicate_transaction':
-                // Duplikate: Warnung zeigen aber trotzdem in Recent Scans aufnehmen
-                this.showNotification('warning', 'Duplikat erkannt', message);
-
-                this.addToRecentScans({
-                    id: null,
-                    timestamp: new Date(),
-                    content: qrData,
-                    user: this.currentUser.name,
-                    status: 'duplicate',
-                    message: message,
-                    duplicateInfo: duplicateInfo
-                });
-
-                // Visuelles Feedback für Duplikat
-                this.showDuplicateWarning(qrData, message);
-                break;
-
-            case 'rate_limit':
-                this.showNotification('warning', 'Zu schnell', message);
-                break;
-
-            case 'database_offline':
-                this.showNotification('error', 'Datenbank offline', message);
-                break;
-
-            case 'processing':
-                this.showNotification('info', 'Wird verarbeitet', message);
-                break;
-
-            case 'error':
-            default:
-                this.showNotification('error', 'Fehler', message);
-
-                this.addToRecentScans({
-                    id: null,
-                    timestamp: new Date(),
-                    content: qrData,
-                    user: this.currentUser.name,
-                    status: 'error',
-                    message: message
-                });
-                break;
         }
     }
 
@@ -696,28 +710,6 @@ class WareneingangApp {
         this.playSuccessSound();
     }
 
-    // ===== NEUE METHODE FÜR DUPLIKAT-WARNUNG =====
-    showDuplicateWarning(qrData, message) {
-        // Visuelles Feedback im Scanner (orange für Duplikat)
-        const overlay = document.querySelector('.scanner-overlay');
-        overlay.style.background = 'rgba(255, 193, 7, 0.4)'; // Orange/Gelb
-
-        setTimeout(() => {
-            overlay.style.background = '';
-        }, 1500);
-
-        // Kurze visuelle Rückmeldung
-        const statusText = document.getElementById('scannerStatusText');
-        const originalText = statusText.textContent;
-        statusText.textContent = 'Duplikat erkannt';
-        statusText.style.color = '#ffc107';
-
-        setTimeout(() => {
-            statusText.textContent = originalText;
-            statusText.style.color = '';
-        }, 2000);
-    }
-
     playSuccessSound() {
         try {
             // Einfacher Erfolgs-Sound
@@ -742,7 +734,7 @@ class WareneingangApp {
         }
     }
 
-    // ===== RECENT SCANS MIT VERBESSERTER STATUS-ANZEIGE =====
+    // ===== RECENT SCANS =====
     addToRecentScans(scan) {
         this.recentScans.unshift(scan);
 
@@ -769,41 +761,12 @@ class WareneingangApp {
             const contentPreview = scan.content.length > 100 ?
                 scan.content.substring(0, 100) + '...' : scan.content;
 
-            // Status-abhängige Styling
-            let statusIcon = '';
-            let statusClass = '';
-            let statusInfo = '';
-
-            switch (scan.status) {
-                case 'success':
-                    statusIcon = '✅';
-                    statusClass = 'scan-success';
-                    statusInfo = `ID: ${scan.id}`;
-                    break;
-                case 'duplicate':
-                    statusIcon = '⚠️';
-                    statusClass = 'scan-duplicate';
-                    statusInfo = scan.message || 'Duplikat';
-                    break;
-                case 'error':
-                    statusIcon = '❌';
-                    statusClass = 'scan-error';
-                    statusInfo = scan.message || scan.error || 'Fehler';
-                    break;
-                default:
-                    statusIcon = 'ℹ️';
-                    statusClass = 'scan-info';
-                    statusInfo = scan.message || 'Unbekannt';
-            }
-
             return `
-                <div class="scan-item ${statusClass}">
+                <div class="scan-item">
                     <div class="scan-header">
                         <span class="scan-time">${timeString}</span>
-                        <span class="scan-status">${statusIcon}</span>
                     </div>
                     <div class="scan-content">${contentPreview}</div>
-                    <div class="scan-info">${statusInfo}</div>
                 </div>
             `;
         }).join('');
@@ -846,10 +809,37 @@ class WareneingangApp {
     startClockUpdate() {
         const updateClock = () => {
             const now = new Date();
-            document.getElementById('currentTime').textContent =
-                now.toLocaleTimeString('de-DE');
-            document.getElementById('dateText').textContent =
-                now.toLocaleDateString('de-DE');
+
+            // Korrekte deutsche Zeitformatierung mit expliziter Zeitzone
+            try {
+                const timeOptions = {
+                    timeZone: 'Europe/Berlin',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false
+                };
+
+                const dateOptions = {
+                    timeZone: 'Europe/Berlin',
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric'
+                };
+
+                document.getElementById('currentTime').textContent =
+                    now.toLocaleTimeString('de-DE', timeOptions);
+                document.getElementById('dateText').textContent =
+                    now.toLocaleDateString('de-DE', dateOptions);
+
+            } catch (error) {
+                console.error('Fehler bei Zeitformatierung:', error);
+                // Fallback zu einfacher Formatierung
+                document.getElementById('currentTime').textContent =
+                    now.toLocaleTimeString('de-DE');
+                document.getElementById('dateText').textContent =
+                    now.toLocaleDateString('de-DE');
+            }
         };
 
         updateClock();

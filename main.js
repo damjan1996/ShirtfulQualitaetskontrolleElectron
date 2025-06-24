@@ -297,6 +297,15 @@ class WareneingangMainApp {
                         userId: userId,
                         startTime: session.StartTS
                     };
+
+                    // Zeitstempel normalisieren für konsistente Übertragung
+                    const normalizedSession = {
+                        ...session,
+                        StartTS: this.normalizeTimestamp(session.StartTS)
+                    };
+
+                    console.log('Session erstellt mit normalisiertem Zeitstempel:', normalizedSession.StartTS);
+                    return normalizedSession;
                 }
 
                 return session;
@@ -325,46 +334,40 @@ class WareneingangMainApp {
             }
         });
 
-        // ===== QR-CODE OPERATIONEN MIT STRUKTURIERTEN RÜCKGABEWERTEN =====
+        // ===== QR-CODE OPERATIONEN MIT RATE LIMITING =====
         ipcMain.handle('qr-scan-save', async (event, sessionId, payload) => {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
-                    return {
-                        success: false,
-                        status: 'database_offline',
-                        message: 'Datenbank nicht verbunden'
-                    };
+                    throw new Error('Datenbank nicht verbunden');
                 }
 
                 // Rate Limiting prüfen
                 if (!this.checkQRScanRateLimit(sessionId)) {
-                    return {
-                        success: false,
-                        status: 'rate_limit',
-                        message: 'Zu viele QR-Scans pro Minute - bitte warten Sie'
-                    };
+                    throw new Error('Zu viele QR-Scans pro Minute - bitte warten Sie');
                 }
 
                 // Payload bereinigen (BOM entfernen falls vorhanden)
                 const cleanPayload = payload.replace(/^\ufeff/, '');
 
-                // Strukturierte Rückgabe vom DatabaseClient verwenden
                 const result = await this.dbClient.saveQRScan(sessionId, cleanPayload);
 
-                // Rate Limit Counter nur bei erfolgreichen Scans aktualisieren
-                if (result.success) {
-                    this.updateQRScanRateLimit(sessionId);
-                }
+                // Rate Limit Counter aktualisieren
+                this.updateQRScanRateLimit(sessionId);
 
                 return result;
             } catch (error) {
                 console.error('QR Scan Save Fehler:', error);
-                return {
-                    success: false,
-                    status: 'error',
-                    message: `Systemfehler: ${error.message}`,
-                    error: error
-                };
+
+                // Spezielle Behandlung für Duplikat-Fehler
+                if (error.message.includes('bereits gescannt') ||
+                    error.message.includes('Duplikat') ||
+                    error.message.includes('bereits verarbeitet')) {
+
+                    // Nicht als systemkritischen Fehler behandeln
+                    return null;
+                }
+
+                throw error;
             }
         });
 
@@ -431,6 +434,34 @@ class WareneingangMainApp {
             app.relaunch();
             app.exit();
         });
+    }
+
+    // ===== ZEITSTEMPEL NORMALISIERUNG =====
+    normalizeTimestamp(timestamp) {
+        try {
+            let date;
+
+            if (timestamp instanceof Date) {
+                date = timestamp;
+            } else if (typeof timestamp === 'string') {
+                date = new Date(timestamp);
+            } else {
+                date = new Date(timestamp);
+            }
+
+            // Prüfe auf gültiges Datum
+            if (isNaN(date.getTime())) {
+                console.warn('Ungültiger Zeitstempel für Normalisierung:', timestamp);
+                date = new Date(); // Fallback auf aktuelle Zeit
+            }
+
+            // ISO-String für konsistente Übertragung
+            return date.toISOString();
+
+        } catch (error) {
+            console.error('Fehler bei Zeitstempel-Normalisierung:', error, timestamp);
+            return new Date().toISOString(); // Fallback
+        }
     }
 
     // ===== QR-SCAN RATE LIMITING =====
@@ -541,13 +572,19 @@ class WareneingangMainApp {
                     // Rate Limit für neue Session initialisieren
                     this.qrScanRateLimit.set(session.ID, []);
 
+                    // Session-Daten mit normalisiertem Zeitstempel senden
+                    const normalizedSession = {
+                        ...session,
+                        StartTS: this.normalizeTimestamp(session.StartTS)
+                    };
+
                     this.sendToRenderer('user-login', {
                         user,
-                        session,
+                        session: normalizedSession,
                         timestamp: new Date().toISOString()
                     });
 
-                    console.log(`✅ Benutzer angemeldet: ${user.BenutzerName}`);
+                    console.log(`✅ Benutzer angemeldet: ${user.BenutzerName} (Session-Start: ${normalizedSession.StartTS})`);
                 } else {
                     this.sendToRenderer('rfid-scan-error', {
                         tagId,
