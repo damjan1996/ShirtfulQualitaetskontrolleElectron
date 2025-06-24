@@ -1,6 +1,9 @@
 const sql = require('mssql');
 require('dotenv').config();
 
+// Console-Utils für bessere Ausgabe
+const console = require('../utils/console-utils');
+
 class DatabaseClient {
     constructor() {
         this.pool = null;
@@ -34,7 +37,7 @@ class DatabaseClient {
             }
         };
 
-        console.log('Database client initialisiert mit Konfiguration:', {
+        console.database('Database client initialisiert mit Konfiguration:', {
             server: this.config.server,
             database: this.config.database,
             user: this.config.user,
@@ -76,10 +79,10 @@ class DatabaseClient {
         }
 
         try {
-            console.log('Verbinde mit SQL Server...');
-            console.log(`Server: ${this.config.server}:${this.config.port}`);
-            console.log(`Datenbank: ${this.config.database}`);
-            console.log(`Benutzer: ${this.config.user}`);
+            console.database('Verbinde mit SQL Server...');
+            console.info(`Server: ${this.config.server}:${this.config.port}`);
+            console.info(`Datenbank: ${this.config.database}`);
+            console.info(`Benutzer: ${this.config.user}`);
 
             // Connection Pool erstellen
             this.pool = await sql.connect(this.config);
@@ -89,8 +92,8 @@ class DatabaseClient {
 
             if (result.recordset && result.recordset[0].test === 1) {
                 this.isConnected = true;
-                console.log('✅ Datenbank erfolgreich verbunden');
-                console.log(`Server-Zeit: ${result.recordset[0].serverTime}`);
+                console.success('Datenbank erfolgreich verbunden');
+                console.info(`Server-Zeit: ${result.recordset[0].serverTime}`);
 
                 // Tabellen validieren
                 await this.validateTables();
@@ -100,15 +103,15 @@ class DatabaseClient {
             }
 
         } catch (error) {
-            console.error('❌ Datenbankverbindung fehlgeschlagen:', error.message);
+            console.error('Datenbankverbindung fehlgeschlagen:', error.message);
 
             // Hilfreiche Fehlermeldungen
             if (error.code === 'ELOGIN') {
-                console.error('💡 Anmeldung fehlgeschlagen - prüfen Sie Benutzername/Passwort in .env');
+                console.error('Anmeldung fehlgeschlagen - prüfen Sie Benutzername/Passwort in .env');
             } else if (error.code === 'ETIMEOUT') {
-                console.error('💡 Verbindungs-Timeout - prüfen Sie Server-Adresse und Firewall');
+                console.error('Verbindungs-Timeout - prüfen Sie Server-Adresse und Firewall');
             } else if (error.code === 'ENOTFOUND') {
-                console.error('💡 Server nicht gefunden - prüfen Sie MSSQL_SERVER in .env');
+                console.error('Server nicht gefunden - prüfen Sie MSSQL_SERVER in .env');
             }
 
             this.isConnected = false;
@@ -133,12 +136,12 @@ class DatabaseClient {
                     if (result.recordset[0].tableCount > 0) {
                         existingTables.push(tableName);
 
-                        // Zeilen zählen für Info (mit korrekter SQL-Syntax)
+                        // Zeilen zählen für Info - mit korrierter SQL-Syntax
                         try {
-                            const countResult = await this.query(`SELECT COUNT(*) as rowCount FROM dbo.${tableName}`);
-                            console.log(`✅ Tabelle ${tableName}: ${countResult.recordset[0].rowCount} Einträge`);
+                            const countResult = await this.query(`SELECT COUNT(*) as [record_count] FROM dbo.[${tableName}]`);
+                            console.success(`Tabelle ${tableName}: ${countResult.recordset[0].record_count} Einträge`);
                         } catch (countError) {
-                            console.log(`✅ Tabelle ${tableName}: vorhanden (Zählung fehlgeschlagen)`);
+                            console.success(`Tabelle ${tableName}: vorhanden (Zählung fehlgeschlagen: ${countError.message})`);
                         }
                     } else {
                         missingTables.push(tableName);
@@ -196,20 +199,20 @@ class DatabaseClient {
             let paramIndex = 0;
             processedQuery = processedQuery.replace(/\?/g, () => `@param${paramIndex++}`);
 
-            console.log('Führe Query aus:', processedQuery);
+            console.database('Führe Query aus:', processedQuery.substring(0, 200) + (processedQuery.length > 200 ? '...' : ''));
             if (parameters.length > 0) {
-                console.log('Parameter:', parameters);
+                console.info('Parameter:', parameters);
             }
 
             const result = await request.query(processedQuery);
 
-            console.log(`Query erfolgreich. Betroffene Zeilen: ${result.rowsAffected}, Datensätze: ${result.recordset?.length || 0}`);
+            console.success(`Query erfolgreich. Betroffene Zeilen: ${result.rowsAffected}, Datensätze: ${result.recordset?.length || 0}`);
 
             return result;
 
         } catch (error) {
             console.error('Datenbank-Query-Fehler:', error.message);
-            console.error('Query:', queryString);
+            console.error('Query:', queryString.substring(0, 200));
             console.error('Parameter:', parameters);
             throw error;
         }
@@ -226,7 +229,7 @@ class DatabaseClient {
                 await this.pool.close();
                 this.pool = null;
                 this.isConnected = false;
-                console.log('✅ Datenbankverbindung geschlossen');
+                console.success('Datenbankverbindung geschlossen');
             } catch (error) {
                 console.error('Fehler beim Schließen der Datenbankverbindung:', error);
             }
@@ -383,7 +386,7 @@ class DatabaseClient {
                 // Einfügen
                 const insertResult = await request.query(`
                     INSERT INTO dbo.QrScans (SessionID, RawPayload, Valid, CapturedTS)
-                    OUTPUT INSERTED.ID, INSERTED.CapturedTS
+                        OUTPUT INSERTED.ID, INSERTED.CapturedTS
                     VALUES (@sessionId, @payload, 1, SYSDATETIME())
                 `, {
                     sessionId: { type: sql.BigInt, value: sessionId },

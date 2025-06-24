@@ -2,6 +2,16 @@ const { app, BrowserWindow, ipcMain, dialog, globalShortcut } = require('electro
 const path = require('path');
 require('dotenv').config();
 
+// Console-Encoding für Windows setzen
+if (process.platform === 'win32') {
+    try {
+        process.stdout.setEncoding('utf8');
+        process.stderr.setEncoding('utf8');
+    } catch (error) {
+        // Encoding setzen fehlgeschlagen - nicht kritisch
+    }
+}
+
 // Nur sichere Module laden
 const DatabaseClient = require('./db/db-client');
 
@@ -39,6 +49,18 @@ class WareneingangMainApp {
     }
 
     initializeApp() {
+        // Hardware-Beschleunigung für bessere Kompatibilität anpassen
+        app.commandLine.appendSwitch('--disable-gpu-process-crash-limit');
+        app.commandLine.appendSwitch('--disable-gpu-sandbox');
+        app.commandLine.appendSwitch('--disable-software-rasterizer');
+        app.commandLine.appendSwitch('--disable-features', 'VizDisplayCompositor');
+
+        // Für Windows: GPU-Probleme vermeiden
+        if (process.platform === 'win32') {
+            app.commandLine.appendSwitch('--disable-gpu');
+            app.commandLine.appendSwitch('--disable-gpu-compositing');
+        }
+
         // App bereit
         app.whenReady().then(() => {
             this.createMainWindow();
@@ -81,13 +103,21 @@ class WareneingangMainApp {
                 contextIsolation: true,
                 preload: path.join(__dirname, 'preload.js'),
                 enableRemoteModule: false,
-                webSecurity: true
+                webSecurity: true,
+                // GPU-Problem-Workarounds
+                disableBlinkFeatures: 'Accelerated2dCanvas,AcceleratedSmallCanvases',
+                enableBlinkFeatures: '',
+                hardwareAcceleration: false
             },
             show: false,
             title: 'RFID Wareneingang - Shirtful',
             autoHideMenuBar: true,
             frame: true,
-            titleBarStyle: 'default'
+            titleBarStyle: 'default',
+            // Windows-spezifische Optionen
+            ...(process.platform === 'win32' && {
+                icon: path.join(__dirname, 'assets/icon.ico')
+            })
         });
 
         // Renderer laden
@@ -115,10 +145,27 @@ class WareneingangMainApp {
                 event.preventDefault();
             }
         });
+
+        // WebContents-Fehler abfangen
+        this.mainWindow.webContents.on('render-process-gone', (event, details) => {
+            console.error('Renderer-Prozess abgestürzt:', details);
+
+            if (details.reason !== 'clean-exit') {
+                dialog.showErrorBox(
+                    'Anwendungsfehler',
+                    'Die Anwendung ist unerwartet beendet worden. Sie wird neu gestartet.'
+                );
+
+                // Neustart nach kurzer Verzögerung
+                setTimeout(() => {
+                    this.createMainWindow();
+                }, 1000);
+            }
+        });
     }
 
     async initializeComponents() {
-        console.log('🚀 Initialisiere Systemkomponenten...');
+        console.log('🔄 Initialisiere Systemkomponenten...');
 
         // Datenbank zuerst
         await this.initializeDatabase();
@@ -330,7 +377,7 @@ class WareneingangMainApp {
 
         ipcMain.handle('get-system-info', async (event) => {
             return {
-                version: app.getVersion(),
+                version: app.getVersion() || '1.0.0',
                 electronVersion: process.versions.electron,
                 nodeVersion: process.versions.node,
                 platform: process.platform,
@@ -603,7 +650,13 @@ class WareneingangMainApp {
 // ===== ERROR HANDLING =====
 process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
-    app.quit();
+
+    // Versuche die App sauber zu beenden
+    if (app) {
+        app.quit();
+    } else {
+        process.exit(1);
+    }
 });
 
 process.on('unhandledRejection', (reason, promise) => {

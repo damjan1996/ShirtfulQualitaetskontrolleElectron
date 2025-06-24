@@ -15,9 +15,9 @@
     "npm": ">=8.0.0"
   },
   "scripts": {
-    "start": "electron .",
-    "dev": "cross-env NODE_ENV=development electron .",
-    "debug": "cross-env NODE_ENV=development DEBUG=true electron . --inspect=9229",
+    "start": "cross-env NODE_ENV=production FORCE_COLOR=1 electron .",
+    "dev": "cross-env NODE_ENV=development FORCE_COLOR=1 electron .",
+    "debug": "cross-env NODE_ENV=development DEBUG=true FORCE_COLOR=1 electron . --inspect=9229",
     "test": "node test.js",
     "test-quick": "node scripts/quick-test.js",
     "setup": "node setup.js",
@@ -29,7 +29,10 @@
     "install-rebuild": "npm install && npm run rebuild-safe",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
-    "dist": "electron-builder --publish=never"
+    "build:win64": "electron-builder --win --x64",
+    "build:win32": "electron-builder --win --ia32",
+    "dist": "electron-builder --publish=never",
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "dotenv": "^16.3.1",
@@ -68,6 +71,13 @@
       "!**/{appveyor.yml,.travis.yml,circle.yml}",
       "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
     ],
+    "extraResources": [
+      {
+        "from": ".env.example",
+        "to": ".env.example",
+        "filter": ["**/*"]
+      }
+    ],
     "win": {
       "target": [
         {
@@ -78,7 +88,9 @@
         }
       ],
       "icon": "build/icon.ico",
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "asInvoker",
+      "artifactName": "${productName} Setup ${version}.${ext}",
+      "publish": null
     },
     "nsis": {
       "oneClick": false,
@@ -88,10 +100,37 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Wareneingang RFID QR",
       "language": "1031",
-      "artifactName": "${productName} Setup ${version}.${ext}",
       "deleteAppDataOnUninstall": false,
       "perMachine": false,
-      "menuCategory": "Shirtful"
+      "menuCategory": "Shirtful",
+      "installerIcon": "build/installer.ico",
+      "uninstallerIcon": "build/uninstaller.ico",
+      "include": "build/installer-script.nsh"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.business"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Office"
     }
   },
   "keywords": [
@@ -100,6 +139,8 @@
     "wareneingang",
     "shirtful",
     "electron",
-    "desktop"
+    "desktop",
+    "warehouse",
+    "scanning"
   ]
 }
