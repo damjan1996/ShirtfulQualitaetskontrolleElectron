@@ -589,7 +589,7 @@ class WareneingangApp {
         }
     }
 
-    // ===== QR-CODE VERARBEITUNG MIT VERBESSERTER DUPLIKAT-VERMEIDUNG =====
+    // ===== QR-CODE VERARBEITUNG MIT STRUKTURIERTEN ANTWORTEN =====
     async handleQRCodeDetected(qrData) {
         const now = Date.now();
 
@@ -612,18 +612,6 @@ class WareneingangApp {
             return;
         }
 
-        // 4. Session-Duplikat-Prüfung
-        if (this.sessionScannedCodes.has(qrData)) {
-            this.showNotification('warning', 'Bereits gescannt', 'Dieser QR-Code wurde in dieser Session bereits erfasst');
-            return;
-        }
-
-        // 5. Globales Duplikat-Set prüfen
-        if (this.globalScannedCodes.has(qrData)) {
-            this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde heute bereits gescannt');
-            return;
-        }
-
         // Verarbeitung starten
         this.lastProcessedQR = qrData;
         this.lastProcessedTime = now;
@@ -633,62 +621,114 @@ class WareneingangApp {
         console.log('📄 QR-Code erkannt und wird verarbeitet:', qrData);
 
         try {
-            // In Datenbank speichern
+            // In Datenbank speichern - gibt jetzt immer strukturierte Antwort zurück
             const result = await window.electronAPI.qr.saveScan(this.currentUser.sessionId, qrData);
 
-            if (result) {
-                // Erfolgreiche Speicherung - zu Duplikat-Sets hinzufügen
-                this.globalScannedCodes.add(qrData);
-                this.sessionScannedCodes.add(qrData);
-
-                // Scan-Count erhöhen
-                this.scanCount++;
-                this.updateUserDisplay();
-
-                // Zu Recent Scans hinzufügen
-                this.addToRecentScans({
-                    id: result.ID,
-                    timestamp: new Date(),
-                    content: qrData,
-                    user: this.currentUser.name
-                });
-
-                // Erfolgs-Feedback zeigen
-                this.showScanSuccess(qrData);
-
-                // Letzte Scan-Zeit aktualisieren
-                document.getElementById('lastScanTime').textContent =
-                    new Date().toLocaleTimeString('de-DE');
-
-                console.log(`✅ QR-Code gespeichert für ${this.currentUser.name} (ID: ${result.ID})`);
-
-            } else {
-                throw new Error('QR-Code konnte nicht gespeichert werden');
-            }
+            // Alle Scan-Ergebnisse anzeigen (Version 1.0.1 Feature)
+            this.handleScanResult(result, qrData);
 
         } catch (error) {
             console.error('QR-Code Verarbeitung fehlgeschlagen:', error);
 
-            // Bei Duplikat-Fehler zu lokalen Sets hinzufügen
-            if (error.message.includes('bereits gescannt') || error.message.includes('Duplikat')) {
-                this.globalScannedCodes.add(qrData);
-                this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde bereits erfasst');
-            } else {
-                this.showNotification('error', 'Speicher-Fehler', error.message);
-            }
+            // Auch bei unerwarteten Fehlern strukturierte Antwort erstellen
+            const errorResult = {
+                success: false,
+                status: 'error',
+                message: `Unerwarteter Fehler: ${error.message}`,
+                data: null,
+                timestamp: new Date().toISOString()
+            };
+
+            this.handleScanResult(errorResult, qrData);
+
         } finally {
             // Verarbeitung abgeschlossen - aus Pending-Set entfernen
             this.pendingScans.delete(qrData);
         }
     }
 
-    showScanSuccess(qrData) {
+    // ===== STRUKTURIERTE SCAN-RESULT-BEHANDLUNG =====
+    handleScanResult(result, qrData) {
+        const { success, status, message, data, duplicateInfo } = result;
+
+        console.log('QR-Scan Ergebnis:', { success, status, message });
+
+        // Zu Recent Scans hinzufügen (alle Ergebnisse)
+        const scanItem = {
+            id: data?.ID || `temp_${Date.now()}`,
+            timestamp: new Date(),
+            content: qrData,
+            user: this.currentUser.name,
+            status: status,
+            message: message,
+            success: success,
+            duplicateInfo: duplicateInfo
+        };
+
+        this.addToRecentScans(scanItem);
+
+        // Visual Feedback je nach Status
+        if (success) {
+            // Erfolgreiche Speicherung
+            this.globalScannedCodes.add(qrData);
+            this.sessionScannedCodes.add(qrData);
+            this.scanCount++;
+            this.updateUserDisplay();
+            this.showScanSuccess(qrData, 'success');
+            this.showNotification('success', 'QR-Code gespeichert', message);
+        } else {
+            // Verschiedene Fehler/Duplikat-Typen
+            switch (status) {
+                case 'duplicate_cache':
+                case 'duplicate_database':
+                case 'duplicate_transaction':
+                    this.globalScannedCodes.add(qrData);
+                    this.showScanSuccess(qrData, 'duplicate');
+                    this.showNotification('warning', 'Duplikat erkannt', message);
+                    break;
+
+                case 'rate_limit':
+                    this.showScanSuccess(qrData, 'warning');
+                    this.showNotification('warning', 'Rate Limit', message);
+                    break;
+
+                case 'processing':
+                    this.showScanSuccess(qrData, 'info');
+                    this.showNotification('info', 'Verarbeitung', message);
+                    break;
+
+                case 'database_offline':
+                case 'error':
+                default:
+                    this.showScanSuccess(qrData, 'error');
+                    this.showNotification('error', 'Fehler', message);
+                    break;
+            }
+        }
+
+        // Letzte Scan-Zeit aktualisieren
+        document.getElementById('lastScanTime').textContent =
+            new Date().toLocaleTimeString('de-DE');
+    }
+
+    showScanSuccess(qrData, type = 'success') {
         // Visuelles Feedback im Scanner
         const overlay = document.querySelector('.scanner-overlay');
-        overlay.style.background = 'rgba(40, 167, 69, 0.3)';
+
+        // CSS-Klassen je nach Typ
+        const feedbackClasses = {
+            success: 'scan-feedback-success',
+            duplicate: 'scan-feedback-duplicate',
+            warning: 'scan-feedback-duplicate',
+            error: 'scan-feedback-error',
+            info: 'scan-feedback-success'
+        };
+
+        const feedbackClass = feedbackClasses[type] || 'scan-feedback-success';
+        overlay.classList.add(feedbackClass);
 
         setTimeout(() => {
-            overlay.style.background = '';
+            overlay.classList.remove(feedbackClass);
         }, 1000);
 
         // Vollbild-Erfolg anzeigen
@@ -700,19 +740,29 @@ class WareneingangApp {
             qrData.substring(0, 50) + '...' : qrData;
         successDetails.textContent = displayText;
 
+        // Overlay-Farbe je nach Typ
+        if (type === 'duplicate' || type === 'warning') {
+            successOverlay.style.background = 'rgba(255, 193, 7, 0.9)';
+        } else if (type === 'error') {
+            successOverlay.style.background = 'rgba(220, 53, 69, 0.9)';
+        } else {
+            successOverlay.style.background = 'rgba(40, 167, 69, 0.9)';
+        }
+
         successOverlay.classList.add('show');
 
         setTimeout(() => {
             successOverlay.classList.remove('show');
+            successOverlay.style.background = ''; // Reset
         }, 2000);
 
-        // Sound-Feedback (optional)
-        this.playSuccessSound();
+        // Sound-Feedback
+        this.playSuccessSound(type);
     }
 
-    playSuccessSound() {
+    playSuccessSound(type = 'success') {
         try {
-            // Einfacher Erfolgs-Sound
+            // Verschiedene Töne je nach Typ
             const context = new (window.AudioContext || window.webkitAudioContext)();
             const oscillator = context.createOscillator();
             const gainNode = context.createGain();
@@ -720,8 +770,17 @@ class WareneingangApp {
             oscillator.connect(gainNode);
             gainNode.connect(context.destination);
 
-            oscillator.frequency.setValueAtTime(800, context.currentTime);
-            oscillator.frequency.setValueAtTime(1000, context.currentTime + 0.1);
+            // Töne je nach Status
+            if (type === 'success') {
+                oscillator.frequency.setValueAtTime(800, context.currentTime);
+                oscillator.frequency.setValueAtTime(1000, context.currentTime + 0.1);
+            } else if (type === 'duplicate' || type === 'warning') {
+                oscillator.frequency.setValueAtTime(600, context.currentTime);
+                oscillator.frequency.setValueAtTime(700, context.currentTime + 0.1);
+            } else if (type === 'error') {
+                oscillator.frequency.setValueAtTime(400, context.currentTime);
+                oscillator.frequency.setValueAtTime(300, context.currentTime + 0.1);
+            }
 
             gainNode.gain.setValueAtTime(0.3, context.currentTime);
             gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
@@ -734,7 +793,7 @@ class WareneingangApp {
         }
     }
 
-    // ===== RECENT SCANS =====
+    // ===== RECENT SCANS MIT ERWEITERTEN STATUS-ANZEIGEN =====
     addToRecentScans(scan) {
         this.recentScans.unshift(scan);
 
@@ -761,17 +820,84 @@ class WareneingangApp {
             const contentPreview = scan.content.length > 100 ?
                 scan.content.substring(0, 100) + '...' : scan.content;
 
+            // CSS-Klassen und Icons je nach Status
+            const statusInfo = this.getScanStatusInfo(scan);
+
             return `
-                <div class="scan-item">
+                <div class="scan-item ${statusInfo.cssClass}">
                     <div class="scan-header">
                         <span class="scan-time">${timeString}</span>
+                        <span class="scan-status" style="color: ${statusInfo.color};">
+                            ${statusInfo.icon} ${statusInfo.label}
+                        </span>
                     </div>
                     <div class="scan-content">${contentPreview}</div>
+                    <div class="scan-info">${scan.message}</div>
                 </div>
             `;
         }).join('');
 
         scansList.innerHTML = scansHtml;
+    }
+
+    getScanStatusInfo(scan) {
+        const { success, status, duplicateInfo } = scan;
+
+        if (success) {
+            return {
+                cssClass: 'scan-success',
+                icon: '✅',
+                label: 'Gespeichert',
+                color: '#28a745'
+            };
+        }
+
+        switch (status) {
+            case 'duplicate_cache':
+            case 'duplicate_database':
+            case 'duplicate_transaction':
+                const timeInfo = duplicateInfo?.minutesAgo ?
+                    ` (vor ${duplicateInfo.minutesAgo} Min)` : '';
+                return {
+                    cssClass: 'scan-duplicate',
+                    icon: '⚠️',
+                    label: `Duplikat${timeInfo}`,
+                    color: '#ffc107'
+                };
+
+            case 'rate_limit':
+                return {
+                    cssClass: 'scan-error',
+                    icon: '🚫',
+                    label: 'Rate Limit',
+                    color: '#fd7e14'
+                };
+
+            case 'processing':
+                return {
+                    cssClass: 'scan-info',
+                    icon: '🔄',
+                    label: 'Verarbeitung',
+                    color: '#17a2b8'
+                };
+
+            case 'database_offline':
+                return {
+                    cssClass: 'scan-error',
+                    icon: '💾',
+                    label: 'DB Offline',
+                    color: '#dc3545'
+                };
+
+            case 'error':
+            default:
+                return {
+                    cssClass: 'scan-error',
+                    icon: '❌',
+                    label: 'Fehler',
+                    color: '#dc3545'
+                };
+        }
     }
 
     clearRecentScans() {

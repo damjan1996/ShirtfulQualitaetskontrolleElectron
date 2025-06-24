@@ -334,40 +334,58 @@ class WareneingangMainApp {
             }
         });
 
-        // ===== QR-CODE OPERATIONEN MIT RATE LIMITING =====
+        // ===== QR-CODE OPERATIONEN MIT STRUKTURIERTEN ANTWORTEN =====
         ipcMain.handle('qr-scan-save', async (event, sessionId, payload) => {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
-                    throw new Error('Datenbank nicht verbunden');
+                    return {
+                        success: false,
+                        status: 'database_offline',
+                        message: 'Datenbank nicht verbunden',
+                        data: null,
+                        timestamp: new Date().toISOString()
+                    };
                 }
 
                 // Rate Limiting prüfen
                 if (!this.checkQRScanRateLimit(sessionId)) {
-                    throw new Error('Zu viele QR-Scans pro Minute - bitte warten Sie');
+                    return {
+                        success: false,
+                        status: 'rate_limit',
+                        message: 'Zu viele QR-Scans pro Minute - bitte warten Sie',
+                        data: null,
+                        timestamp: new Date().toISOString()
+                    };
                 }
 
                 // Payload bereinigen (BOM entfernen falls vorhanden)
                 const cleanPayload = payload.replace(/^\ufeff/, '');
 
+                // QR-Scan speichern - gibt jetzt immer strukturierte Antwort zurück
                 const result = await this.dbClient.saveQRScan(sessionId, cleanPayload);
 
-                // Rate Limit Counter aktualisieren
-                this.updateQRScanRateLimit(sessionId);
-
-                return result;
-            } catch (error) {
-                console.error('QR Scan Save Fehler:', error);
-
-                // Spezielle Behandlung für Duplikat-Fehler
-                if (error.message.includes('bereits gescannt') ||
-                    error.message.includes('Duplikat') ||
-                    error.message.includes('bereits verarbeitet')) {
-
-                    // Nicht als systemkritischen Fehler behandeln
-                    return null;
+                // Rate Limit Counter aktualisieren bei erfolgreichen Scans
+                if (result.success) {
+                    this.updateQRScanRateLimit(sessionId);
                 }
 
-                throw error;
+                console.log(`QR-Scan Ergebnis für Session ${sessionId}:`, {
+                    success: result.success,
+                    status: result.status,
+                    message: result.message
+                });
+
+                return result;
+
+            } catch (error) {
+                console.error('QR Scan Save unerwarteter Fehler:', error);
+                return {
+                    success: false,
+                    status: 'error',
+                    message: `Unerwarteter Fehler: ${error.message}`,
+                    data: null,
+                    timestamp: new Date().toISOString()
+                };
             }
         });
 
