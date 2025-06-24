@@ -335,6 +335,66 @@ contextBridge.exposeInMainWorld('utils', {
         }
     },
 
+    // ===== SCAN RESULT HANDLING =====
+    formatScanResult: (result) => {
+        if (!result || typeof result !== 'object') {
+            return {
+                success: false,
+                message: 'Ungültiges Scan-Ergebnis',
+                status: 'error'
+            };
+        }
+
+        const { success, status, message, data, duplicateInfo } = result;
+
+        let formattedMessage = message || 'Unbekannter Status';
+        let displayType = status || 'unknown';
+
+        // Status-spezifische Formatierung
+        switch (status) {
+            case 'duplicate_cache':
+            case 'duplicate_database':
+            case 'duplicate_transaction':
+                if (duplicateInfo && duplicateInfo.minutesAgo !== undefined) {
+                    formattedMessage = `Bereits vor ${duplicateInfo.minutesAgo} Minuten gescannt`;
+                } else if (duplicateInfo && duplicateInfo.count) {
+                    formattedMessage = `${duplicateInfo.count}x bereits gescannt`;
+                }
+                displayType = 'duplicate';
+                break;
+
+            case 'rate_limit':
+                formattedMessage = 'Zu viele Scans - kurz warten';
+                displayType = 'warning';
+                break;
+
+            case 'saved':
+                if (data && data.ID) {
+                    formattedMessage = `Erfolgreich gespeichert (ID: ${data.ID})`;
+                }
+                displayType = 'success';
+                break;
+
+            case 'error':
+            case 'database_offline':
+                displayType = 'error';
+                break;
+
+            case 'processing':
+                displayType = 'info';
+                break;
+        }
+
+        return {
+            success: success || false,
+            message: formattedMessage,
+            status: displayType,
+            data: data || null,
+            duplicateInfo: duplicateInfo || null,
+            timestamp: new Date().toISOString()
+        };
+    },
+
     // ===== ZAHLKONVERTIERUNG =====
     hexToDecimal: (hex) => {
         try {
@@ -397,6 +457,31 @@ contextBridge.exposeInMainWorld('utils', {
         return result;
     },
 
+    // ===== ERROR HANDLING =====
+    createErrorInfo: (error, context = null) => {
+        const errorInfo = {
+            message: error?.message || String(error),
+            stack: error?.stack,
+            name: error?.name,
+            code: error?.code,
+            context: context,
+            timestamp: new Date().toISOString(),
+            userAgent: navigator.userAgent,
+            url: window.location.href
+        };
+
+        // Zusätzliche Informationen für spezielle Fehler
+        if (error?.name === 'NotAllowedError') {
+            errorInfo.suggestion = 'Kamera-Berechtigung verweigert - in den Browsereinstellungen erlauben';
+        } else if (error?.name === 'NotFoundError') {
+            errorInfo.suggestion = 'Keine Kamera gefunden - USB-Kamera anschließen';
+        } else if (error?.name === 'OverconstrainedError') {
+            errorInfo.suggestion = 'Kamera-Einstellungen nicht unterstützt - andere Auflösung versuchen';
+        }
+
+        return errorInfo;
+    },
+
     // ===== LOGGING =====
     log: (level, message, data = null) => {
         const timestamp = new Date().toISOString();
@@ -436,6 +521,25 @@ contextBridge.exposeInMainWorld('utils', {
     truncateString: (str, maxLength = 50) => {
         if (typeof str !== 'string') return '';
         return str.length > maxLength ? str.substring(0, maxLength) + '...' : str;
+    },
+
+    // ===== STORAGE HELPERS =====
+    safeJSONParse: (str, fallback = null) => {
+        try {
+            return JSON.parse(str);
+        } catch (error) {
+            console.warn('JSON Parse Fehler:', error);
+            return fallback;
+        }
+    },
+
+    safeJSONStringify: (obj, fallback = '{}') => {
+        try {
+            return JSON.stringify(obj);
+        } catch (error) {
+            console.warn('JSON Stringify Fehler:', error);
+            return fallback;
+        }
     }
 });
 

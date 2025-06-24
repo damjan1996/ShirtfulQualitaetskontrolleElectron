@@ -343,44 +343,65 @@ class DatabaseClient {
 
             // 1. Prüfe ob bereits in Verarbeitung
             if (this.pendingScans.has(cacheKey)) {
-                throw new Error('QR-Code wird bereits verarbeitet (Concurrent-Request)');
+                return {
+                    success: false,
+                    status: 'processing',
+                    message: 'QR-Code wird bereits verarbeitet'
+                };
             }
 
             // 2. Markiere als in Verarbeitung
             this.pendingScans.set(cacheKey, Date.now());
 
-            // 3. Prüfe Cache
+            // 3. Prüfe Cache (nur 5 Minuten)
             const cachedTime = this.duplicateCache.get(payload);
             if (cachedTime) {
-                const hoursSinceCache = (Date.now() - cachedTime) / (1000 * 60 * 60);
-                if (hoursSinceCache < 24) {
-                    throw new Error('QR-Code wurde heute bereits gescannt (Cache-Duplikat)');
+                const minutesSinceCache = (Date.now() - cachedTime) / (1000 * 60);
+                if (minutesSinceCache < 5) { // Nur 5 Minuten statt 24 Stunden
+                    return {
+                        success: false,
+                        status: 'duplicate_cache',
+                        message: `QR-Code wurde vor ${Math.round(minutesSinceCache)} Minuten bereits gescannt`,
+                        duplicateInfo: {
+                            lastScan: new Date(cachedTime),
+                            minutesAgo: Math.round(minutesSinceCache)
+                        }
+                    };
                 }
             }
 
-            // 4. Prüfe auf Duplikate in Datenbank
-            const isDuplicate = await this.checkQRDuplicate(payload);
-            if (isDuplicate) {
+            // 4. Prüfe auf Duplikate in Datenbank (nur 10 Minuten statt 24 Stunden)
+            const duplicateInfo = await this.checkQRDuplicate(payload, 10); // 10 Minuten statt 24 Stunden
+            if (duplicateInfo.isDuplicate) {
                 // Cache-Update
                 this.duplicateCache.set(payload, Date.now());
-                throw new Error('QR-Code wurde heute bereits gescannt (Datenbank-Duplikat)');
+                return {
+                    success: false,
+                    status: 'duplicate_database',
+                    message: `QR-Code wurde bereits ${duplicateInfo.count} mal in den letzten 10 Minuten gescannt`,
+                    duplicateInfo: duplicateInfo
+                };
             }
 
             // 5. QR-Scan speichern mit Transaction für Atomarität
             const result = await this.transaction(async (request) => {
-                // Nochmalige Duplikat-Prüfung innerhalb der Transaction
+                // Nochmalige Duplikat-Prüfung innerhalb der Transaction (nur 10 Minuten)
                 const finalDupCheck = await request.query(`
                     SELECT COUNT(*) as duplicateCount
                     FROM dbo.QrScans
                     WHERE RawPayload = @payload
-                      AND CapturedTS >= DATEADD(HOUR, -24, SYSDATETIME())
+                      AND CapturedTS >= DATEADD(MINUTE, -10, SYSDATETIME())
                       AND Valid = 1
                 `, {
                     payload: { type: sql.NVarChar, value: payload }
                 });
 
                 if (finalDupCheck.recordset[0].duplicateCount > 0) {
-                    throw new Error('QR-Code wurde heute bereits gescannt (Transaction-Duplikat-Check)');
+                    return {
+                        success: false,
+                        status: 'duplicate_transaction',
+                        message: 'QR-Code wurde zwischenzeitlich von anderem Scan erfasst'
+                    };
                 }
 
                 // Einfügen
@@ -393,50 +414,74 @@ class DatabaseClient {
                     payload: { type: sql.NVarChar, value: payload }
                 });
 
-                return insertResult.recordset[0];
+                return {
+                    success: true,
+                    status: 'saved',
+                    data: insertResult.recordset[0],
+                    message: 'QR-Code erfolgreich gespeichert'
+                };
             });
 
-            if (result) {
+            if (result.success) {
                 // Erfolgreich gespeichert - Cache aktualisieren
                 this.duplicateCache.set(payload, Date.now());
-
-                console.log(`✅ QR-Scan gespeichert: ID ${result.ID}`);
-                return result;
+                console.log(`✅ QR-Scan gespeichert: ID ${result.data.ID}`);
             }
-            return null;
+
+            return result;
 
         } catch (error) {
             console.error('Fehler beim Speichern des QR-Scans:', error);
-            throw error; // Fehler weiterwerfen für UI-Behandlung
+            return {
+                success: false,
+                status: 'error',
+                message: `Speicherfehler: ${error.message}`,
+                error: error
+            };
         } finally {
             // Immer aus Pending-Set entfernen
             this.pendingScans.delete(cacheKey);
         }
     }
 
-    async checkQRDuplicate(payload, timeWindowHours = 24) {
+    async checkQRDuplicate(payload, timeWindowMinutes = 10) { // Geändert auf Minuten statt Stunden
         try {
-            // Prüfe auf Duplikate in den letzten X Stunden (Standard: 24h)
+            // Prüfe auf Duplikate in den letzten X Minuten (Standard: 10 Minuten)
             const result = await this.query(`
-                SELECT COUNT(*) as duplicateCount
+                SELECT COUNT(*) as duplicateCount,
+                       MAX(CapturedTS) as lastScanTime
                 FROM dbo.QrScans
                 WHERE RawPayload = ?
-                  AND CapturedTS >= DATEADD(HOUR, -?, SYSDATETIME())
+                  AND CapturedTS >= DATEADD(MINUTE, -?, SYSDATETIME())
                   AND Valid = 1
-            `, [payload, timeWindowHours]);
+            `, [payload, timeWindowMinutes]);
 
             const count = result.recordset[0].duplicateCount;
+            const lastScanTime = result.recordset[0].lastScanTime;
 
             if (count > 0) {
-                console.log(`⚠️ QR-Code Duplikat erkannt: ${count} mal in den letzten ${timeWindowHours}h`);
-                return true;
+                console.log(`⚠️ QR-Code Duplikat erkannt: ${count} mal in den letzten ${timeWindowMinutes} Minuten`);
+                return {
+                    isDuplicate: true,
+                    count: count,
+                    lastScanTime: lastScanTime,
+                    timeWindowMinutes: timeWindowMinutes
+                };
             }
 
-            return false;
+            return {
+                isDuplicate: false,
+                count: 0,
+                timeWindowMinutes: timeWindowMinutes
+            };
         } catch (error) {
             console.error('Fehler bei Duplikat-Prüfung:', error);
             // Bei Fehler: Als neu behandeln (sicherer Fallback)
-            return false;
+            return {
+                isDuplicate: false,
+                count: 0,
+                error: error.message
+            };
         }
     }
 

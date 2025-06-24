@@ -553,18 +553,6 @@ class WareneingangApp {
             return;
         }
 
-        // 4. Session-Duplikat-Prüfung
-        if (this.sessionScannedCodes.has(qrData)) {
-            this.showNotification('warning', 'Bereits gescannt', 'Dieser QR-Code wurde in dieser Session bereits erfasst');
-            return;
-        }
-
-        // 5. Globales Duplikat-Set prüfen
-        if (this.globalScannedCodes.has(qrData)) {
-            this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde heute bereits gescannt');
-            return;
-        }
-
         // Verarbeitung starten
         this.lastProcessedQR = qrData;
         this.lastProcessedTime = now;
@@ -574,12 +562,11 @@ class WareneingangApp {
         console.log('📄 QR-Code erkannt und wird verarbeitet:', qrData);
 
         try {
-            // In Datenbank speichern
+            // In Datenbank speichern - mit strukturierter Rückgabe
             const result = await window.electronAPI.qr.saveScan(this.currentUser.sessionId, qrData);
 
-            if (result) {
-                // Erfolgreiche Speicherung - zu Duplikat-Sets hinzufügen
-                this.globalScannedCodes.add(qrData);
+            if (result.success) {
+                // Erfolgreiche Speicherung
                 this.sessionScannedCodes.add(qrData);
 
                 // Scan-Count erhöhen
@@ -588,10 +575,11 @@ class WareneingangApp {
 
                 // Zu Recent Scans hinzufügen
                 this.addToRecentScans({
-                    id: result.ID,
-                    timestamp: new Date(),
+                    id: result.data.ID,
+                    timestamp: new Date(result.data.CapturedTS),
                     content: qrData,
-                    user: this.currentUser.name
+                    user: this.currentUser.name,
+                    status: 'success'
                 });
 
                 // Erfolgs-Feedback zeigen
@@ -601,25 +589,82 @@ class WareneingangApp {
                 document.getElementById('lastScanTime').textContent =
                     new Date().toLocaleTimeString('de-DE');
 
-                console.log(`✅ QR-Code gespeichert für ${this.currentUser.name} (ID: ${result.ID})`);
+                console.log(`✅ QR-Code gespeichert für ${this.currentUser.name} (ID: ${result.data.ID})`);
 
             } else {
-                throw new Error('QR-Code konnte nicht gespeichert werden');
+                // Behandle verschiedene Nicht-Erfolg-Status
+                this.handleScanResult(result, qrData);
             }
 
         } catch (error) {
             console.error('QR-Code Verarbeitung fehlgeschlagen:', error);
+            this.showNotification('error', 'Speicher-Fehler', error.message);
 
-            // Bei Duplikat-Fehler zu lokalen Sets hinzufügen
-            if (error.message.includes('bereits gescannt') || error.message.includes('Duplikat')) {
-                this.globalScannedCodes.add(qrData);
-                this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde bereits erfasst');
-            } else {
-                this.showNotification('error', 'Speicher-Fehler', error.message);
-            }
+            // Auch Fehlgeschlagene Scans in Historie zeigen
+            this.addToRecentScans({
+                id: null,
+                timestamp: new Date(),
+                content: qrData,
+                user: this.currentUser.name,
+                status: 'error',
+                error: error.message
+            });
         } finally {
             // Verarbeitung abgeschlossen - aus Pending-Set entfernen
             this.pendingScans.delete(qrData);
+        }
+    }
+
+    // ===== NEUE METHODE ZUR BEHANDLUNG VON SCAN-ERGEBNISSEN =====
+    handleScanResult(result, qrData) {
+        const { status, message, duplicateInfo } = result;
+
+        switch (status) {
+            case 'duplicate_cache':
+            case 'duplicate_database':
+            case 'duplicate_transaction':
+                // Duplikate: Warnung zeigen aber trotzdem in Recent Scans aufnehmen
+                this.showNotification('warning', 'Duplikat erkannt', message);
+
+                this.addToRecentScans({
+                    id: null,
+                    timestamp: new Date(),
+                    content: qrData,
+                    user: this.currentUser.name,
+                    status: 'duplicate',
+                    message: message,
+                    duplicateInfo: duplicateInfo
+                });
+
+                // Visuelles Feedback für Duplikat
+                this.showDuplicateWarning(qrData, message);
+                break;
+
+            case 'rate_limit':
+                this.showNotification('warning', 'Zu schnell', message);
+                break;
+
+            case 'database_offline':
+                this.showNotification('error', 'Datenbank offline', message);
+                break;
+
+            case 'processing':
+                this.showNotification('info', 'Wird verarbeitet', message);
+                break;
+
+            case 'error':
+            default:
+                this.showNotification('error', 'Fehler', message);
+
+                this.addToRecentScans({
+                    id: null,
+                    timestamp: new Date(),
+                    content: qrData,
+                    user: this.currentUser.name,
+                    status: 'error',
+                    message: message
+                });
+                break;
         }
     }
 
@@ -651,6 +696,28 @@ class WareneingangApp {
         this.playSuccessSound();
     }
 
+    // ===== NEUE METHODE FÜR DUPLIKAT-WARNUNG =====
+    showDuplicateWarning(qrData, message) {
+        // Visuelles Feedback im Scanner (orange für Duplikat)
+        const overlay = document.querySelector('.scanner-overlay');
+        overlay.style.background = 'rgba(255, 193, 7, 0.4)'; // Orange/Gelb
+
+        setTimeout(() => {
+            overlay.style.background = '';
+        }, 1500);
+
+        // Kurze visuelle Rückmeldung
+        const statusText = document.getElementById('scannerStatusText');
+        const originalText = statusText.textContent;
+        statusText.textContent = 'Duplikat erkannt';
+        statusText.style.color = '#ffc107';
+
+        setTimeout(() => {
+            statusText.textContent = originalText;
+            statusText.style.color = '';
+        }, 2000);
+    }
+
     playSuccessSound() {
         try {
             // Einfacher Erfolgs-Sound
@@ -675,7 +742,7 @@ class WareneingangApp {
         }
     }
 
-    // ===== RECENT SCANS =====
+    // ===== RECENT SCANS MIT VERBESSERTER STATUS-ANZEIGE =====
     addToRecentScans(scan) {
         this.recentScans.unshift(scan);
 
@@ -702,12 +769,41 @@ class WareneingangApp {
             const contentPreview = scan.content.length > 100 ?
                 scan.content.substring(0, 100) + '...' : scan.content;
 
+            // Status-abhängige Styling
+            let statusIcon = '';
+            let statusClass = '';
+            let statusInfo = '';
+
+            switch (scan.status) {
+                case 'success':
+                    statusIcon = '✅';
+                    statusClass = 'scan-success';
+                    statusInfo = `ID: ${scan.id}`;
+                    break;
+                case 'duplicate':
+                    statusIcon = '⚠️';
+                    statusClass = 'scan-duplicate';
+                    statusInfo = scan.message || 'Duplikat';
+                    break;
+                case 'error':
+                    statusIcon = '❌';
+                    statusClass = 'scan-error';
+                    statusInfo = scan.message || scan.error || 'Fehler';
+                    break;
+                default:
+                    statusIcon = 'ℹ️';
+                    statusClass = 'scan-info';
+                    statusInfo = scan.message || 'Unbekannt';
+            }
+
             return `
-                <div class="scan-item">
+                <div class="scan-item ${statusClass}">
                     <div class="scan-header">
                         <span class="scan-time">${timeString}</span>
+                        <span class="scan-status">${statusIcon}</span>
                     </div>
                     <div class="scan-content">${contentPreview}</div>
+                    <div class="scan-info">${statusInfo}</div>
                 </div>
             `;
         }).join('');

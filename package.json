@@ -1,6 +1,6 @@
 {
   "name": "wareneingang-rfid-qr",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "RFID Wareneingang System - Vereinfachte Desktop-Anwendung für Shirtful",
   "main": "main.js",
   "author": {
@@ -20,10 +20,12 @@
     "debug": "cross-env NODE_ENV=development DEBUG=true FORCE_COLOR=1 electron . --inspect=9229",
     "test": "node test.js",
     "test-quick": "node scripts/quick-test.js",
+    "test-qr": "node scripts/test-qr-duplicates.js",
     "setup": "node setup.js",
     "setup-db": "node scripts/create-database.js",
     "setup-users": "node scripts/create-test-users.js",
     "test-db": "node scripts/test-db-connection.js",
+    "test-db-quick": "node scripts/quick-db-test.js",
     "clean": "rimraf dist node_modules/.cache",
     "rebuild-safe": "electron-rebuild --force --only node-hid || echo 'Native module rebuild failed - app will work without RFID hardware'",
     "install-rebuild": "npm install && npm run rebuild-safe",
@@ -32,7 +34,9 @@
     "build:win64": "electron-builder --win --x64",
     "build:win32": "electron-builder --win --ia32",
     "dist": "electron-builder --publish=never",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "lint": "echo 'Linting übersprungen - keine ESLint-Konfiguration'",
+    "format": "echo 'Formatierung übersprungen - keine Prettier-Konfiguration'"
   },
   "dependencies": {
     "dotenv": "^16.3.1",
@@ -43,6 +47,9 @@
     "electron": "^27.0.0",
     "electron-builder": "^24.6.4",
     "rimraf": "^5.0.1"
+  },
+  "optionalDependencies": {
+    "node-hid": "^2.1.2"
   },
   "build": {
     "appId": "com.shirtful.wareneingang-rfid-qr",
@@ -57,6 +64,7 @@
       "renderer/**/*",
       "rfid/**/*",
       "db/**/*",
+      "utils/**/*",
       "node_modules/**/*",
       "package.json",
       "!node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
@@ -69,7 +77,9 @@
       "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
       "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
       "!**/{appveyor.yml,.travis.yml,circle.yml}",
-      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}",
+      "!scripts/test-*.js",
+      "!scripts/quick-*.js"
     ],
     "extraResources": [
       {
@@ -141,6 +151,26 @@
     "electron",
     "desktop",
     "warehouse",
-    "scanning"
-  ]
+    "scanning",
+    "duplicate-prevention",
+    "time-tracking"
+  ],
+  "changelog": {
+    "1.0.1": [
+      "Verbesserte QR-Code Duplikat-Erkennung",
+      "Reduziertes Duplikat-Zeitfenster von 24h auf 10 Minuten",
+      "Alle Scan-Ergebnisse werden in der UI angezeigt",
+      "Bessere Behandlung von Cache- und Datenbank-Duplikaten",
+      "Strukturierte Rückgabewerte für alle Scan-Operationen",
+      "Verbesserte visuelle Unterscheidung zwischen Erfolg/Duplikat/Fehler",
+      "Neues Test-Script für QR-Duplikat-Funktionalität"
+    ],
+    "1.0.0": [
+      "Initiale Version",
+      "RFID-basierte Benutzeranmeldung",
+      "QR-Code Scanning mit Webcam",
+      "Microsoft SQL Server Integration",
+      "Electron Desktop-Anwendung"
+    ]
+  }
 }

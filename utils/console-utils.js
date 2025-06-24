@@ -1,5 +1,6 @@
 /**
  * Console-Utilities für bessere Windows-Kompatibilität
+ * Fixed für Windows Console Encoding Issues
  */
 
 const os = require('os');
@@ -8,21 +9,20 @@ class ConsoleUtils {
     constructor() {
         this.isWindows = process.platform === 'win32';
         this.supportsUnicode = this.checkUnicodeSupport();
+        this.originalConsole = {
+            log: console.log,
+            error: console.error,
+            warn: console.warn,
+            info: console.info
+        };
         this.setupConsole();
     }
 
     checkUnicodeSupport() {
         try {
-            // Teste ob Unicode-Ausgabe funktioniert
+            // Für Windows: Verwende ASCII-Fallbacks
             if (this.isWindows) {
-                // Windows: Prüfe ob UTF-8 Code Page aktiv ist
-                const { execSync } = require('child_process');
-                try {
-                    const codepage = execSync('chcp', { encoding: 'utf8' }).toString();
-                    return codepage.includes('65001'); // UTF-8
-                } catch (error) {
-                    return false;
-                }
+                return false; // Deaktiviere Unicode für Windows
             }
             return true; // Unix-Systeme unterstützen normalerweise UTF-8
         } catch (error) {
@@ -33,24 +33,50 @@ class ConsoleUtils {
     setupConsole() {
         if (this.isWindows) {
             try {
-                // Versuche UTF-8 Code Page zu setzen
-                process.stdout.setEncoding('utf8');
-                process.stderr.setEncoding('utf8');
-
-                // Windows Console API verwenden falls verfügbar
-                if (process.stdout.isTTY) {
-                    process.stdout.write('\x1b]0;RFID Wareneingang - Shirtful\x07');
+                // Windows Console UTF-8 Setup - vorsichtiger Ansatz
+                if (process.stdout && process.stdout.setEncoding) {
+                    process.stdout.setEncoding('utf8');
+                }
+                if (process.stderr && process.stderr.setEncoding) {
+                    process.stderr.setEncoding('utf8');
                 }
             } catch (error) {
-                // Fallback bei Fehlern
-                this.supportsUnicode = false;
+                // Ignoriere Encoding-Fehler
+                console.warn('Console encoding setup failed:', error.message);
             }
         }
     }
 
     // Emoji/Symbol-Fallbacks für Windows
     getSymbol(type) {
-        if (this.supportsUnicode) {
+        // Für Windows: Immer ASCII verwenden
+        if (this.isWindows || !this.supportsUnicode) {
+            const fallbacks = {
+                success: '[OK]',
+                error: '[ERROR]',
+                warning: '[WARN]',
+                info: '[INFO]',
+                loading: '[...]',
+                database: '[DB]',
+                rfid: '[RFID]',
+                qr: '[QR]',
+                user: '[USER]',
+                time: '[TIME]',
+                clean: '[CLEAN]',
+                rocket: '[START]',
+                gear: '[CONFIG]',
+                lock: '[LOCKED]',
+                unlock: '[UNLOCKED]',
+                camera: '[CAM]',
+                package: '[PKG]',
+                check: '[+]',
+                cross: '[-]',
+                arrow: '->',
+                bullet: '*'
+            };
+            return fallbacks[type] || fallbacks.bullet;
+        } else {
+            // Unicode für Unix-Systeme
             const symbols = {
                 success: '✅',
                 error: '❌',
@@ -75,57 +101,33 @@ class ConsoleUtils {
                 bullet: '•'
             };
             return symbols[type] || symbols.bullet;
-        } else {
-            // ASCII-Fallbacks für Systeme ohne Unicode-Support
-            const fallbacks = {
-                success: '[OK]',
-                error: '[FEHLER]',
-                warning: '[WARNUNG]',
-                info: '[INFO]',
-                loading: '[...]',
-                database: '[DB]',
-                rfid: '[RFID]',
-                qr: '[QR]',
-                user: '[USER]',
-                time: '[TIME]',
-                clean: '[CLEAN]',
-                rocket: '[START]',
-                gear: '[CONFIG]',
-                lock: '[LOCKED]',
-                unlock: '[UNLOCKED]',
-                camera: '[CAM]',
-                package: '[PKG]',
-                check: '[+]',
-                cross: '[-]',
-                arrow: '->',
-                bullet: '*'
-            };
-            return fallbacks[type] || fallbacks.bullet;
         }
     }
 
-    // Erweiterte Logging-Funktionen
+    // Verbesserte Logging-Funktionen
     log(level, message, ...args) {
         const symbol = this.getSymbol(level);
         const timestamp = new Date().toLocaleTimeString('de-DE');
 
-        const levelColors = {
-            success: '\x1b[32m', // Grün
-            error: '\x1b[31m',   // Rot
-            warning: '\x1b[33m', // Gelb
-            info: '\x1b[36m',    // Cyan
-            loading: '\x1b[35m', // Magenta
-            database: '\x1b[34m', // Blau
-            rfid: '\x1b[32m'     // Grün
-        };
-
-        const color = levelColors[level] || '\x1b[0m';
-        const reset = '\x1b[0m';
-
-        if (process.stdout.isTTY && !this.isWindows) {
-            console.log(`${color}${symbol} ${message}${reset}`, ...args);
+        // Für Windows: Einfache Ausgabe ohne Farben
+        if (this.isWindows) {
+            this.originalConsole.log(`${symbol} ${message}`, ...args);
         } else {
-            console.log(`${symbol} ${message}`, ...args);
+            // Unix: Mit Farben
+            const levelColors = {
+                success: '\x1b[32m', // Grün
+                error: '\x1b[31m',   // Rot
+                warning: '\x1b[33m', // Gelb
+                info: '\x1b[36m',    // Cyan
+                loading: '\x1b[35m', // Magenta
+                database: '\x1b[34m', // Blau
+                rfid: '\x1b[32m'     // Grün
+            };
+
+            const color = levelColors[level] || '\x1b[0m';
+            const reset = '\x1b[0m';
+
+            this.originalConsole.log(`${color}${symbol} ${message}${reset}`, ...args);
         }
     }
 
@@ -157,15 +159,42 @@ class ConsoleUtils {
         this.log('rfid', message, ...args);
     }
 
+    // Sichere Console-Methoden (keine Überschreibung der globalen console)
+    safeLog(message, ...args) {
+        try {
+            // Verwende ursprüngliche console.log
+            this.originalConsole.log(message, ...args);
+        } catch (error) {
+            // Fallback bei Console-Fehlern
+            try {
+                process.stdout.write(message + '\n');
+            } catch (writeError) {
+                // Letzte Rettung - tue nichts
+            }
+        }
+    }
+
+    safeError(message, ...args) {
+        try {
+            this.originalConsole.error(message, ...args);
+        } catch (error) {
+            try {
+                process.stderr.write(message + '\n');
+            } catch (writeError) {
+                // Letzte Rettung - tue nichts
+            }
+        }
+    }
+
     // Progress-Anzeige
     showProgress(current, total, message = '') {
         const percentage = Math.round((current / total) * 100);
         const bar = this.createProgressBar(percentage);
 
         if (message) {
-            console.log(`${this.getSymbol('loading')} ${message} ${bar} ${percentage}%`);
+            this.safeLog(`${this.getSymbol('loading')} ${message} ${bar} ${percentage}%`);
         } else {
-            console.log(`${bar} ${percentage}%`);
+            this.safeLog(`${bar} ${percentage}%`);
         }
     }
 
@@ -173,46 +202,8 @@ class ConsoleUtils {
         const filled = Math.round((percentage / 100) * width);
         const empty = width - filled;
 
-        if (this.supportsUnicode) {
-            return `[${'█'.repeat(filled)}${'░'.repeat(empty)}]`;
-        } else {
-            return `[${'#'.repeat(filled)}${'-'.repeat(empty)}]`;
-        }
-    }
-
-    // Tabellen-Ausgabe
-    table(data, headers = null) {
-        if (!Array.isArray(data) || data.length === 0) {
-            this.info('Keine Daten zum Anzeigen');
-            return;
-        }
-
-        const keys = headers || Object.keys(data[0]);
-        const maxWidths = {};
-
-        // Maximale Spaltenbreiten berechnen
-        keys.forEach(key => {
-            maxWidths[key] = Math.max(
-                key.length,
-                ...data.map(row => String(row[key] || '').length)
-            );
-        });
-
-        // Header ausgeben
-        const headerRow = keys.map(key =>
-            key.padEnd(maxWidths[key])
-        ).join(' | ');
-
-        console.log(headerRow);
-        console.log(keys.map(key => '-'.repeat(maxWidths[key])).join('-+-'));
-
-        // Datenzeilen ausgeben
-        data.forEach(row => {
-            const dataRow = keys.map(key =>
-                String(row[key] || '').padEnd(maxWidths[key])
-            ).join(' | ');
-            console.log(dataRow);
-        });
+        // Immer ASCII für maximale Kompatibilität
+        return `[${'#'.repeat(filled)}${'-'.repeat(empty)}]`;
     }
 
     // Banner/Header
@@ -220,26 +211,30 @@ class ConsoleUtils {
         const width = Math.max(title.length, subtitle ? subtitle.length : 0) + 4;
         const border = '='.repeat(width);
 
-        console.log(border);
-        console.log(`  ${title}`);
+        this.safeLog(border);
+        this.safeLog(`  ${title}`);
         if (subtitle) {
-            console.log(`  ${subtitle}`);
+            this.safeLog(`  ${subtitle}`);
         }
-        console.log(border);
-        console.log();
+        this.safeLog(border);
+        this.safeLog('');
     }
 
     // Separator
     separator(char = '-', length = 50) {
-        console.log(char.repeat(length));
+        this.safeLog(char.repeat(length));
     }
 
     // Clear screen (falls unterstützt)
     clear() {
         if (process.stdout.isTTY) {
-            console.clear();
+            try {
+                console.clear();
+            } catch (error) {
+                this.safeLog('\n'.repeat(5));
+            }
         } else {
-            console.log('\n'.repeat(5));
+            this.safeLog('\n'.repeat(5));
         }
     }
 
@@ -260,6 +255,18 @@ class ConsoleUtils {
                 NO_COLOR: process.env.NO_COLOR
             }
         };
+    }
+
+    // Test-Methode für Console-Ausgabe
+    testOutput() {
+        this.safeLog('=== CONSOLE TEST ===');
+        this.success('Success message test');
+        this.error('Error message test');
+        this.warning('Warning message test');
+        this.info('Info message test');
+        this.database('Database message test');
+        this.rfid('RFID message test');
+        this.safeLog('=== TEST COMPLETE ===');
     }
 }
 
