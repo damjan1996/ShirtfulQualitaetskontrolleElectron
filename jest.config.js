@@ -16,8 +16,8 @@ module.exports = {
         '<rootDir>/tests/**/*.spec.js'
     ],
 
-    // Ignore patterns
-    testIgnore: [
+    // Ignore patterns - KORRIGIERT: testIgnore -> testPathIgnorePatterns
+    testPathIgnorePatterns: [
         '<rootDir>/node_modules/',
         '<rootDir>/dist/',
         '<rootDir>/build/',
@@ -25,7 +25,7 @@ module.exports = {
     ],
 
     // Coverage
-    collectCoverage: true,
+    collectCoverage: false,
     coverageDirectory: 'coverage',
     coverageReporters: ['text', 'lcov', 'html', 'json'],
     collectCoverageFrom: [
@@ -63,8 +63,8 @@ module.exports = {
         }
     },
 
-    // Module-Mapping für Electron
-    moduleNameMapping: {
+    // KORRIGIERT: moduleNameMapping -> moduleNameMapper
+    moduleNameMapper: {
         '^electron$': '<rootDir>/tests/mocks/electron.mock.js',
         '^mssql$': '<rootDir>/tests/mocks/mssql.mock.js',
         '^node-hid$': '<rootDir>/tests/mocks/node-hid.mock.js'
@@ -75,9 +75,9 @@ module.exports = {
         '^.+\\.jsx?$': 'babel-jest'
     },
 
+    // KORRIGIERT: setupTimeout entfernt (kein gültiger Jest-Parameter)
     // Test-Timeouts
     testTimeout: 30000,
-    setupTimeout: 60000,
 
     // Verbose Output
     verbose: true,
@@ -128,14 +128,5 @@ module.exports = {
         '<rootDir>/node_modules/',
         '<rootDir>/dist/',
         '<rootDir>/coverage/'
-    ],
-
-    // Test-Path-Patterns
-    testPathIgnorePatterns: [
-        '/node_modules/',
-        '/dist/',
-        '/build/',
-        '/release/',
-        '/coverage/'
     ]
 };

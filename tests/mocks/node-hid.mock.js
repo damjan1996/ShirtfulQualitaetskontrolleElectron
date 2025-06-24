@@ -1,437 +1,313 @@
 // tests/mocks/node-hid.mock.js
 /**
- * Node-HID Module Mock für Tests
- * Simuliert USB HID-Geräte (RFID-Reader)
+ * Node-HID Mock für Jest Tests
+ * Simuliert RFID-Reader Hardware ohne echte USB-Geräte
  */
 
 const EventEmitter = require('events');
 
+// Mock HID-Geräte
+const mockDevices = [
+    {
+        vendorId: 0x1234,
+        productId: 0x5678,
+        path: 'USB\\VID_1234&PID_5678\\MOCK_RFID_READER_001',
+        serialNumber: 'MOCK001',
+        manufacturer: 'Mock RFID Corp',
+        product: 'Mock RFID Reader v1.0',
+        release: 256,
+        interface: 0,
+        usagePage: 1,
+        usage: 6
+    },
+    {
+        vendorId: 0x2345,
+        productId: 0x6789,
+        path: 'USB\\VID_2345&PID_6789\\MOCK_RFID_READER_002',
+        serialNumber: 'MOCK002',
+        manufacturer: 'Test RFID Inc',
+        product: 'Test RFID Scanner Pro',
+        release: 512,
+        interface: 0,
+        usagePage: 1,
+        usage: 6
+    }
+];
+
+// Mock RFID-Tags für Simulation
+const mockRFIDTags = [
+    {
+        hex: '53004114',
+        decimal: 1392525588,
+        user: 'Max Mustermann',
+        data: Buffer.from([0x53, 0x00, 0x41, 0x14])
+    },
+    {
+        hex: '12345678',
+        decimal: 305419896,
+        user: 'Anna Schmidt',
+        data: Buffer.from([0x12, 0x34, 0x56, 0x78])
+    },
+    {
+        hex: 'ABCDEF00',
+        decimal: 2882400000,
+        user: 'Test Benutzer',
+        data: Buffer.from([0xAB, 0xCD, 0xEF, 0x00])
+    }
+];
+
+// Mock HID-Device Klasse
 class MockHID extends EventEmitter {
-    constructor(devicePath) {
+    constructor(path) {
         super();
-        this.devicePath = devicePath;
+        this.path = path;
         this.isOpen = false;
+        this.isPaused = false;
         this.writeBuffer = [];
         this.readBuffer = [];
-        this.features = new Map();
 
-        // Simuliere RFID-Reader Eigenschaften
-        this.deviceInfo = {
-            vendorId: 0x08ff,
-            productId: 0x0009,
-            path: devicePath,
-            serialNumber: 'MOCK_RFID_001',
-            manufacturer: 'Mock RFID Corp',
-            product: 'Mock RFID Reader v2.1',
-            release: 0x0100,
-            interface: 0,
-            usagePage: 0x0001,
-            usage: 0x0006
-        };
-
-        // Auto-öffne Gerät
+        // Simuliere Verbindung nach kurzer Verzögerung
         setTimeout(() => {
             this.isOpen = true;
             this.emit('open');
         }, 10);
     }
 
-    // Schreibt Daten an das HID-Gerät
-    write(data) {
-        if (!this.isOpen) {
-            throw new Error('HID device is not open');
+    // Device öffnen
+    open() {
+        if (this.isOpen) {
+            throw new Error('Device bereits geöffnet');
         }
-
-        if (!Buffer.isBuffer(data) && !Array.isArray(data)) {
-            throw new Error('Data must be a Buffer or Array');
-        }
-
-        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        this.writeBuffer.push({
-            data: buffer,
-            timestamp: Date.now()
-        });
-
-        // Simuliere erfolgreiches Schreiben
-        return buffer.length;
+        this.isOpen = true;
+        this.emit('open');
     }
 
-    // Liest Daten vom HID-Gerät (synchron)
-    readSync() {
+    // Device schließen
+    close() {
         if (!this.isOpen) {
-            throw new Error('HID device is not open');
-        }
-
-        if (this.readBuffer.length > 0) {
-            return this.readBuffer.shift();
-        }
-
-        // Keine Daten verfügbar
-        return null;
-    }
-
-    // Liest Daten vom HID-Gerät (asynchron)
-    read(callback) {
-        if (!this.isOpen) {
-            callback(new Error('HID device is not open'));
             return;
         }
-
-        setTimeout(() => {
-            if (this.readBuffer.length > 0) {
-                callback(null, this.readBuffer.shift());
-            } else {
-                callback(null, null); // Keine Daten
-            }
-        }, 10);
+        this.isOpen = false;
+        this.isPaused = false;
+        this.emit('close');
+        this.removeAllListeners();
     }
 
-    // Timeout-basiertes Lesen
-    readTimeout(timeoutMs) {
-        return new Promise((resolve, reject) => {
-            if (!this.isOpen) {
-                reject(new Error('HID device is not open'));
-                return;
-            }
+    // Daten lesen pausieren
+    pause() {
+        this.isPaused = true;
+    }
 
-            const timeout = setTimeout(() => {
-                resolve(null); // Timeout
-            }, timeoutMs);
+    // Daten lesen fortsetzen
+    resume() {
+        this.isPaused = false;
 
-            const checkData = () => {
-                if (this.readBuffer.length > 0) {
-                    clearTimeout(timeout);
-                    resolve(this.readBuffer.shift());
-                } else {
-                    setTimeout(checkData, 10);
-                }
-            };
+        // Verarbeite gepufferte Daten
+        while (this.readBuffer.length > 0 && !this.isPaused) {
+            const data = this.readBuffer.shift();
+            this.emit('data', data);
+        }
+    }
 
-            checkData();
-        });
+    // Daten an Device senden
+    write(data) {
+        if (!this.isOpen) {
+            throw new Error('Device nicht geöffnet');
+        }
+
+        this.writeBuffer.push(data);
+        return data.length;
+    }
+
+    // Feature Report lesen
+    getFeatureReport(reportId, bufferSize) {
+        if (!this.isOpen) {
+            throw new Error('Device nicht geöffnet');
+        }
+
+        // Simuliere Feature Report
+        const buffer = Buffer.alloc(bufferSize);
+        buffer[0] = reportId;
+        return buffer;
     }
 
     // Feature Report senden
     sendFeatureReport(data) {
         if (!this.isOpen) {
-            throw new Error('HID device is not open');
+            throw new Error('Device nicht geöffnet');
         }
 
-        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        const reportId = buffer[0];
-
-        this.features.set(reportId, buffer);
-
-        // Simuliere erfolgreiches Senden
-        return buffer.length;
+        return data.length;
     }
 
-    // Feature Report empfangen
-    getFeatureReport(reportId, reportLength) {
-        if (!this.isOpen) {
-            throw new Error('HID device is not open');
-        }
-
-        const existingReport = this.features.get(reportId);
-        if (existingReport) {
-            return existingReport.slice(0, reportLength);
-        }
-
-        // Mock-Report generieren
-        const mockReport = Buffer.alloc(reportLength);
-        mockReport[0] = reportId;
-
-        // Fülle mit Mock-Daten
-        for (let i = 1; i < reportLength; i++) {
-            mockReport[i] = Math.floor(Math.random() * 256);
-        }
-
-        return mockReport;
-    }
-
-    // Schließt das HID-Gerät
-    close() {
-        if (!this.isOpen) {
+    // Simuliere RFID-Tag-Scan
+    simulateRFIDScan(tagHex) {
+        if (!this.isOpen || this.isPaused) {
             return;
         }
 
-        this.isOpen = false;
-        this.writeBuffer = [];
-        this.readBuffer = [];
-        this.features.clear();
-
-        this.emit('close');
-    }
-
-    // Event-Handler für eingehende Daten
-    on(event, handler) {
-        super.on(event, handler);
-
-        // Spezielle Behandlung für 'data' Event
-        if (event === 'data') {
-            // Simuliere gelegentliche Daten-Events
-            this._startDataSimulation();
-        }
-    }
-
-    // Pausiert das Gerät
-    pause() {
-        this.emit('pause');
-    }
-
-    // Setzt das Gerät fort
-    resume() {
-        this.emit('resume');
-    }
-
-    // Holt Geräteinformationen
-    getDeviceInfo() {
-        return { ...this.deviceInfo };
-    }
-
-    // Test-Helper: Simuliert eingehende RFID-Daten
-    simulateRFIDData(tagId) {
-        if (!this.isOpen) {
-            return false;
-        }
-
-        // Konvertiere Tag-ID zu HID-Daten
-        const hidData = this._tagIdToHIDData(tagId);
-
-        // Füge zu Read-Buffer hinzu
-        this.readBuffer.push(hidData);
-
-        // Emittiere Data-Event
-        this.emit('data', hidData);
-
-        return true;
-    }
-
-    // Test-Helper: Simuliert Fehler
-    simulateError(errorType = 'read_error') {
-        const errors = {
-            read_error: new Error('Failed to read from HID device'),
-            write_error: new Error('Failed to write to HID device'),
-            device_disconnected: new Error('HID device disconnected'),
-            timeout_error: new Error('HID operation timeout'),
-            invalid_report: new Error('Invalid HID report')
+        const tag = mockRFIDTags.find(t => t.hex === tagHex) || {
+            hex: tagHex,
+            decimal: parseInt(tagHex, 16),
+            data: Buffer.from(tagHex, 'hex')
         };
 
-        const error = errors[errorType] || new Error('Unknown HID error');
-        this.emit('error', error);
+        // Simuliere HID-Keyboard-Input (Tag-ID + Enter)
+        const tagData = Buffer.from(tag.hex + '\n', 'ascii');
 
-        return error;
-    }
-
-    // Test-Helper: Setzt Mock-Zustand zurück
-    reset() {
-        this.writeBuffer = [];
-        this.readBuffer = [];
-        this.features.clear();
-        this.removeAllListeners();
-    }
-
-    // Private: Konvertiert Tag-ID zu HID-Daten
-    _tagIdToHIDData(tagId) {
-        // Simuliere HID-Report-Format für RFID-Reader
-        const reportId = 0x01;
-        const dataLength = 16;
-        const hidReport = Buffer.alloc(dataLength);
-
-        hidReport[0] = reportId;
-
-        // Tag-ID in Hex-Format
-        const tagHex = tagId.toString().padEnd(14, '0');
-        for (let i = 0; i < Math.min(tagHex.length, 14); i++) {
-            hidReport[i + 1] = tagHex.charCodeAt(i);
+        if (this.isPaused) {
+            this.readBuffer.push(tagData);
+        } else {
+            this.emit('data', tagData);
         }
 
-        // Prüfsumme (einfach)
-        hidReport[15] = 0x0D; // Carriage Return
-
-        return hidReport;
+        // Simuliere auch 'rfid-tag' Event für erweiterte Tests
+        this.emit('rfid-tag', {
+            hex: tag.hex,
+            decimal: tag.decimal,
+            raw: tag.data,
+            timestamp: new Date().toISOString()
+        });
     }
 
-    // Private: Startet Daten-Simulation
-    _startDataSimulation() {
-        if (this._dataSimulationTimer) {
-            return;
-        }
+    // Simuliere Fehler
+    simulateError(errorMessage) {
+        this.emit('error', new Error(errorMessage));
+    }
 
-        this._dataSimulationTimer = setInterval(() => {
-            // Gelegentlich zufällige RFID-Daten generieren
-            if (Math.random() < 0.1) { // 10% Chance
-                const randomTags = ['53004114', '87654321', 'ABCDEF12', '12345678'];
-                const randomTag = randomTags[Math.floor(Math.random() * randomTags.length)];
-                this.simulateRFIDData(randomTag);
+    // Device-Info abrufen
+    getDeviceInfo() {
+        const device = mockDevices.find(d => d.path === this.path);
+        return device || mockDevices[0];
+    }
+}
+
+// Geräte-Discovery
+const devices = jest.fn(() => {
+    return [...mockDevices];
+});
+
+// HID-Klassen-Factory
+const HID = jest.fn().mockImplementation((path) => {
+    return new MockHID(path);
+});
+
+// Weitere HID-Funktionen
+HID.devices = devices;
+HID.setDriverType = jest.fn();
+
+// Test-Helpers für RFID-Simulation
+const mockHelpers = {
+    // Verfügbare Mock-Tags
+    getMockTags: () => [...mockRFIDTags],
+
+    // Neuen Mock-Tag hinzufügen
+    addMockTag: (hex, user = 'Test User') => {
+        const tag = {
+            hex: hex.toUpperCase(),
+            decimal: parseInt(hex, 16),
+            user,
+            data: Buffer.from(hex, 'hex')
+        };
+        mockRFIDTags.push(tag);
+        return tag;
+    },
+
+    // Mock-Tags zurücksetzen
+    resetMockTags: () => {
+        mockRFIDTags.length = 0;
+        mockRFIDTags.push(
+            {
+                hex: '53004114',
+                decimal: 1392525588,
+                user: 'Max Mustermann',
+                data: Buffer.from([0x53, 0x00, 0x41, 0x14])
             }
-        }, 2000);
-    }
-
-    // Cleanup
-    destroy() {
-        if (this._dataSimulationTimer) {
-            clearInterval(this._dataSimulationTimer);
-            this._dataSimulationTimer = null;
-        }
-
-        this.close();
-        this.removeAllListeners();
-    }
-}
-
-// Mock für HID.devices() Funktion
-function mockDevices() {
-    return [
-        {
-            vendorId: 0x08ff,
-            productId: 0x0009,
-            path: 'mock-hid-device-1',
-            serialNumber: 'MOCK_RFID_001',
-            manufacturer: 'Mock RFID Corp',
-            product: 'Mock RFID Reader v2.1',
-            release: 0x0100,
-            interface: 0,
-            usagePage: 0x0001,
-            usage: 0x0006
-        },
-        {
-            vendorId: 0x0461,
-            productId: 0x0010,
-            path: 'mock-hid-device-2',
-            serialNumber: 'MOCK_RFID_002',
-            manufacturer: 'Alternative RFID Inc',
-            product: 'Alt RFID Scanner Pro',
-            release: 0x0200,
-            interface: 0,
-            usagePage: 0x0001,
-            usage: 0x0006
-        },
-        {
-            // Mock für ein anderes HID-Gerät (Tastatur)
-            vendorId: 0x046d,
-            productId: 0xc52b,
-            path: 'mock-keyboard-device',
-            serialNumber: 'MOCK_KB_001',
-            manufacturer: 'Mock Keyboard Corp',
-            product: 'Mock Keyboard',
-            release: 0x2900,
-            interface: 0,
-            usagePage: 0x0001,
-            usage: 0x0006
-        }
-    ];
-}
-
-// Mock für HID.setDriverType() Funktion
-function mockSetDriverType(type) {
-    // Simuliere Driver-Type-Setting
-    console.log(`Mock HID: Driver type set to ${type}`);
-}
-
-// Factory für Mock HID-Geräte
-class MockHIDFactory {
-    static createRFIDReader(devicePath = 'mock-rfid-reader') {
-        const device = new MockHID(devicePath);
-
-        // RFID-spezifische Konfiguration
-        device.deviceInfo.manufacturer = 'RFID Solutions Inc';
-        device.deviceInfo.product = 'Professional RFID Reader';
-        device.deviceInfo.vendorId = 0x08ff;
-        device.deviceInfo.productId = 0x0009;
-
-        return device;
-    }
-
-    static createKeyboardEmulator(devicePath = 'mock-keyboard-hid') {
-        const device = new MockHID(devicePath);
-
-        // Keyboard-HID-Konfiguration
-        device.deviceInfo.manufacturer = 'HID Keyboard Corp';
-        device.deviceInfo.product = 'HID Keyboard Emulator';
-        device.deviceInfo.vendorId = 0x046d;
-        device.deviceInfo.productId = 0xc52b;
-        device.deviceInfo.usagePage = 0x0001;
-        device.deviceInfo.usage = 0x0006;
-
-        return device;
-    }
-
-    static createGenericHID(devicePath = 'mock-generic-hid') {
-        return new MockHID(devicePath);
-    }
-}
-
-// Mock Error Klassen
-class MockHIDError extends Error {
-    constructor(message, code = 'HID_ERROR') {
-        super(message);
-        this.name = 'HIDError';
-        this.code = code;
-    }
-}
-
-class MockHIDDeviceNotFoundError extends MockHIDError {
-    constructor(devicePath) {
-        super(`HID device not found: ${devicePath}`, 'DEVICE_NOT_FOUND');
-        this.name = 'HIDDeviceNotFoundError';
-    }
-}
-
-class MockHIDPermissionError extends MockHIDError {
-    constructor() {
-        super('Permission denied to access HID device', 'PERMISSION_DENIED');
-        this.name = 'HIDPermissionError';
-    }
-}
-
-// Haupt-Mock-Export
-const mockNodeHID = {
-    // Haupt-HID-Klasse
-    HID: MockHID,
-
-    // Factory-Funktionen
-    devices: mockDevices,
-    setDriverType: mockSetDriverType,
-
-    // Factory-Klasse
-    Factory: MockHIDFactory,
-
-    // Error-Klassen
-    HIDError: MockHIDError,
-    DeviceNotFoundError: MockHIDDeviceNotFoundError,
-    PermissionError: MockHIDPermissionError,
-
-    // Test-Hilfsfunktionen
-    resetAllDevices: () => {
-        // Reset-Funktion für Tests
+        );
     },
 
-    createMockRFIDReader: MockHIDFactory.createRFIDReader,
-    createMockKeyboard: MockHIDFactory.createKeyboardEmulator,
-    createMockDevice: MockHIDFactory.createGenericHID,
-
-    // Mock-Device-Registry für Tests
-    _mockDevices: new Map(),
-
-    registerMockDevice: (path, device) => {
-        mockNodeHID._mockDevices.set(path, device);
+    // Mock-Geräte aktualisieren
+    setMockDevices: (newDevices) => {
+        mockDevices.length = 0;
+        mockDevices.push(...newDevices);
     },
 
-    unregisterMockDevice: (path) => {
-        const device = mockNodeHID._mockDevices.get(path);
-        if (device) {
-            device.destroy();
-            mockNodeHID._mockDevices.delete(path);
-        }
+    // Standard Mock-Geräte wiederherstellen
+    resetMockDevices: () => {
+        mockDevices.length = 0;
+        mockDevices.push(
+            {
+                vendorId: 0x1234,
+                productId: 0x5678,
+                path: 'USB\\VID_1234&PID_5678\\MOCK_RFID_READER_001',
+                serialNumber: 'MOCK001',
+                manufacturer: 'Mock RFID Corp',
+                product: 'Mock RFID Reader v1.0',
+                release: 256,
+                interface: 0,
+                usagePage: 1,
+                usage: 6
+            }
+        );
     },
 
-    clearMockDevices: () => {
-        for (const [path, device] of mockNodeHID._mockDevices) {
-            device.destroy();
+    // HID-Device erstellen (für Tests)
+    createMockDevice: (path = 'MOCK_DEVICE') => {
+        return new MockHID(path);
+    },
+
+    // RFID-Scan simulieren (globale Funktion)
+    simulateGlobalRFIDScan: (tagHex, devicePath = null) => {
+        // Wenn kein Device-Pfad angegeben, verwende das erste verfügbare
+        const targetPath = devicePath || mockDevices[0]?.path;
+
+        if (!targetPath) {
+            throw new Error('Kein Mock-Device verfügbar');
         }
-        mockNodeHID._mockDevices.clear();
+
+        // Simuliere den Scan auf allen aktiven Mock-Devices
+        MockHID.activeDevices = MockHID.activeDevices || new Map();
+
+        if (MockHID.activeDevices.has(targetPath)) {
+            const device = MockHID.activeDevices.get(targetPath);
+            device.simulateRFIDScan(tagHex);
+        }
     }
 };
 
-module.exports = mockNodeHID;
+// Statische Device-Verwaltung für Tests
+MockHID.activeDevices = new Map();
+
+// Override der HID-Konstruktor für Device-Tracking
+const originalHID = HID;
+const trackedHID = jest.fn().mockImplementation((path) => {
+    const device = new MockHID(path);
+    MockHID.activeDevices.set(path, device);
+
+    // Cleanup bei Device-Close
+    const originalClose = device.close.bind(device);
+    device.close = () => {
+        MockHID.activeDevices.delete(path);
+        originalClose();
+    };
+
+    return device;
+});
+
+// Eigenschaften übertragen
+trackedHID.devices = devices;
+trackedHID.setDriverType = jest.fn();
+
+module.exports = {
+    // Haupt-Export
+    HID: trackedHID,
+    devices,
+
+    // Mock-Klassen
+    MockHID,
+
+    // Test-Helpers
+    __mockHelpers: mockHelpers,
+    __mockDevices: mockDevices,
+    __mockTags: mockRFIDTags
+};

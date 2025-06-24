@@ -1,506 +1,249 @@
 // tests/mocks/electron.mock.js
 /**
- * Electron Module Mock für Tests
+ * Electron Mock für Jest Tests
+ * Simuliert Electron APIs ohne echte Desktop-Anwendung
  */
 
-const EventEmitter = require('events');
+const mockWebContents = {
+    send: jest.fn(),
+    on: jest.fn(),
+    once: jest.fn(),
+    removeListener: jest.fn(),
+    removeAllListeners: jest.fn(),
+    openDevTools: jest.fn(),
+    closeDevTools: jest.fn(),
+    isDevToolsOpened: jest.fn(() => false),
+    toggleDevTools: jest.fn(),
+    reload: jest.fn(),
+    focus: jest.fn()
+};
 
-class MockBrowserWindow extends EventEmitter {
-    constructor(options = {}) {
-        super();
-        this.options = options;
-        this.webContents = new MockWebContents();
-        this.isDestroyed = false;
-        this.isMinimized = false;
-        this.isMaximized = false;
-        this.isFullScreen = false;
-        this.isFocused = false;
-    }
+const mockBrowserWindow = jest.fn().mockImplementation(() => ({
+    loadFile: jest.fn(() => Promise.resolve()),
+    loadURL: jest.fn(() => Promise.resolve()),
+    show: jest.fn(),
+    hide: jest.fn(),
+    close: jest.fn(),
+    minimize: jest.fn(),
+    maximize: jest.fn(),
+    unmaximize: jest.fn(),
+    restore: jest.fn(),
+    focus: jest.fn(),
+    blur: jest.fn(),
+    on: jest.fn(),
+    once: jest.fn(),
+    removeListener: jest.fn(),
+    removeAllListeners: jest.fn(),
+    webContents: mockWebContents,
+    isMinimized: jest.fn(() => false),
+    isMaximized: jest.fn(() => false),
+    isFullScreen: jest.fn(() => false),
+    isVisible: jest.fn(() => true),
+    isFocused: jest.fn(() => false),
+    isDestroyed: jest.fn(() => false),
+    getBounds: jest.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
+    setBounds: jest.fn(),
+    getSize: jest.fn(() => [800, 600]),
+    setSize: jest.fn(),
+    getPosition: jest.fn(() => [0, 0]),
+    setPosition: jest.fn(),
+    center: jest.fn(),
+    setTitle: jest.fn(),
+    getTitle: jest.fn(() => 'Test Window'),
+    setMenuBarVisibility: jest.fn(),
+    setAutoHideMenuBar: jest.fn(),
+    setIcon: jest.fn()
+}));
 
-    loadFile(filePath) {
-        return Promise.resolve();
-    }
-
-    loadURL(url) {
-        return Promise.resolve();
-    }
-
-    show() {
-        this.emit('show');
-        return this;
-    }
-
-    hide() {
-        this.emit('hide');
-        return this;
-    }
-
-    close() {
-        this.isDestroyed = true;
-        this.emit('close');
-        return this;
-    }
-
-    destroy() {
-        this.isDestroyed = true;
-        this.emit('destroy');
-        return this;
-    }
-
-    minimize() {
-        this.isMinimized = true;
-        this.emit('minimize');
-        return this;
-    }
-
-    maximize() {
-        this.isMaximized = true;
-        this.emit('maximize');
-        return this;
-    }
-
-    unmaximize() {
-        this.isMaximized = false;
-        this.emit('unmaximize');
-        return this;
-    }
-
-    setFullScreen(fullscreen) {
-        this.isFullScreen = fullscreen;
-        this.emit('enter-full-screen');
-        return this;
-    }
-
-    focus() {
-        this.isFocused = true;
-        this.emit('focus');
-        return this;
-    }
-
-    blur() {
-        this.isFocused = false;
-        this.emit('blur');
-        return this;
-    }
-
-    getBounds() {
-        return { x: 0, y: 0, width: 800, height: 600 };
-    }
-
-    setBounds(bounds) {
-        return this;
-    }
-
-    getSize() {
-        return [800, 600];
-    }
-
-    setSize(width, height) {
-        return this;
-    }
-
-    getPosition() {
-        return [0, 0];
-    }
-
-    setPosition(x, y) {
-        return this;
-    }
-
-    isVisible() {
-        return !this.isDestroyed;
-    }
-
-    isMinimized() {
-        return this.isMinimized;
-    }
-
-    isMaximized() {
-        return this.isMaximized;
-    }
-
-    isFullScreen() {
-        return this.isFullScreen;
-    }
-
-    isFocused() {
-        return this.isFocused;
-    }
-
-    isDestroyed() {
-        return this.isDestroyed;
-    }
-}
-
-class MockWebContents extends EventEmitter {
-    constructor() {
-        super();
-        this.userAgent = 'MockElectron';
-        this.session = new MockSession();
-    }
-
-    send(channel, ...args) {
-        this.emit('mock-send', channel, ...args);
-        return this;
-    }
-
-    invoke(channel, ...args) {
-        return Promise.resolve(`mock-invoke-${channel}`);
-    }
-
-    openDevTools() {
-        return this;
-    }
-
-    closeDevTools() {
-        return this;
-    }
-
-    isDevToolsOpened() {
-        return false;
-    }
-
-    reload() {
-        this.emit('reload');
-        return this;
-    }
-
-    setUserAgent(userAgent) {
-        this.userAgent = userAgent;
-        return this;
-    }
-
-    getUserAgent() {
-        return this.userAgent;
-    }
-
-    insertCSS(css) {
-        return Promise.resolve('mock-css-key');
-    }
-
-    removeInsertedCSS(key) {
-        return Promise.resolve();
-    }
-
-    executeJavaScript(code) {
-        return Promise.resolve('mock-js-result');
-    }
-
-    setZoomFactor(factor) {
-        return this;
-    }
-
-    getZoomFactor() {
-        return 1.0;
-    }
-}
-
-class MockSession extends EventEmitter {
-    constructor() {
-        super();
-        this.cookies = new MockCookies();
-    }
-
-    clearCache() {
-        return Promise.resolve();
-    }
-
-    clearStorageData() {
-        return Promise.resolve();
-    }
-}
-
-class MockCookies extends EventEmitter {
-    constructor() {
-        super();
-        this.cookieStore = new Map();
-    }
-
-    get(filter) {
-        return Promise.resolve([]);
-    }
-
-    set(details) {
-        return Promise.resolve();
-    }
-
-    remove(url, name) {
-        return Promise.resolve();
-    }
-}
-
-class MockApp extends EventEmitter {
-    constructor() {
-        super();
-        this.isReady = false;
-        this.version = '1.0.0';
-        this.name = 'Mock Electron App';
-    }
-
-    async whenReady() {
-        this.isReady = true;
-        return Promise.resolve();
-    }
-
-    quit() {
-        this.emit('quit');
-        return this;
-    }
-
-    exit(exitCode = 0) {
-        this.emit('exit', exitCode);
-        return this;
-    }
-
-    relaunch(options = {}) {
-        this.emit('relaunch');
-        return this;
-    }
-
-    getVersion() {
-        return this.version;
-    }
-
-    getName() {
-        return this.name;
-    }
-
-    getPath(name) {
+const mockApp = {
+    getVersion: jest.fn(() => '1.0.0'),
+    getName: jest.fn(() => 'Test App'),
+    getPath: jest.fn((name) => {
         const paths = {
-            home: '/mock/home',
-            appData: '/mock/appData',
-            userData: '/mock/userData',
-            temp: '/mock/temp',
-            exe: '/mock/exe',
-            desktop: '/mock/desktop',
-            documents: '/mock/documents',
-            downloads: '/mock/downloads',
-            music: '/mock/music',
-            pictures: '/mock/pictures',
-            videos: '/mock/videos'
+            home: '/home/test',
+            appData: '/home/test/.config',
+            userData: '/home/test/.config/test-app',
+            temp: '/tmp',
+            exe: '/path/to/app',
+            module: '/path/to/app',
+            desktop: '/home/test/Desktop',
+            documents: '/home/test/Documents',
+            downloads: '/home/test/Downloads',
+            music: '/home/test/Music',
+            pictures: '/home/test/Pictures',
+            videos: '/home/test/Videos'
         };
-        return paths[name] || '/mock/unknown';
-    }
-
-    setPath(name, path) {
-        return this;
-    }
-
-    requestSingleInstanceLock() {
-        return true;
-    }
-
-    releaseSingleInstanceLock() {
-        return this;
-    }
-
-    hasSingleInstanceLock() {
-        return true;
-    }
-
-    isReady() {
-        return this.isReady;
-    }
-
-    dock = {
-        setBadge: jest.fn(),
-        getBadge: jest.fn(() => ''),
-        hide: jest.fn(),
-        show: jest.fn(),
-        isVisible: jest.fn(() => true)
-    };
-
-    commandLine = {
+        return paths[name] || '/test/path';
+    }),
+    whenReady: jest.fn(() => Promise.resolve()),
+    on: jest.fn(),
+    once: jest.fn(),
+    removeListener: jest.fn(),
+    removeAllListeners: jest.fn(),
+    quit: jest.fn(),
+    exit: jest.fn(),
+    relaunch: jest.fn(),
+    isReady: jest.fn(() => true),
+    focus: jest.fn(),
+    hide: jest.fn(),
+    show: jest.fn(),
+    getAppMetrics: jest.fn(() => []),
+    getGPUFeatureStatus: jest.fn(() => ({})),
+    getGPUInfo: jest.fn(() => Promise.resolve({})),
+    setBadgeCount: jest.fn(),
+    getBadgeCount: jest.fn(() => 0),
+    requestSingleInstanceLock: jest.fn(() => true),
+    hasSingleInstanceLock: jest.fn(() => true),
+    releaseSingleInstanceLock: jest.fn(),
+    setUserTasks: jest.fn(),
+    importCertificate: jest.fn(() => Promise.resolve()),
+    disableHardwareAcceleration: jest.fn(),
+    allowRendererProcessReuse: jest.fn(),
+    commandLine: {
         appendSwitch: jest.fn(),
-        appendArgument: jest.fn()
-    };
-}
-
-class MockIpcMain extends EventEmitter {
-    constructor() {
-        super();
-        this.handlers = new Map();
-    }
-
-    handle(channel, listener) {
-        this.handlers.set(channel, listener);
-        return this;
-    }
-
-    handleOnce(channel, listener) {
-        this.handlers.set(channel, listener);
-        return this;
-    }
-
-    removeHandler(channel) {
-        this.handlers.delete(channel);
-        return this;
-    }
-
-    removeAllHandlers() {
-        this.handlers.clear();
-        return this;
-    }
-
-    // Test-Helper
-    async invokeHandler(channel, ...args) {
-        const handler = this.handlers.get(channel);
-        if (handler) {
-            return await handler({ reply: jest.fn() }, ...args);
-        }
-        throw new Error(`No handler registered for channel: ${channel}`);
-    }
-}
-
-class MockIpcRenderer extends EventEmitter {
-    constructor() {
-        super();
-    }
-
-    invoke(channel, ...args) {
-        return Promise.resolve(`mock-invoke-${channel}`);
-    }
-
-    send(channel, ...args) {
-        this.emit('mock-send', channel, ...args);
-        return this;
-    }
-
-    sendSync(channel, ...args) {
-        return `mock-sync-${channel}`;
-    }
-
-    sendTo(webContentsId, channel, ...args) {
-        return this;
-    }
-
-    sendToHost(channel, ...args) {
-        return this;
-    }
-}
-
-class MockGlobalShortcut {
-    constructor() {
-        this.shortcuts = new Map();
-    }
-
-    register(accelerator, callback) {
-        this.shortcuts.set(accelerator, callback);
-        return true;
-    }
-
-    registerAll(accelerators, callback) {
-        accelerators.forEach(acc => this.register(acc, callback));
-        return this;
-    }
-
-    isRegistered(accelerator) {
-        return this.shortcuts.has(accelerator);
-    }
-
-    unregister(accelerator) {
-        this.shortcuts.delete(accelerator);
-        return this;
-    }
-
-    unregisterAll() {
-        this.shortcuts.clear();
-        return this;
-    }
-
-    // Test-Helper
-    triggerShortcut(accelerator) {
-        const callback = this.shortcuts.get(accelerator);
-        if (callback) {
-            callback();
-        }
-    }
-}
-
-class MockDialog {
-    static async showOpenDialog(browserWindow, options) {
-        return {
-            canceled: false,
-            filePaths: ['/mock/selected/file.txt']
-        };
-    }
-
-    static async showSaveDialog(browserWindow, options) {
-        return {
-            canceled: false,
-            filePath: '/mock/saved/file.txt'
-        };
-    }
-
-    static async showMessageBox(browserWindow, options) {
-        return {
-            response: 0,
-            checkboxChecked: false
-        };
-    }
-
-    static showErrorBox(title, content) {
-        // Mock-Implementation
-    }
-
-    static async showCertificateTrustDialog(browserWindow, options) {
-        return Promise.resolve();
-    }
-}
-
-class MockContextBridge {
-    static exposeInMainWorld(apiKey, api) {
-        global[apiKey] = api;
-        return this;
-    }
-}
-
-// Erstelle Mock-Instanzen
-const mockApp = new MockApp();
-const mockIpcMain = new MockIpcMain();
-const mockIpcRenderer = new MockIpcRenderer();
-const mockGlobalShortcut = new MockGlobalShortcut();
-
-// Export der Mock-Module
-const mockElectron = {
-    app: mockApp,
-    BrowserWindow: MockBrowserWindow,
-    ipcMain: mockIpcMain,
-    ipcRenderer: mockIpcRenderer,
-    globalShortcut: mockGlobalShortcut,
-    dialog: MockDialog,
-    contextBridge: MockContextBridge,
-
-    // Utility Classes
-    WebContents: MockWebContents,
-    Session: MockSession,
-    Cookies: MockCookies,
-
-    // Constants
-    __dirname: '/mock/electron',
-    __filename: '/mock/electron/index.js',
-
-    // Process Info
-    process: {
-        platform: 'win32',
-        arch: 'x64',
-        version: 'v16.0.0',
-        versions: {
-            electron: '27.0.0',
-            chrome: '118.0.0.0',
-            node: '18.17.1'
-        }
+        appendArgument: jest.fn(),
+        hasSwitch: jest.fn(() => false),
+        getSwitchValue: jest.fn(() => '')
     }
 };
 
+const mockIpcMain = {
+    handle: jest.fn(),
+    handleOnce: jest.fn(),
+    on: jest.fn(),
+    once: jest.fn(),
+    removeHandler: jest.fn(),
+    removeListener: jest.fn(),
+    removeAllListeners: jest.fn()
+};
+
+const mockIpcRenderer = {
+    invoke: jest.fn(() => Promise.resolve()),
+    on: jest.fn(),
+    once: jest.fn(),
+    send: jest.fn(),
+    sendSync: jest.fn(() => null),
+    sendTo: jest.fn(),
+    sendToHost: jest.fn(),
+    removeListener: jest.fn(),
+    removeAllListeners: jest.fn()
+};
+
+const mockDialog = {
+    showErrorBox: jest.fn(),
+    showMessageBox: jest.fn(() => Promise.resolve({ response: 0, checkboxChecked: false })),
+    showMessageBoxSync: jest.fn(() => 0),
+    showOpenDialog: jest.fn(() => Promise.resolve({ canceled: false, filePaths: [] })),
+    showOpenDialogSync: jest.fn(() => []),
+    showSaveDialog: jest.fn(() => Promise.resolve({ canceled: false, filePath: '' })),
+    showSaveDialogSync: jest.fn(() => ''),
+    showCertificateTrustDialog: jest.fn(() => Promise.resolve())
+};
+
+const mockShell = {
+    showItemInFolder: jest.fn(),
+    openPath: jest.fn(() => Promise.resolve('')),
+    openExternal: jest.fn(() => Promise.resolve()),
+    moveItemToTrash: jest.fn(() => Promise.resolve(true)),
+    beep: jest.fn(),
+    writeShortcutLink: jest.fn(() => true),
+    readShortcutLink: jest.fn(() => ({}))
+};
+
+const mockScreen = {
+    getCursorScreenPoint: jest.fn(() => ({ x: 0, y: 0 })),
+    getPrimaryDisplay: jest.fn(() => ({
+        id: 1,
+        bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+        workArea: { x: 0, y: 0, width: 1920, height: 1040 },
+        size: { width: 1920, height: 1080 },
+        workAreaSize: { width: 1920, height: 1040 },
+        scaleFactor: 1,
+        rotation: 0,
+        touchSupport: 'unknown'
+    })),
+    getAllDisplays: jest.fn(() => []),
+    getDisplayNearestPoint: jest.fn(() => ({})),
+    getDisplayMatching: jest.fn(() => ({})),
+    on: jest.fn(),
+    removeListener: jest.fn()
+};
+
+const mockNativeImage = {
+    createEmpty: jest.fn(() => ({})),
+    createFromPath: jest.fn(() => ({})),
+    createFromBuffer: jest.fn(() => ({})),
+    createFromDataURL: jest.fn(() => ({})),
+    createFromNamedImage: jest.fn(() => ({}))
+};
+
+const mockMenu = {
+    buildFromTemplate: jest.fn(() => ({})),
+    setApplicationMenu: jest.fn(),
+    getApplicationMenu: jest.fn(() => null),
+    sendActionToFirstResponder: jest.fn()
+};
+
+const mockMenuItem = jest.fn().mockImplementation(() => ({
+    click: jest.fn(),
+    enabled: true,
+    visible: true,
+    checked: false
+}));
+
+const mockClipboard = {
+    readText: jest.fn(() => ''),
+    writeText: jest.fn(),
+    readHTML: jest.fn(() => ''),
+    writeHTML: jest.fn(),
+    readImage: jest.fn(() => ({})),
+    writeImage: jest.fn(),
+    readRTF: jest.fn(() => ''),
+    writeRTF: jest.fn(),
+    readBookmark: jest.fn(() => ({ title: '', url: '' })),
+    writeBookmark: jest.fn(),
+    readFindText: jest.fn(() => ''),
+    writeFindText: jest.fn(),
+    clear: jest.fn(),
+    availableFormats: jest.fn(() => []),
+    has: jest.fn(() => false),
+    read: jest.fn(() => ''),
+    write: jest.fn()
+};
+
+const mockGlobalShortcut = {
+    register: jest.fn(() => true),
+    registerAll: jest.fn(),
+    isRegistered: jest.fn(() => false),
+    unregister: jest.fn(),
+    unregisterAll: jest.fn()
+};
+
 module.exports = {
-    mockElectron,
-    MockBrowserWindow,
-    MockWebContents,
-    MockApp,
-    MockIpcMain,
-    MockIpcRenderer,
-    MockGlobalShortcut,
-    MockDialog,
-    MockContextBridge
+    app: mockApp,
+    BrowserWindow: mockBrowserWindow,
+    ipcMain: mockIpcMain,
+    ipcRenderer: mockIpcRenderer,
+    dialog: mockDialog,
+    shell: mockShell,
+    screen: mockScreen,
+    nativeImage: mockNativeImage,
+    Menu: mockMenu,
+    MenuItem: mockMenuItem,
+    clipboard: mockClipboard,
+    globalShortcut: mockGlobalShortcut,
+
+    // Electron Konstanten
+    PLATFORM: 'win32',
+    remote: {
+        app: mockApp,
+        BrowserWindow: mockBrowserWindow,
+        dialog: mockDialog,
+        shell: mockShell,
+        screen: mockScreen,
+        Menu: mockMenu,
+        MenuItem: mockMenuItem,
+        clipboard: mockClipboard,
+        globalShortcut: mockGlobalShortcut
+    }
 };

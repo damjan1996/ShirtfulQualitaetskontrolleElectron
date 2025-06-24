@@ -84,178 +84,12 @@
     "jest-extended": "^4.0.2",
     "jest-html-reporters": "^3.1.5",
     "jsdom": "^23.0.1",
+    "mock-fs": "^5.2.0",
     "npm-check-updates": "^16.14.11",
     "prettier": "^3.1.0"
   },
   "optionalDependencies": {
     "node-hid": "^2.1.2"
-  },
-  "jest": {
-    "testEnvironment": "node",
-    "setupFilesAfterEnv": [
-      "<rootDir>/tests/setup/jest.setup.js"
-    ],
-    "testMatch": [
-      "<rootDir>/tests/**/*.test.js",
-      "<rootDir>/tests/**/*.spec.js"
-    ],
-    "testIgnore": [
-      "<rootDir>/node_modules/",
-      "<rootDir>/dist/",
-      "<rootDir>/build/",
-      "<rootDir>/release/"
-    ],
-    "collectCoverage": false,
-    "coverageDirectory": "coverage",
-    "coverageReporters": [
-      "text",
-      "lcov",
-      "html",
-      "json"
-    ],
-    "collectCoverageFrom": [
-      "main.js",
-      "preload.js",
-      "renderer/**/*.js",
-      "rfid/**/*.js",
-      "db/**/*.js",
-      "utils/**/*.js",
-      "!renderer/libs/**",
-      "!**/*.config.js",
-      "!**/*.mock.js",
-      "!tests/**"
-    ],
-    "coverageThreshold": {
-      "global": {
-        "branches": 70,
-        "functions": 75,
-        "lines": 80,
-        "statements": 80
-      },
-      "./db/": {
-        "branches": 80,
-        "functions": 85,
-        "lines": 90,
-        "statements": 90
-      },
-      "./rfid/": {
-        "branches": 75,
-        "functions": 80,
-        "lines": 85,
-        "statements": 85
-      }
-    },
-    "moduleNameMapping": {
-      "^electron$": "<rootDir>/tests/mocks/electron.mock.js",
-      "^mssql$": "<rootDir>/tests/mocks/mssql.mock.js",
-      "^node-hid$": "<rootDir>/tests/mocks/node-hid.mock.js"
-    },
-    "transform": {
-      "^.+\\.jsx?$": "babel-jest"
-    },
-    "testTimeout": 30000,
-    "setupTimeout": 60000,
-    "verbose": false,
-    "clearMocks": true,
-    "restoreMocks": true,
-    "fakeTimers": {
-      "enableGlobally": false
-    },
-    "errorOnDeprecated": true,
-    "maxWorkers": "50%",
-    "bail": false,
-    "testSequencer": "<rootDir>/tests/setup/test-sequencer.js",
-    "reporters": [
-      "default",
-      [
-        "jest-html-reporters",
-        {
-          "publicPath": "./coverage",
-          "filename": "test-report.html",
-          "expand": true,
-          "hideIcon": false,
-          "pageTitle": "RFID QR Wareneingang - Test Report"
-        }
-      ]
-    ],
-    "globals": {
-      "NODE_ENV": "test",
-      "MSSQL_SERVER": "localhost",
-      "MSSQL_DATABASE": "RdScanner_Test",
-      "MSSQL_USER": "test_user",
-      "MSSQL_PASSWORD": "test_password"
-    },
-    "watchman": true,
-    "watchPathIgnorePatterns": [
-      "<rootDir>/node_modules/",
-      "<rootDir>/dist/",
-      "<rootDir>/coverage/"
-    ],
-    "testPathIgnorePatterns": [
-      "/node_modules/",
-      "/dist/",
-      "/build/",
-      "/release/",
-      "/coverage/"
-    ]
-  },
-  "babel": {
-    "presets": [
-      [
-        "@babel/preset-env",
-        {
-          "targets": {
-            "node": "16"
-          }
-        }
-      ]
-    ]
-  },
-  "prettier": {
-    "semi": true,
-    "singleQuote": true,
-    "tabWidth": 2,
-    "trailingComma": "es5",
-    "printWidth": 100,
-    "arrowParens": "avoid"
-  },
-  "eslintConfig": {
-    "env": {
-      "node": true,
-      "es2022": true,
-      "jest": true
-    },
-    "extends": [
-      "eslint:recommended",
-      "prettier"
-    ],
-    "plugins": [
-      "jest"
-    ],
-    "parserOptions": {
-      "ecmaVersion": 2022,
-      "sourceType": "module"
-    },
-    "rules": {
-      "no-unused-vars": [
-        "error",
-        {
-          "argsIgnorePattern": "^_"
-        }
-      ],
-      "no-console": "off",
-      "jest/no-disabled-tests": "warn",
-      "jest/no-focused-tests": "error",
-      "jest/no-identical-title": "error",
-      "jest/prefer-to-have-length": "warn",
-      "jest/valid-expect": "error"
-    },
-    "ignorePatterns": [
-      "dist/",
-      "build/",
-      "coverage/",
-      "node_modules/"
-    ]
   },
   "build": {
     "appId": "com.shirtful.wareneingang-rfid-qr",
@@ -271,91 +105,57 @@
       "rfid/**/*",
       "db/**/*",
       "utils/**/*",
-      "node_modules/**/*",
       "package.json",
-      "!node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
-      "!node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
-      "!node_modules/*.d.ts",
-      "!node_modules/.bin",
-      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
-      "!.editorconfig",
-      "!**/._*",
-      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
-      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
-      "!**/{appveyor.yml,.travis.yml,circle.yml}",
-      "!**/{karma.conf.js,wallaby.js,wallaby.conf.js}",
-      "!tests/**/*",
-      "!coverage/**/*",
-      "!scripts/test*",
-      "!scripts/create-test*",
-      "!**/*.test.js",
-      "!**/*.spec.js",
-      "!jest.config.js",
-      "!.eslintrc*",
-      "!.prettierrc*"
+      "node_modules/**/*",
+      "!node_modules/**/*.md",
+      "!node_modules/**/test*",
+      "!node_modules/**/example*",
+      "!node_modules/**/demo*"
+    ],
+    "extraFiles": [
+      {
+        "from": ".env.example",
+        "to": ".env",
+        "filter": ["**/*"]
+      }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": [
-            "x64",
-            "ia32"
-          ]
+          "arch": ["x64", "ia32"]
         },
         {
           "target": "portable",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
         }
       ],
-      "icon": "build/icon.ico",
-      "publisherName": "Shirtful GmbH",
-      "requestedExecutionLevel": "asInvoker"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "RFID QR Wareneingang"
+      "shortcutName": "Wareneingang RFID QR"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-portable.${ext}"
-    },
-    "mac": {
-      "target": "dmg",
-      "icon": "build/icon.icns",
-      "category": "public.app-category.business"
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "icon": "build/icon.png",
-      "category": "Office"
+      "artifactName": "Wareneingang-RFID-QR-${version}-portable.exe"
     }
   },
-  "keywords": [
-    "rfid",
-    "qr-code",
-    "wareneingang",
-    "scanner",
-    "inventory",
-    "electron",
-    "desktop-app",
-    "shirtful"
-  ],
-  "homepage": "https://www.shirtful.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shirtful/wareneingang-rfid-qr.git"
+    "url": "https://github.com/shirtful/wareneingang-rfid-qr.git"
   },
-  "bugs": {
-    "url": "https://github.com/shirtful/wareneingang-rfid-qr/issues"
-  }
+  "keywords": [
+    "electron",
+    "rfid",
+    "qr-code",
+    "warehouse",
+    "inventory",
+    "desktop-app",
+    "mssql",
+    "node-hid"
+  ],
+  "homepage": "https://www.shirtful.com"
 }
