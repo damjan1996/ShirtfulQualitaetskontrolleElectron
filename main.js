@@ -31,6 +31,10 @@ class WareneingangMainApp {
         // Session-Management (vereinfacht)
         this.currentSession = null;
 
+        // QR-Scan Rate Limiting
+        this.qrScanRateLimit = new Map();
+        this.maxQRScansPerMinute = 20; // Verhindere übermäßige Scans
+
         this.initializeApp();
     }
 
@@ -274,17 +278,40 @@ class WareneingangMainApp {
             }
         });
 
-        // ===== QR-CODE OPERATIONEN =====
+        // ===== QR-CODE OPERATIONEN MIT RATE LIMITING =====
         ipcMain.handle('qr-scan-save', async (event, sessionId, payload) => {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
                     throw new Error('Datenbank nicht verbunden');
                 }
 
-                return await this.dbClient.saveQRScan(sessionId, payload);
+                // Rate Limiting prüfen
+                if (!this.checkQRScanRateLimit(sessionId)) {
+                    throw new Error('Zu viele QR-Scans pro Minute - bitte warten Sie');
+                }
+
+                // Payload bereinigen (BOM entfernen falls vorhanden)
+                const cleanPayload = payload.replace(/^\ufeff/, '');
+
+                const result = await this.dbClient.saveQRScan(sessionId, cleanPayload);
+
+                // Rate Limit Counter aktualisieren
+                this.updateQRScanRateLimit(sessionId);
+
+                return result;
             } catch (error) {
                 console.error('QR Scan Save Fehler:', error);
-                return null;
+
+                // Spezielle Behandlung für Duplikat-Fehler
+                if (error.message.includes('bereits gescannt') ||
+                    error.message.includes('Duplikat') ||
+                    error.message.includes('bereits verarbeitet')) {
+
+                    // Nicht als systemkritischen Fehler behandeln
+                    return null;
+                }
+
+                throw error;
             }
         });
 
@@ -296,7 +323,8 @@ class WareneingangMainApp {
                 lastError: this.systemStatus.lastError,
                 currentSession: this.currentSession,
                 uptime: Math.floor(process.uptime()),
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                qrScanStats: this.getQRScanStats()
             };
         });
 
@@ -352,6 +380,57 @@ class WareneingangMainApp {
         });
     }
 
+    // ===== QR-SCAN RATE LIMITING =====
+    checkQRScanRateLimit(sessionId) {
+        const now = Date.now();
+        const oneMinute = 60 * 1000;
+
+        if (!this.qrScanRateLimit.has(sessionId)) {
+            this.qrScanRateLimit.set(sessionId, []);
+        }
+
+        const scanTimes = this.qrScanRateLimit.get(sessionId);
+
+        // Entferne Scans älter als 1 Minute
+        const recentScans = scanTimes.filter(time => now - time < oneMinute);
+        this.qrScanRateLimit.set(sessionId, recentScans);
+
+        // Prüfe Limit
+        return recentScans.length < this.maxQRScansPerMinute;
+    }
+
+    updateQRScanRateLimit(sessionId) {
+        const now = Date.now();
+
+        if (!this.qrScanRateLimit.has(sessionId)) {
+            this.qrScanRateLimit.set(sessionId, []);
+        }
+
+        const scanTimes = this.qrScanRateLimit.get(sessionId);
+        scanTimes.push(now);
+
+        // Halte nur die letzten Scans
+        if (scanTimes.length > this.maxQRScansPerMinute) {
+            scanTimes.shift();
+        }
+    }
+
+    getQRScanStats() {
+        const stats = {};
+        const now = Date.now();
+        const oneMinute = 60 * 1000;
+
+        for (const [sessionId, scanTimes] of this.qrScanRateLimit.entries()) {
+            const recentScans = scanTimes.filter(time => now - time < oneMinute);
+            stats[sessionId] = {
+                scansPerMinute: recentScans.length,
+                lastScan: scanTimes.length > 0 ? Math.max(...scanTimes) : null
+            };
+        }
+
+        return stats;
+    }
+
     // ===== RFID HANDLING =====
     async handleRFIDScan(tagId) {
         console.log(`🏷️ RFID-Tag gescannt: ${tagId}`);
@@ -384,6 +463,9 @@ class WareneingangMainApp {
                     const oldSession = this.currentSession;
                     this.currentSession = null;
 
+                    // Rate Limit für Session zurücksetzen
+                    this.qrScanRateLimit.delete(oldSession.sessionId);
+
                     this.sendToRenderer('user-logout', {
                         user,
                         sessionId: oldSession.sessionId,
@@ -402,6 +484,9 @@ class WareneingangMainApp {
                         userId: user.ID,
                         startTime: session.StartTS
                     };
+
+                    // Rate Limit für neue Session initialisieren
+                    this.qrScanRateLimit.set(session.ID, []);
 
                     this.sendToRenderer('user-login', {
                         user,
@@ -433,6 +518,10 @@ class WareneingangMainApp {
         try {
             if (this.currentSession && this.currentSession.userId === userId) {
                 await this.dbClient.endSession(this.currentSession.sessionId);
+
+                // Rate Limit zurücksetzen
+                this.qrScanRateLimit.delete(this.currentSession.sessionId);
+
                 this.currentSession = null;
             }
 
@@ -474,6 +563,9 @@ class WareneingangMainApp {
                 await this.dbClient.endSession(this.currentSession.sessionId);
                 this.currentSession = null;
             }
+
+            // Rate Limits zurücksetzen
+            this.qrScanRateLimit.clear();
 
             // RFID-Listener stoppen
             if (this.rfidListener) {

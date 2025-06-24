@@ -6,6 +6,13 @@ class DatabaseClient {
         this.pool = null;
         this.isConnected = false;
 
+        // Duplikat-Cache für bessere Performance
+        this.duplicateCache = new Map();
+        this.cacheCleanupInterval = null;
+
+        // Pending-Scans Synchronisation
+        this.pendingScans = new Map();
+
         // Database configuration from environment
         this.config = {
             server: process.env.MSSQL_SERVER || 'localhost',
@@ -34,6 +41,32 @@ class DatabaseClient {
             port: this.config.port,
             encrypt: this.config.options.encrypt
         });
+
+        // Cache-Cleanup alle 5 Minuten
+        this.startCacheCleanup();
+    }
+
+    startCacheCleanup() {
+        this.cacheCleanupInterval = setInterval(() => {
+            this.cleanupDuplicateCache();
+        }, 5 * 60 * 1000); // 5 Minuten
+    }
+
+    cleanupDuplicateCache() {
+        const now = Date.now();
+        const maxAge = 24 * 60 * 60 * 1000; // 24 Stunden
+
+        let cleanedCount = 0;
+        for (const [key, timestamp] of this.duplicateCache.entries()) {
+            if (now - timestamp > maxAge) {
+                this.duplicateCache.delete(key);
+                cleanedCount++;
+            }
+        }
+
+        if (cleanedCount > 0) {
+            console.log(`🧹 Duplikat-Cache bereinigt: ${cleanedCount} Einträge entfernt`);
+        }
     }
 
     async connect() {
@@ -100,9 +133,13 @@ class DatabaseClient {
                     if (result.recordset[0].tableCount > 0) {
                         existingTables.push(tableName);
 
-                        // Zeilen zählen für Info
-                        const countResult = await this.query(`SELECT COUNT(*) as rowCount FROM dbo.[${tableName}]`);
-                        console.log(`✅ Tabelle ${tableName}: ${countResult.recordset[0].rowCount} Einträge`);
+                        // Zeilen zählen für Info (mit korrekter SQL-Syntax)
+                        try {
+                            const countResult = await this.query(`SELECT COUNT(*) as rowCount FROM dbo.${tableName}`);
+                            console.log(`✅ Tabelle ${tableName}: ${countResult.recordset[0].rowCount} Einträge`);
+                        } catch (countError) {
+                            console.log(`✅ Tabelle ${tableName}: vorhanden (Zählung fehlgeschlagen)`);
+                        }
                     } else {
                         missingTables.push(tableName);
                     }
@@ -179,6 +216,11 @@ class DatabaseClient {
     }
 
     async close() {
+        if (this.cacheCleanupInterval) {
+            clearInterval(this.cacheCleanupInterval);
+            this.cacheCleanupInterval = null;
+        }
+
         if (this.pool) {
             try {
                 await this.pool.close();
@@ -289,33 +331,83 @@ class DatabaseClient {
         }
     }
 
-    // ===== QR-SCAN OPERATIONEN =====
+    // ===== QR-SCAN OPERATIONEN MIT VERBESSERTER DUPLIKAT-BEHANDLUNG =====
     async saveQRScan(sessionId, payload) {
+        const cacheKey = `${sessionId}_${payload}`;
+
         try {
             console.log(`Speichere QR-Scan für Session ${sessionId}`);
 
-            // Prüfe auf Duplikate (global für heute)
+            // 1. Prüfe ob bereits in Verarbeitung
+            if (this.pendingScans.has(cacheKey)) {
+                throw new Error('QR-Code wird bereits verarbeitet (Concurrent-Request)');
+            }
+
+            // 2. Markiere als in Verarbeitung
+            this.pendingScans.set(cacheKey, Date.now());
+
+            // 3. Prüfe Cache
+            const cachedTime = this.duplicateCache.get(payload);
+            if (cachedTime) {
+                const hoursSinceCache = (Date.now() - cachedTime) / (1000 * 60 * 60);
+                if (hoursSinceCache < 24) {
+                    throw new Error('QR-Code wurde heute bereits gescannt (Cache-Duplikat)');
+                }
+            }
+
+            // 4. Prüfe auf Duplikate in Datenbank
             const isDuplicate = await this.checkQRDuplicate(payload);
             if (isDuplicate) {
-                throw new Error('QR-Code wurde heute bereits gescannt (globales Duplikat)');
+                // Cache-Update
+                this.duplicateCache.set(payload, Date.now());
+                throw new Error('QR-Code wurde heute bereits gescannt (Datenbank-Duplikat)');
             }
 
-            // QR-Scan speichern
-            const result = await this.query(`
-                INSERT INTO dbo.QrScans (SessionID, RawPayload, Valid, CapturedTS)
-                OUTPUT INSERTED.ID, INSERTED.CapturedTS
-                VALUES (?, ?, 1, SYSDATETIME())
-            `, [sessionId, payload]);
+            // 5. QR-Scan speichern mit Transaction für Atomarität
+            const result = await this.transaction(async (request) => {
+                // Nochmalige Duplikat-Prüfung innerhalb der Transaction
+                const finalDupCheck = await request.query(`
+                    SELECT COUNT(*) as duplicateCount
+                    FROM dbo.QrScans
+                    WHERE RawPayload = @payload
+                      AND CapturedTS >= DATEADD(HOUR, -24, SYSDATETIME())
+                      AND Valid = 1
+                `, {
+                    payload: { type: sql.NVarChar, value: payload }
+                });
 
-            if (result.recordset.length > 0) {
-                const scan = result.recordset[0];
-                console.log(`✅ QR-Scan gespeichert: ID ${scan.ID}`);
-                return scan;
+                if (finalDupCheck.recordset[0].duplicateCount > 0) {
+                    throw new Error('QR-Code wurde heute bereits gescannt (Transaction-Duplikat-Check)');
+                }
+
+                // Einfügen
+                const insertResult = await request.query(`
+                    INSERT INTO dbo.QrScans (SessionID, RawPayload, Valid, CapturedTS)
+                    OUTPUT INSERTED.ID, INSERTED.CapturedTS
+                    VALUES (@sessionId, @payload, 1, SYSDATETIME())
+                `, {
+                    sessionId: { type: sql.BigInt, value: sessionId },
+                    payload: { type: sql.NVarChar, value: payload }
+                });
+
+                return insertResult.recordset[0];
+            });
+
+            if (result) {
+                // Erfolgreich gespeichert - Cache aktualisieren
+                this.duplicateCache.set(payload, Date.now());
+
+                console.log(`✅ QR-Scan gespeichert: ID ${result.ID}`);
+                return result;
             }
             return null;
+
         } catch (error) {
             console.error('Fehler beim Speichern des QR-Scans:', error);
-            throw error; // Fehler weiterwerfen für Duplikat-Behandlung
+            throw error; // Fehler weiterwerfen für UI-Behandlung
+        } finally {
+            // Immer aus Pending-Set entfernen
+            this.pendingScans.delete(cacheKey);
         }
     }
 
@@ -385,43 +477,43 @@ class DatabaseClient {
     async getRecentActivity(hours = 8) {
         try {
             const result = await this.query(`
-                SELECT 
+                SELECT
                     'session' as EventType,
                     s.StartTS as EventTime,
                     u.BenutzerName as UserName,
                     'Login' as Action,
                     NULL as Details
                 FROM dbo.Sessions s
-                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                    INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
                 WHERE s.StartTS >= DATEADD(HOUR, -?, SYSDATETIME())
-                
+
                 UNION ALL
-                
-                SELECT 
+
+                SELECT
                     'session' as EventType,
                     s.EndTS as EventTime,
                     u.BenutzerName as UserName,
                     'Logout' as Action,
                     CAST(DATEDIFF(MINUTE, s.StartTS, s.EndTS) AS VARCHAR) + ' min' as Details
                 FROM dbo.Sessions s
-                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                    INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
                 WHERE s.EndTS >= DATEADD(HOUR, -?, SYSDATETIME())
-                AND s.EndTS IS NOT NULL
-                
+                  AND s.EndTS IS NOT NULL
+
                 UNION ALL
-                
-                SELECT 
+
+                SELECT
                     'qr_scan' as EventType,
                     q.CapturedTS as EventTime,
                     u.BenutzerName as UserName,
                     'QR-Scan' as Action,
                     LEFT(q.RawPayload, 50) as Details
                 FROM dbo.QrScans q
-                INNER JOIN dbo.Sessions s ON q.SessionID = s.ID
-                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                    INNER JOIN dbo.Sessions s ON q.SessionID = s.ID
+                    INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
                 WHERE q.CapturedTS >= DATEADD(HOUR, -?, SYSDATETIME())
-                AND q.Valid = 1
-                
+                  AND q.Valid = 1
+
                 ORDER BY EventTime DESC
             `, [hours, hours, hours]);
 
@@ -466,7 +558,11 @@ class DatabaseClient {
                 connectionTime: connectionTime,
                 server: serverInfo.recordset[0],
                 stats: tableStats.recordset[0],
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                duplicateCache: {
+                    size: this.duplicateCache.size,
+                    pendingScans: this.pendingScans.size
+                }
             };
 
         } catch (error) {
@@ -485,8 +581,23 @@ class DatabaseClient {
         try {
             await transaction.begin();
 
-            const request = new sql.Request(transaction);
-            const result = await callback(request);
+            // Custom Request-Objekt mit Parameter-Unterstützung
+            const customRequest = {
+                query: async (queryString, params = {}) => {
+                    const request = new sql.Request(transaction);
+
+                    // Parameter hinzufügen
+                    for (const [key, paramConfig] of Object.entries(params)) {
+                        if (paramConfig.type && paramConfig.value !== undefined) {
+                            request.input(key, paramConfig.type, paramConfig.value);
+                        }
+                    }
+
+                    return await request.query(queryString);
+                }
+            };
+
+            const result = await callback(customRequest);
 
             await transaction.commit();
             return result;
@@ -511,6 +622,10 @@ class DatabaseClient {
                 database: this.config.database,
                 user: this.config.user,
                 port: this.config.port
+            },
+            cache: {
+                duplicates: this.duplicateCache.size,
+                pending: this.pendingScans.size
             }
         };
     }
@@ -558,6 +673,22 @@ class DatabaseClient {
             console.error('Debug Info Fehler:', error);
             return { error: error.message };
         }
+    }
+
+    // ===== CACHE MANAGEMENT =====
+    clearDuplicateCache() {
+        const oldSize = this.duplicateCache.size;
+        this.duplicateCache.clear();
+        console.log(`🧹 Duplikat-Cache geleert: ${oldSize} Einträge entfernt`);
+    }
+
+    getDuplicateCacheStats() {
+        return {
+            size: this.duplicateCache.size,
+            pendingScans: this.pendingScans.size,
+            oldestEntry: this.duplicateCache.size > 0 ? Math.min(...this.duplicateCache.values()) : null,
+            newestEntry: this.duplicateCache.size > 0 ? Math.max(...this.duplicateCache.values()) : null
+        };
     }
 }
 

@@ -23,9 +23,13 @@ class WareneingangApp {
         this.qrScanner = null;
         this.loadQRLibrary();
 
-        // Duplikat-Vermeidung
+        // Verbesserte Duplikat-Vermeidung
         this.globalScannedCodes = new Set();
         this.sessionScannedCodes = new Set();
+        this.recentlyScanned = new Map(); // Zeitbasierte Duplikat-Vermeidung
+        this.pendingScans = new Set(); // Verhindert Race-Conditions
+        this.lastProcessedQR = null;
+        this.lastProcessedTime = 0;
 
         this.init();
     }
@@ -147,7 +151,11 @@ class WareneingangApp {
 
         this.sessionStartTime = new Date(session.StartTS);
         this.scanCount = 0;
+
+        // Reset alle Duplikat-Sets bei neuer Anmeldung
         this.sessionScannedCodes.clear();
+        this.recentlyScanned.clear();
+        this.pendingScans.clear();
 
         this.showWorkspace();
         this.startSessionTimer();
@@ -164,7 +172,11 @@ class WareneingangApp {
         this.currentUser = null;
         this.sessionStartTime = null;
         this.scanCount = 0;
+
+        // Reset alle Duplikat-Sets bei Abmeldung
         this.sessionScannedCodes.clear();
+        this.recentlyScanned.clear();
+        this.pendingScans.clear();
 
         this.showNotification('info', 'Abgemeldet', `${user.BenutzerName} abgemeldet`);
         this.updateInstructionText('RFID-Tag scannen = Anmelden • QR-Code scannen = Paket erfassen');
@@ -518,31 +530,55 @@ class WareneingangApp {
         }
     }
 
-    // ===== QR-CODE VERARBEITUNG =====
+    // ===== QR-CODE VERARBEITUNG MIT VERBESSERTER DUPLIKAT-VERMEIDUNG =====
     async handleQRCodeDetected(qrData) {
         const now = Date.now();
 
-        // Cooldown prüfen
-        if (now - this.lastScanTime < this.scanCooldown) {
+        // 1. Sofortige Duplikat-Prüfung (identischer Code + Zeit)
+        if (this.lastProcessedQR === qrData && (now - this.lastProcessedTime) < 2000) {
+            console.log('🔄 Identischer QR-Code innerhalb 2s ignoriert');
             return;
         }
 
-        // Duplikat prüfen (global und session)
-        if (await this.isDuplicateQR(qrData)) {
-            this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde bereits gescannt');
+        // 2. Prüfung auf kürzlich gescannte Codes (zeitbasiert)
+        const recentScanTime = this.recentlyScanned.get(qrData);
+        if (recentScanTime && (now - recentScanTime) < this.scanCooldown) {
+            console.log(`🔄 QR-Code zu schnell erneut gescannt (${now - recentScanTime}ms < ${this.scanCooldown}ms)`);
             return;
         }
 
-        this.lastScanTime = now;
+        // 3. Prüfung auf bereits laufende Verarbeitung
+        if (this.pendingScans.has(qrData)) {
+            console.log('🔄 QR-Code wird bereits verarbeitet, überspringe');
+            return;
+        }
 
-        console.log('📄 QR-Code erkannt:', qrData);
+        // 4. Session-Duplikat-Prüfung
+        if (this.sessionScannedCodes.has(qrData)) {
+            this.showNotification('warning', 'Bereits gescannt', 'Dieser QR-Code wurde in dieser Session bereits erfasst');
+            return;
+        }
+
+        // 5. Globales Duplikat-Set prüfen
+        if (this.globalScannedCodes.has(qrData)) {
+            this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde heute bereits gescannt');
+            return;
+        }
+
+        // Verarbeitung starten
+        this.lastProcessedQR = qrData;
+        this.lastProcessedTime = now;
+        this.pendingScans.add(qrData);
+        this.recentlyScanned.set(qrData, now);
+
+        console.log('📄 QR-Code erkannt und wird verarbeitet:', qrData);
 
         try {
             // In Datenbank speichern
             const result = await window.electronAPI.qr.saveScan(this.currentUser.sessionId, qrData);
 
             if (result) {
-                // Duplikat-Sets aktualisieren
+                // Erfolgreiche Speicherung - zu Duplikat-Sets hinzufügen
                 this.globalScannedCodes.add(qrData);
                 this.sessionScannedCodes.add(qrData);
 
@@ -565,7 +601,7 @@ class WareneingangApp {
                 document.getElementById('lastScanTime').textContent =
                     new Date().toLocaleTimeString('de-DE');
 
-                console.log(`✅ QR-Code gespeichert für ${this.currentUser.name}`);
+                console.log(`✅ QR-Code gespeichert für ${this.currentUser.name} (ID: ${result.ID})`);
 
             } else {
                 throw new Error('QR-Code konnte nicht gespeichert werden');
@@ -573,46 +609,17 @@ class WareneingangApp {
 
         } catch (error) {
             console.error('QR-Code Verarbeitung fehlgeschlagen:', error);
-            this.showNotification('error', 'Speicher-Fehler', error.message);
-        }
-    }
 
-    async isDuplicateQR(qrData) {
-        // Session-Duplikat (schnell)
-        if (this.sessionScannedCodes.has(qrData)) {
-            return true;
-        }
-
-        // Globales Duplikat (wenn noch nicht im lokalen Set)
-        if (this.globalScannedCodes.has(qrData)) {
-            return true;
-        }
-
-        // Datenbank-Duplikat prüfen (für heute)
-        try {
-            const today = new Date().toISOString().split('T')[0];
-            const result = await window.electronAPI.db.query(`
-                SELECT COUNT(*) as count 
-                FROM dbo.QrScans q
-                INNER JOIN dbo.Sessions s ON q.SessionID = s.ID
-                WHERE q.RawPayload = ? 
-                AND CAST(q.CapturedTS AS DATE) = ?
-            `, [qrData, today]);
-
-            const count = result.recordset[0].count;
-
-            if (count > 0) {
-                // Zu lokalen Sets hinzufügen für Performance
+            // Bei Duplikat-Fehler zu lokalen Sets hinzufügen
+            if (error.message.includes('bereits gescannt') || error.message.includes('Duplikat')) {
                 this.globalScannedCodes.add(qrData);
-                return true;
+                this.showNotification('warning', 'Duplikat', 'Dieser QR-Code wurde bereits erfasst');
+            } else {
+                this.showNotification('error', 'Speicher-Fehler', error.message);
             }
-
-            return false;
-
-        } catch (error) {
-            console.error('Duplikat-Prüfung fehlgeschlagen:', error);
-            // Bei Fehler: Als neuen Scan behandeln
-            return false;
+        } finally {
+            // Verarbeitung abgeschlossen - aus Pending-Set entfernen
+            this.pendingScans.delete(qrData);
         }
     }
 
@@ -714,6 +721,19 @@ class WareneingangApp {
         this.showNotification('info', 'Scans geleert', 'Scan-Historie wurde geleert');
     }
 
+    // ===== UTILITY METHODS =====
+    cleanupOldScans() {
+        // Bereinige alte Einträge aus recentlyScanned (älter als 1 Minute)
+        const now = Date.now();
+        const oneMinute = 60 * 1000;
+
+        for (const [qrData, timestamp] of this.recentlyScanned.entries()) {
+            if (now - timestamp > oneMinute) {
+                this.recentlyScanned.delete(qrData);
+            }
+        }
+    }
+
     // ===== UI UPDATES =====
     updateSystemStatus(status, message) {
         const statusDot = document.querySelector('.status-dot');
@@ -738,6 +758,11 @@ class WareneingangApp {
 
         updateClock();
         setInterval(updateClock, 1000);
+
+        // Periodische Bereinigung alter Scans
+        setInterval(() => {
+            this.cleanupOldScans();
+        }, 30000); // Alle 30 Sekunden
     }
 
     async updateSystemInfo() {
