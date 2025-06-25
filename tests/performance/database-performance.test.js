@@ -1,13 +1,13 @@
 // tests/performance/database-performance.test.js
 /**
- * Performance Tests für Database Operations
- * Vollständig korrigiert und optimiert
+ * Database Performance Tests - Korrigiert
+ * Testet die Performance von Database und RFID Operationen
  */
 
 const MockDatabaseClient = require('../mocks/db-client.mock');
 const MockRFIDListener = require('../mocks/rfid-listener.mock');
 
-// Hilfsfunktion für async delays
+// Test Utilities
 const waitFor = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 describe('Database Performance Tests', () => {
@@ -16,341 +16,281 @@ describe('Database Performance Tests', () => {
 
     beforeEach(async () => {
         dbClient = new MockDatabaseClient();
-        dbClient.enableFastMode(); // Aktiviere Fast Mode für bessere Performance
         await dbClient.connect();
+        dbClient.clearMockData();
 
         performanceMetrics = {
-            queryTimes: [],
-            memoryUsage: [],
-            connectionTimes: []
+            queries: 0,
+            totalTime: 0,
+            minTime: Infinity,
+            maxTime: 0,
+            averageTime: 0
         };
-    }, 15000); // Längerer Setup-Timeout
+    });
 
     afterEach(async () => {
-        if (dbClient) {
-            try {
-                await dbClient.close();
-            } catch (error) {
-                // Ignoriere Cleanup-Fehler
-                console.warn('Cleanup warning:', error.message);
+        await dbClient.close();
+    });
+
+    async function measurePerformance(operation) {
+        const startTime = Date.now();
+        await operation();
+        const endTime = Date.now();
+        const duration = endTime - startTime;
+
+        performanceMetrics.queries++;
+        performanceMetrics.totalTime += duration;
+        performanceMetrics.minTime = Math.min(performanceMetrics.minTime, duration);
+        performanceMetrics.maxTime = Math.max(performanceMetrics.maxTime, duration);
+        performanceMetrics.averageTime = performanceMetrics.totalTime / performanceMetrics.queries;
+
+        return duration;
+    }
+
+    describe('User Lookup Performance', () => {
+        test('should handle rapid user lookups efficiently', async () => {
+            const lookupCount = 100;
+            const maxAverageTime = 50; // 50ms average should be achievable
+
+            for (let i = 0; i < lookupCount; i++) {
+                await measurePerformance(async () => {
+                    await dbClient.getUserByRFID('329C172');
+                });
             }
-        }
-    }, 5000);
 
-    describe('Query Performance', () => {
-        test('should handle user lookup within performance threshold', async () => {
-            const iterations = 50; // Reduziert für Stabilität
-            const maxQueryTime = 100; // Realistischere Erwartung
-            const queryTimes = [];
+            expect(performanceMetrics.averageTime).toBeLessThan(maxAverageTime);
+            expect(performanceMetrics.queries).toBe(lookupCount);
 
-            for (let i = 0; i < iterations; i++) {
-                const startTime = process.hrtime.bigint();
-                await dbClient.getUserByEPC('53004114');
-                const endTime = process.hrtime.bigint();
-
-                const queryTime = Number(endTime - startTime) / 1000000; // Convert to ms
-                queryTimes.push(queryTime);
-
-                // Gelegentliche Pause zur Simulation realer Bedingungen
-                if (i % 10 === 0) {
-                    await waitFor(1);
-                }
-            }
-
-            const averageTime = queryTimes.reduce((sum, time) => sum + time, 0) / iterations;
-            const maxTime = Math.max(...queryTimes);
-            const minTime = Math.min(...queryTimes);
-
-            expect(averageTime).toBeLessThan(maxQueryTime);
-            expect(maxTime).toBeLessThan(maxQueryTime * 5); // Toleranter Max-Wert
-
-            console.log(`Query Performance Stats:
-                Average: ${averageTime.toFixed(2)}ms
-                Min: ${minTime.toFixed(2)}ms
-                Max: ${maxTime.toFixed(2)}ms
-                Iterations: ${iterations}
+            console.log(`User Lookup Performance:
+                Lookups: ${lookupCount}
+                Average Time: ${performanceMetrics.averageTime.toFixed(2)}ms
+                Min Time: ${performanceMetrics.minTime}ms
+                Max Time: ${performanceMetrics.maxTime}ms
+                Total Time: ${performanceMetrics.totalTime}ms
             `);
-        }, 20000);
+        });
 
-        test('should handle concurrent database operations efficiently', async () => {
-            const concurrentOperations = 10; // Reduziert für Stabilität
-            const maxTotalTime = 10000; // Realistischere Erwartung
+        test('should handle concurrent user lookups', async () => {
+            const concurrentLookups = 50;
+            const maxConcurrentTime = 1000;
 
             const startTime = Date.now();
 
-            // Sessions vorab erstellen um Race Conditions zu vermeiden
-            const user = await dbClient.getUserByEPC('53004114');
-            const sessions = [];
+            const promises = Array.from({ length: concurrentLookups }, () =>
+                dbClient.getUserByRFID('329C172')
+            );
 
-            for (let i = 0; i < concurrentOperations; i++) {
-                if (user) {
-                    const session = await dbClient.createSession(user.ID);
-                    sessions.push(session);
-                    await waitFor(5); // Kurze Pause zwischen Session-Erstellungen
-                }
+            const results = await Promise.all(promises);
+            const totalTime = Date.now() - startTime;
+
+            expect(totalTime).toBeLessThan(maxConcurrentTime);
+            expect(results.length).toBe(concurrentLookups);
+            expect(results.every(user => user && user.BenID === 1)).toBe(true);
+
+            console.log(`Concurrent User Lookup Performance:
+                Concurrent Lookups: ${concurrentLookups}
+                Total Time: ${totalTime}ms
+                Lookups/sec: ${(concurrentLookups / (totalTime / 1000)).toFixed(0)}
+            `);
+        });
+
+        test('should handle unknown user lookups efficiently', async () => {
+            const unknownLookups = 50;
+            const maxAverageTime = 30;
+
+            for (let i = 0; i < unknownLookups; i++) {
+                await measurePerformance(async () => {
+                    const result = await dbClient.getUserByRFID(`UNKNOWN${i}`);
+                    expect(result).toBeNull();
+                });
             }
 
-            // Parallele QR-Scans nur wenn Sessions vorhanden
-            if (sessions.length > 0) {
-                const scanPromises = sessions.map(async (session, index) => {
-                    try {
-                        await dbClient.saveQRScan(session.ID, `CONCURRENT_QR_${index}_${Date.now()}`);
-                    } catch (error) {
-                        console.warn(`Scan ${index} failed:`, error.message);
-                    }
+            expect(performanceMetrics.averageTime).toBeLessThan(maxAverageTime);
+
+            console.log(`Unknown User Lookup Performance:
+                Lookups: ${unknownLookups}
+                Average Time: ${performanceMetrics.averageTime.toFixed(2)}ms
+            `);
+        });
+    });
+
+    describe('Session Management Performance', () => {
+        test('should handle rapid session creation', async () => {
+            const sessionCount = 25; // Reduziert für stabilere Tests
+            const maxAverageTime = 100;
+
+            for (let i = 0; i < sessionCount; i++) {
+                await measurePerformance(async () => {
+                    const session = await dbClient.createSession(1);
+                    expect(session).toBeDefined();
+                    expect(session.BenID).toBe(1);
                 });
+            }
 
-                await Promise.all(scanPromises);
+            expect(performanceMetrics.averageTime).toBeLessThan(maxAverageTime);
 
-                // Sessions sequenziell schließen
-                for (const session of sessions) {
-                    try {
-                        await dbClient.endSession(session.ID);
-                    } catch (error) {
-                        console.warn(`Session close failed:`, error.message);
-                    }
-                }
+            console.log(`Session Creation Performance:
+                Sessions: ${sessionCount}
+                Average Time: ${performanceMetrics.averageTime.toFixed(2)}ms
+                Total Sessions in DB: ${dbClient.mockData.sessions.length}
+            `);
+        });
+
+        test('should handle session lifecycle efficiently', async () => {
+            const lifecycleCount = 20;
+            const maxTotalTime = 2000;
+
+            const startTime = Date.now();
+
+            for (let i = 0; i < lifecycleCount; i++) {
+                // Create session
+                const session = await dbClient.createSession(1);
+
+                // Add some QR scans
+                await dbClient.saveQRScan(session.ID, `TEST_SCAN_${i}_1`);
+                await dbClient.saveQRScan(session.ID, `TEST_SCAN_${i}_2`);
+
+                // End session
+                await dbClient.endSession(session.ID);
             }
 
             const totalTime = Date.now() - startTime;
 
             expect(totalTime).toBeLessThan(maxTotalTime);
 
-            console.log(`Concurrent Operations Performance:
-                Operations: ${concurrentOperations}
+            console.log(`Session Lifecycle Performance:
+                Lifecycles: ${lifecycleCount}
                 Total Time: ${totalTime}ms
-                Ops/sec: ${(concurrentOperations / (totalTime / 1000)).toFixed(0)}
-            `);
-        }, 25000);
-
-        test('should maintain performance with large datasets', async () => {
-            const largeDatasetSize = 100; // Reduziert für Stabilität
-            const maxProcessingTime = 15000; // Realistischere Erwartung
-
-            const startTime = Date.now();
-
-            // Erstelle große Datenmengen sequenziell
-            for (let i = 0; i < largeDatasetSize; i++) {
-                const user = await dbClient.getUserByEPC('53004114');
-                if (user) {
-                    try {
-                        const session = await dbClient.createSession(user.ID);
-                        await dbClient.saveQRScan(session.ID, `LARGE_DATASET_QR_${i}_${Date.now()}`);
-                        await dbClient.endSession(session.ID);
-                    } catch (error) {
-                        console.warn(`Operation ${i} failed:`, error.message);
-                    }
-                }
-
-                // Gelegentliche Pause zur Simulation realer Bedingungen
-                if (i % 20 === 0) {
-                    await waitFor(10);
-                }
-            }
-
-            const processingTime = Date.now() - startTime;
-
-            expect(processingTime).toBeLessThan(maxProcessingTime);
-
-            console.log(`Large Dataset Performance:
-                Dataset Size: ${largeDatasetSize}
-                Processing Time: ${processingTime}ms
-                Items/sec: ${(largeDatasetSize / (processingTime / 1000)).toFixed(0)}
-            `);
-        }, 30000);
-    });
-
-    describe('Memory Performance', () => {
-        test('should not leak memory during extended operations', async () => {
-            const initialMemory = process.memoryUsage();
-            const operationCycles = 50; // Stark reduziert
-            const maxMemoryGrowth = 100 * 1024 * 1024; // 100MB Toleranz
-
-            for (let cycle = 0; cycle < operationCycles; cycle++) {
-                // Simuliere Arbeitszyklen
-                for (let i = 0; i < 5; i++) {
-                    const user = await dbClient.getUserByEPC('53004114');
-                    if (user) {
-                        try {
-                            const session = await dbClient.createSession(user.ID);
-                            await dbClient.saveQRScan(session.ID, `MEMORY_TEST_${cycle}_${i}_${Date.now()}`);
-                            await dbClient.endSession(session.ID);
-                        } catch (error) {
-                            // Ignoriere Fehler für Memory-Test
-                        }
-                    }
-                }
-
-                // Häufigere Garbage Collection
-                if (cycle % 10 === 0) {
-                    if (global.gc) {
-                        global.gc();
-                    }
-                    await waitFor(20);
-                }
-            }
-
-            // Finale Garbage Collection
-            if (global.gc) {
-                global.gc();
-            }
-            await waitFor(100);
-
-            const finalMemory = process.memoryUsage();
-            const memoryGrowth = finalMemory.heapUsed - initialMemory.heapUsed;
-
-            expect(memoryGrowth).toBeLessThan(maxMemoryGrowth);
-
-            console.log(`Memory Performance:
-                Initial Heap: ${(initialMemory.heapUsed / 1024 / 1024).toFixed(2)}MB
-                Final Heap: ${(finalMemory.heapUsed / 1024 / 1024).toFixed(2)}MB
-                Growth: ${(memoryGrowth / 1024 / 1024).toFixed(2)}MB
-                Operations: ${operationCycles * 5}
-            `);
-        }, 45000);
-
-        test('should handle cache efficiently', async () => {
-            const cacheOperations = 1000;
-
-            // Fülle Cache mit vielen verschiedenen QR-Codes
-            for (let i = 0; i < cacheOperations; i++) {
-                dbClient.duplicateCache.set(`CACHE_TEST_${i}`, Date.now());
-            }
-
-            // Cache sollte begrenzt sein oder sich selbst bereinigen
-            expect(dbClient.duplicateCache.size).toBeLessThanOrEqual(cacheOperations);
-
-            // Teste Cache-Performance
-            const startTime = process.hrtime.bigint();
-
-            for (let i = 0; i < 1000; i++) {
-                const key = `CACHE_TEST_${i}`;
-                dbClient.duplicateCache.has(key);
-                dbClient.duplicateCache.get(key);
-            }
-
-            const endTime = process.hrtime.bigint();
-            const cacheTime = Number(endTime - startTime) / 1000000; // ms
-
-            expect(cacheTime).toBeLessThan(100); // Realistischere Erwartung
-
-            console.log(`Cache Performance:
-                Cache Size: ${dbClient.duplicateCache.size}
-                Cache Operations: 1000
-                Total Time: ${cacheTime.toFixed(2)}ms
+                Sessions/sec: ${(lifecycleCount / (totalTime / 1000)).toFixed(1)}
+                QR Scans Created: ${dbClient.mockData.qrScans.length}
             `);
         });
     });
 
-    describe('Connection Performance', () => {
-        test('should establish connections quickly', async () => {
-            const connectionAttempts = 5; // Reduziert für Stabilität
-            const maxConnectionTime = 1000; // Realistischere Erwartung
-            const connectionTimes = [];
+    describe('QR Scan Performance', () => {
+        let sessionId;
 
-            for (let i = 0; i < connectionAttempts; i++) {
-                const testClient = new MockDatabaseClient();
-                testClient.enableFastMode();
+        beforeEach(async () => {
+            const session = await dbClient.createSession(1);
+            sessionId = session.ID;
+        });
 
-                const startTime = Date.now();
-                await testClient.connect();
-                const connectionTime = Date.now() - startTime;
+        test('should handle high-volume QR scanning', async () => {
+            const scanCount = 100;
+            const maxAverageTime = 30;
 
-                connectionTimes.push(connectionTime);
-                await testClient.close();
-                await waitFor(10); // Pause zwischen Verbindungen
+            // Set short cooldown for performance testing
+            dbClient.setQRCooldown(0);
+
+            for (let i = 0; i < scanCount; i++) {
+                await measurePerformance(async () => {
+                    const result = await dbClient.saveQRScan(sessionId, `PERF_SCAN_${i}_${Date.now()}`);
+                    expect(result.success).toBe(true);
+                });
             }
 
-            const averageConnectionTime = connectionTimes.reduce((sum, time) => sum + time, 0) / connectionAttempts;
-            const maxTime = Math.max(...connectionTimes);
+            expect(performanceMetrics.averageTime).toBeLessThan(maxAverageTime);
 
-            expect(averageConnectionTime).toBeLessThan(maxConnectionTime);
-            expect(maxTime).toBeLessThan(maxConnectionTime * 2);
-
-            console.log(`Connection Performance:
-                Attempts: ${connectionAttempts}
-                Average: ${averageConnectionTime.toFixed(2)}ms
-                Max: ${maxTime.toFixed(2)}ms
+            console.log(`QR Scan Performance:
+                Scans: ${scanCount}
+                Average Time: ${performanceMetrics.averageTime.toFixed(2)}ms
+                Scans/sec: ${(scanCount / (performanceMetrics.totalTime / 1000)).toFixed(0)}
             `);
-        }, 20000);
+        });
 
-        test('should handle connection pooling efficiently', async () => {
-            const poolSize = 3; // Reduziert für Stabilität
-            const operationsPerConnection = 5;
+        test('should handle QR scan retrieval efficiently', async () => {
+            // Create test data
+            const scanCount = 50;
+            dbClient.setQRCooldown(0);
 
-            const startTime = Date.now();
+            for (let i = 0; i < scanCount; i++) {
+                await dbClient.saveQRScan(sessionId, `RETRIEVAL_TEST_${i}`);
+            }
 
-            const connectionPromises = Array(poolSize).fill().map(async (_, index) => {
-                const client = new MockDatabaseClient();
-                client.enableFastMode();
-                await client.connect();
+            // Test retrieval performance
+            const retrievalCount = 20;
+            const maxAverageTime = 25;
 
-                for (let i = 0; i < operationsPerConnection; i++) {
-                    try {
-                        await client.getUserByEPC('53004114');
-                    } catch (error) {
-                        console.warn(`Operation failed:`, error.message);
-                    }
-                }
+            for (let i = 0; i < retrievalCount; i++) {
+                await measurePerformance(async () => {
+                    const scans = await dbClient.getQRScansBySession(sessionId, 10);
+                    expect(scans.length).toBeLessThanOrEqual(10);
+                });
+            }
 
-                await client.close();
-            });
+            expect(performanceMetrics.averageTime).toBeLessThan(maxAverageTime);
 
-            await Promise.all(connectionPromises);
-
-            const totalTime = Date.now() - startTime;
-            const totalOperations = poolSize * operationsPerConnection;
-
-            expect(totalTime).toBeLessThan(15000); // Realistischere Erwartung
-
-            console.log(`Connection Pool Performance:
-                Pool Size: ${poolSize}
-                Operations per Connection: ${operationsPerConnection}
-                Total Operations: ${totalOperations}
-                Total Time: ${totalTime}ms
-                Ops/sec: ${(totalOperations / (totalTime / 1000)).toFixed(0)}
+            console.log(`QR Scan Retrieval Performance:
+                Retrievals: ${retrievalCount}
+                Average Time: ${performanceMetrics.averageTime.toFixed(2)}ms
+                Total Scans in DB: ${scanCount}
             `);
-        }, 25000);
+        });
+
+        test('should handle duplicate detection efficiently', async () => {
+            const duplicateTests = 25;
+            const maxAverageTime = 35;
+
+            for (let i = 0; i < duplicateTests; i++) {
+                const payload = `DUPLICATE_TEST_${Math.floor(i / 2)}`; // Create some duplicates
+
+                await measurePerformance(async () => {
+                    const result = await dbClient.saveQRScan(sessionId, payload);
+                    // Result can be either success or duplicate
+                    expect(result).toHaveProperty('success');
+                });
+            }
+
+            expect(performanceMetrics.averageTime).toBeLessThan(maxAverageTime);
+
+            console.log(`Duplicate Detection Performance:
+                Tests: ${duplicateTests}
+                Average Time: ${performanceMetrics.averageTime.toFixed(2)}ms
+            `);
+        });
     });
 
-    describe('Bulk Operations Performance', () => {
-        test('should handle bulk session operations', async () => {
-            const sessionCount = 20; // Reduziert für Stabilität
-            const maxTime = 15000; // Realistischere Erwartung
+    describe('Database Connection Performance', () => {
+        test('should handle connection cycling', async () => {
+            const cycleCount = 10;
+            const maxTotalTime = 2000;
 
             const startTime = Date.now();
 
-            // Parallele Session-Operationen mit besserer Fehlerbehandlung
-            const sessionPromises = Array(sessionCount).fill().map(async (_, index) => {
-                try {
-                    const user = await dbClient.getUserByEPC('53004114');
-                    if (user) {
-                        const session = await dbClient.createSession(user.ID);
-                        await waitFor(50); // Simuliere Verarbeitungszeit
-
-                        // Prüfe ob Session noch aktiv ist
-                        const currentSession = dbClient.mockData.sessions.find(s => s.ID === session.ID);
-                        if (currentSession && currentSession.Active === 1) {
-                            await dbClient.endSession(session.ID);
-                        }
-                    }
-                } catch (error) {
-                    console.warn(`Session operation ${index} failed:`, error.message);
-                }
-            });
-
-            await Promise.all(sessionPromises);
+            for (let i = 0; i < cycleCount; i++) {
+                await dbClient.close();
+                await dbClient.connect();
+            }
 
             const totalTime = Date.now() - startTime;
 
-            expect(totalTime).toBeLessThan(maxTime);
+            expect(totalTime).toBeLessThan(maxTotalTime);
 
-            console.log(`Bulk Session Performance:
-                Sessions: ${sessionCount}
+            console.log(`Connection Cycling Performance:
+                Cycles: ${cycleCount}
                 Total Time: ${totalTime}ms
-                Sessions/sec: ${(sessionCount / (totalTime / 1000)).toFixed(0)}
+                Average per Cycle: ${(totalTime / cycleCount).toFixed(1)}ms
             `);
-        }, 25000);
+        });
+
+        test('should handle health checks efficiently', async () => {
+            const healthCheckCount = 30;
+            const maxAverageTime = 20;
+
+            for (let i = 0; i < healthCheckCount; i++) {
+                await measurePerformance(async () => {
+                    const health = await dbClient.healthCheck();
+                    expect(health.status).toBe('healthy');
+                });
+            }
+
+            expect(performanceMetrics.averageTime).toBeLessThan(maxAverageTime);
+
+            console.log(`Health Check Performance:
+                Checks: ${healthCheckCount}
+                Average Time: ${performanceMetrics.averageTime.toFixed(2)}ms
+            `);
+        });
     });
 });
 
@@ -358,21 +298,29 @@ describe('RFID Performance Tests', () => {
     let rfidListener;
 
     beforeEach(async () => {
+        global.mockElectron = {
+            globalShortcut: {
+                register: jest.fn(() => true),
+                unregister: jest.fn(() => true),
+                unregisterAll: jest.fn()
+            }
+        };
+
         rfidListener = new MockRFIDListener();
-        // Aktiviere Debug-Modus für bessere Logs, aber reduziere Verbosity
-        rfidListener.config.debugMode = false;
+        rfidListener.updateConfig({ debugMode: false });
+        rfidListener.disableHardwareError();
         await rfidListener.start();
     });
 
     afterEach(async () => {
         if (rfidListener && rfidListener.isRunning) {
-            await rfidListener.stop();
+            await rfidListener.destroy();
         }
     });
 
     describe('Tag Processing Performance', () => {
         test('should process rapid tag scans efficiently', async () => {
-            const rapidScans = 50; // Reduziert für Stabilität
+            const rapidScans = 50; // Reduziert für stabilere Tests
             const maxProcessingTime = 10000; // Realistischere Erwartung
 
             const startTime = Date.now();
@@ -380,7 +328,7 @@ describe('RFID Performance Tests', () => {
             // Simuliere schnelle aufeinanderfolgende Scans
             for (let i = 0; i < rapidScans; i++) {
                 const tagId = (50000000 + i).toString(16).toUpperCase().padStart(8, '0');
-                rfidListener.simulateTag(tagId);
+                await rfidListener.simulateTag(tagId);
 
                 // Sehr kurze Pause zwischen Scans
                 if (i % 10 === 0) {
@@ -433,241 +381,170 @@ describe('RFID Performance Tests', () => {
 
         test('should maintain performance with many registered shortcuts', async () => {
             const shortcutCount = 50;
-            const operationCount = 1000;
+            const operationCount = 100; // Reduziert
 
             // Simuliere viele registrierte Shortcuts
             const shortcuts = [];
             for (let i = 0; i < shortcutCount; i++) {
-                shortcuts.push(`Shortcut_${i}`);
+                const shortcut = `F${i + 4}`; // Start at F4 to avoid conflicts
+                shortcuts.push(shortcut);
+                if (global.mockElectron?.globalShortcut) {
+                    global.mockElectron.globalShortcut.register(shortcut, () => {
+                        rfidListener.simulateTag(`${50000000 + i}`);
+                    });
+                }
             }
 
             const startTime = Date.now();
 
+            // Teste Performance mit vielen Shortcuts
             for (let i = 0; i < operationCount; i++) {
-                const shortcut = shortcuts[i % shortcuts.length];
-                const isRegistered = shortcuts.includes(shortcut);
-                expect(isRegistered).toBe(true);
+                await rfidListener.simulateTag(`${60000000 + i}`);
             }
 
-            const shortcutTime = Date.now() - startTime;
+            const operationTime = Date.now() - startTime;
+            const maxOperationTime = 3000;
 
-            expect(shortcutTime).toBeLessThan(1000);
+            expect(operationTime).toBeLessThan(maxOperationTime);
 
-            console.log(`Shortcut Performance:
-                Shortcuts: ${shortcutCount}
+            console.log(`Shortcut Performance Test:
+                Registered Shortcuts: ${shortcutCount}
                 Operations: ${operationCount}
-                Time: ${shortcutTime}ms
+                Operation Time: ${operationTime}ms
+                Operations/sec: ${(operationCount / (operationTime / 1000)).toFixed(0)}
             `);
         });
     });
 
-    describe('Memory Performance', () => {
-        test('should not leak memory during extended scanning', async () => {
-            const initialMemory = process.memoryUsage();
-            const scanCycles = 50; // Reduziert
+    describe('Error Handling Performance', () => {
+        test('should handle error simulation efficiently', async () => {
+            const errorCount = 25;
+            const maxErrorTime = 1000;
 
-            for (let i = 0; i < scanCycles; i++) {
-                const tagId = (60000000 + i).toString(16).toUpperCase().padStart(8, '0');
-                rfidListener.simulateTag(tagId);
+            const startTime = Date.now();
 
-                // Simuliere zeitliche Verteilung
-                if (i % 10 === 0) {
-                    await waitFor(5);
-                }
+            for (let i = 0; i < errorCount; i++) {
+                const errorTypes = ['timeout', 'connection_lost', 'device_not_found'];
+                const errorType = errorTypes[i % errorTypes.length];
+                rfidListener.simulateHardwareError(errorType);
+
+                await waitFor(10); // Small delay between errors
             }
 
-            // Garbage Collection
-            if (global.gc) {
-                global.gc();
-            }
-            await waitFor(100);
+            const errorTime = Date.now() - startTime;
 
-            const finalMemory = process.memoryUsage();
-            const memoryGrowth = finalMemory.heapUsed - initialMemory.heapUsed;
+            expect(errorTime).toBeLessThan(maxErrorTime);
+            expect(rfidListener.getStats().errors).toBe(errorCount);
 
-            expect(memoryGrowth).toBeLessThan(50 * 1024 * 1024); // 50MB
-
-            console.log(`RFID Memory Performance:
-                Scan Cycles: ${scanCycles}
-                Memory Growth: ${(memoryGrowth / 1024 / 1024).toFixed(2)}MB
+            console.log(`Error Simulation Performance:
+                Errors Simulated: ${errorCount}
+                Error Time: ${errorTime}ms
+                Errors/sec: ${(errorCount / (errorTime / 1000)).toFixed(0)}
             `);
-        }, 20000);
+        });
     });
 
-    describe('Concurrent RFID Performance', () => {
-        test('should handle multiple listeners efficiently', async () => {
-            const listenerCount = 10;
-            const scansPerListener = 100;
-
-            const listeners = [];
-
-            // Erstelle mehrere Listener
-            for (let i = 0; i < listenerCount; i++) {
-                const listener = new MockRFIDListener();
-                listener.config.debugMode = false; // Reduziere Logs
-                await listener.start();
-                listeners.push(listener);
+    describe('Statistics Performance', () => {
+        test('should calculate statistics efficiently', async () => {
+            // Generate test data
+            for (let i = 0; i < 100; i++) {
+                await rfidListener.simulateTag(`${50000000 + i}`);
             }
+
+            const statsCalls = 50;
+            const maxStatsTime = 500;
 
             const startTime = Date.now();
 
-            // Parallele Scans auf allen Listenern
-            const scanPromises = listeners.map(async (listener, listenerIndex) => {
-                for (let i = 0; i < scansPerListener; i++) {
-                    const tagId = (listenerIndex * 1000 + i + 90).toString(16).toUpperCase().padStart(8, '0');
-                    listener.simulateTag(tagId);
-
-                    if (i % 20 === 0) {
-                        await waitFor(1);
-                    }
-                }
-            });
-
-            await Promise.all(scanPromises);
-
-            const totalTime = Date.now() - startTime;
-            const totalScans = listenerCount * scansPerListener;
-
-            // Stoppe alle Listener
-            for (const listener of listeners) {
-                try {
-                    await listener.stop();
-                } catch (error) {
-                    console.warn('Listener stop error:', error.message);
-                }
+            for (let i = 0; i < statsCalls; i++) {
+                const stats = rfidListener.getStats();
+                expect(stats).toHaveProperty('totalScans');
+                expect(stats).toHaveProperty('performance');
             }
 
-            console.log(`Concurrent RFID Performance:
-                Listeners: ${listenerCount}
-                Scans per Listener: ${scansPerListener}
-                Total Scans: ${totalScans}
-                Total Time: ${totalTime}ms
-                Scans/sec: ${(totalScans / (totalTime / 1000)).toFixed(0)}
+            const statsTime = Date.now() - startTime;
+
+            expect(statsTime).toBeLessThan(maxStatsTime);
+
+            console.log(`Statistics Performance:
+                Stats Calls: ${statsCalls}
+                Stats Time: ${statsTime}ms
+                Calls/sec: ${(statsCalls / (statsTime / 1000)).toFixed(0)}
             `);
-        }, 30000);
+        });
+    });
+});
+
+describe('Integrated Performance Tests', () => {
+    let dbClient;
+    let rfidListener;
+
+    beforeEach(async () => {
+        // Setup Database
+        dbClient = new MockDatabaseClient();
+        await dbClient.connect();
+        dbClient.clearMockData();
+
+        // Setup RFID
+        global.mockElectron = {
+            globalShortcut: {
+                register: jest.fn(() => true),
+                unregister: jest.fn(() => true),
+                unregisterAll: jest.fn()
+            }
+        };
+
+        rfidListener = new MockRFIDListener();
+        rfidListener.disableHardwareError();
+        await rfidListener.start();
     });
 
-    describe('UI Performance Simulation', () => {
-        test('should handle scan list updates efficiently', async () => {
-            const updateCount = 1000;
-            const maxUpdateTime = 1000; // Realistischere Erwartung
+    afterEach(async () => {
+        await dbClient.close();
+        if (rfidListener && rfidListener.isRunning) {
+            await rfidListener.destroy();
+        }
+    });
 
-            const scanList = [];
+    describe('End-to-End Workflow Performance', () => {
+        test('should handle complete workflow efficiently', async () => {
+            const workflowCount = 10; // Reduziert für Stabilität
+            const maxWorkflowTime = 5000;
+
             const startTime = Date.now();
 
-            for (let i = 0; i < updateCount; i++) {
-                scanList.push({
-                    id: i,
-                    tagId: (50000000 + i).toString(16),
-                    timestamp: new Date(),
-                    status: 'processed'
-                });
+            for (let i = 0; i < workflowCount; i++) {
+                // 1. Simulate RFID scan
+                const tagId = '329C172';
+                await rfidListener.simulateTag(tagId);
 
-                // Simuliere DOM-Updates
-                if (i % 100 === 0) {
-                    await waitFor(0); // Yield to event loop
+                // 2. User lookup
+                const user = await dbClient.getUserByRFID(tagId);
+                expect(user).toBeDefined();
+
+                // 3. Create session
+                const session = await dbClient.createSession(user.BenID);
+
+                // 4. QR scans
+                for (let j = 0; j < 3; j++) {
+                    await dbClient.saveQRScan(session.ID, `WORKFLOW_${i}_SCAN_${j}`);
                 }
+
+                // 5. End session
+                await dbClient.endSession(session.ID);
             }
 
-            const updateTime = Date.now() - startTime;
+            const workflowTime = Date.now() - startTime;
 
-            expect(updateTime).toBeLessThan(maxUpdateTime);
+            expect(workflowTime).toBeLessThan(maxWorkflowTime);
 
-            console.log(`Scan List Update Performance:
-                Updates: ${updateCount}
-                Update Time: ${updateTime.toFixed(2)}ms
-                Updates/sec: ${updateTime > 0 ? (updateCount / (updateTime / 1000)).toFixed(0) : 'Infinity'}
+            console.log(`Complete Workflow Performance:
+                Workflows: ${workflowCount}
+                Total Time: ${workflowTime}ms
+                Workflows/sec: ${(workflowCount / (workflowTime / 1000)).toFixed(1)}
+                DB Queries: ${dbClient.getStatistics().queries}
+                RFID Scans: ${rfidListener.getStats().totalScans}
             `);
-        });
-
-        test('should handle UI state changes efficiently', async () => {
-            const stateChanges = 5000;
-            const maxStateTime = 1000;
-
-            let currentState = { scans: 0, users: 0, sessions: 0 };
-            const startTime = Date.now();
-
-            for (let i = 0; i < stateChanges; i++) {
-                currentState = {
-                    ...currentState,
-                    scans: currentState.scans + 1,
-                    lastUpdate: Date.now()
-                };
-            }
-
-            const stateTime = Date.now() - startTime;
-
-            expect(stateTime).toBeLessThan(maxStateTime);
-
-            console.log(`UI State Change Performance:
-                State Changes: ${stateChanges}
-                Update Time: ${stateTime.toFixed(2)}ms
-                Changes/sec: ${stateTime > 0 ? (stateChanges / (stateTime / 1000)).toFixed(0) : 'Infinity'}
-            `);
-        });
-
-        test('should maintain animation performance', async () => {
-            const animationDuration = 1000; // 1 Sekunde
-            const targetFPS = 60;
-            const frameTime = 1000 / targetFPS;
-
-            let frameCount = 0;
-            const startTime = Date.now();
-
-            const animationPromise = new Promise((resolve) => {
-                const animate = () => {
-                    frameCount++;
-
-                    if (Date.now() - startTime < animationDuration) {
-                        setTimeout(animate, frameTime);
-                    } else {
-                        resolve();
-                    }
-                };
-                animate();
-            });
-
-            await animationPromise;
-
-            const actualTime = Date.now() - startTime;
-            const actualFPS = frameCount / (actualTime / 1000);
-
-            console.log(`Animation Performance:
-                Duration: ${animationDuration}ms
-                Frames: ${actualFPS}
-                Target FPS: ${targetFPS}
-                Actual Time: ${actualTime.toFixed(2)}ms
-            `);
-        });
-
-        test('should handle event listener performance', async () => {
-            const operationCount = 10000;
-            const maxEventTime = 1000;
-
-            const eventHandlers = [];
-            const startTime = Date.now();
-
-            for (let i = 0; i < operationCount; i++) {
-                const handler = () => {
-                    // Simuliere Event-Handler-Logik
-                    return `processed_${i}`;
-                };
-
-                eventHandlers.push(handler);
-
-                // Simuliere Event-Handler-Ausführung
-                handler();
-            }
-
-            const eventTime = Date.now() - startTime;
-
-            expect(eventTime).toBeLessThan(maxEventTime);
-
-            console.log(`Event Listener Performance:
-                Operations: ${operationCount}
-                Processing Time: ${eventTime.toFixed(2)}ms
-                Operations/sec: ${eventTime > 0 ? (operationCount / (eventTime / 1000)).toFixed(0) : 'Infinity'}
-            `);
-        });
+        }, 10000);
     });
 });

@@ -1,8 +1,7 @@
 // tests/mocks/rfid-listener.mock.js
 /**
- * Mock RFID Listener für Tests
+ * Mock RFID Listener für Tests - Vollständig korrigiert
  * Simuliert Hardware-RFID-Reader ohne echte Hardware-Abhängigkeiten
- * Vollständig korrigiert für stabile Tests
  */
 
 const { EventEmitter } = require('events');
@@ -59,126 +58,172 @@ class MockRFIDListener extends EventEmitter {
         this.mockTags = null;
         this.hardwareErrorEnabled = false;
 
+        // Input Buffer Management
+        this.inputBuffer = '';
+        this.lastInputTime = 0;
+
         // Error handling
         this.setMaxListeners(20);
 
         // Bind methods to avoid context issues
         this.simulateTag = this.simulateTag.bind(this);
         this.simulateHardwareError = this.simulateHardwareError.bind(this);
+        this.handleInput = this.handleInput.bind(this);
+        this.getStats = this.getStats.bind(this);
     }
 
-    // Hardware Simulation Control
-    enableHardwareError() {
-        this.hardwareErrorEnabled = true;
-    }
+    // === Lifecycle Management ===
 
-    disableHardwareError() {
-        this.hardwareErrorEnabled = false;
-    }
-
-    // Lifecycle Methods
     async start() {
         if (this.isRunning) {
-            return Promise.resolve();
+            this._log('WARN', 'RFID Listener already running');
+            return;
         }
 
-        return new Promise((resolve, reject) => {
-            try {
-                // Simuliere Hardware-Initialisierung
-                if (this.hardwareErrorEnabled) {
-                    const error = new Error('Hardware initialization failed');
-                    this._log('ERROR', 'Fehler beim Starten: Hardware initialization failed');
-                    reject(error);
-                    return;
-                }
+        try {
+            this._log('INFO', 'Starting RFID Listener...');
 
-                this.isRunning = true;
-                this.isListening = true;
-                this.isHardwareReady = true;
-                this.stats.startTime = new Date().toISOString();
+            // Simuliere Hardware-Initialisierung
+            await this._delay(100);
 
-                // Setup global shortcuts if electron mock exists
-                this._setupShortcuts();
-
-                this._log('INFO', 'RFID Listener gestartet (Mock-Modus)');
-                resolve();
-
-            } catch (error) {
-                this._log('ERROR', `Start-Fehler: ${error.message}`);
-                reject(error);
+            if (this.hardwareErrorEnabled) {
+                throw new Error('Hardware initialization failed');
             }
-        });
+
+            this.isRunning = true;
+            this.isListening = true;
+            this.isHardwareReady = true;
+            this.stats.startTime = new Date().toISOString();
+
+            // Mock Shortcuts registrieren
+            this._registerMockShortcuts();
+
+            this._log('INFO', 'RFID Listener gestartet');
+            this.emit('ready');
+
+        } catch (error) {
+            this.stats.errors++;
+            this._log('ERROR', `Fehler beim Starten: ${error.message}`);
+            this.emit('error', error);
+            throw error;
+        }
     }
 
     async stop() {
         if (!this.isRunning) {
-            return Promise.resolve();
+            this._log('WARN', 'RFID Listener not running');
+            return;
         }
 
-        return new Promise((resolve) => {
+        try {
+            this._log('INFO', 'Stopping RFID Listener...');
+
             this.isRunning = false;
             this.isListening = false;
+            this.isHardwareReady = false;
+
+            // Auto-Scan deaktivieren
             this.disableAutoScan();
-            this._clearShortcuts();
+
+            // Buffer leeren
+            this.currentBuffer = '';
+            this.inputBuffer = '';
+
+            // Shortcuts deregistrieren
+            this._unregisterAllShortcuts();
+
+            await this._delay(50);
 
             this._log('INFO', 'RFID Listener gestoppt');
-            resolve();
-        });
+            this.emit('stopped');
+
+        } catch (error) {
+            this.stats.errors++;
+            this._log('ERROR', `Fehler beim Stoppen: ${error.message}`);
+            this.emit('error', error);
+            throw error;
+        }
+    }
+
+    async restart() {
+        this._log('INFO', 'Restarting RFID Listener...');
+        await this.stop();
+        await this._delay(100);
+        await this.start();
     }
 
     async destroy() {
-        await this.stop();
+        this._log('INFO', 'Destroying RFID Listener...');
 
-        // Reset statistics
-        this.stats = {
-            totalScans: 0,
-            validScans: 0,
-            invalidScans: 0,
-            errors: 0,
-            startTime: null,
-            lastScanTime: null,
-            successRate: 0,
-            uptime: 0,
-            performance: {
-                avgProcessingTime: 0,
-                maxProcessingTime: 0,
-                minProcessingTime: Infinity,
-                processingTimes: []
-            }
-        };
-
-        this.autoScanEnabled = false;
-        this.removeAllListeners();
-    }
-
-    // Configuration
-    updateConfig(newConfig) {
-        Object.assign(this.config, newConfig);
-        this._log('INFO', 'Konfiguration aktualisiert');
-    }
-
-    getStatus() {
-        return {
-            isRunning: this.isRunning,
-            isListening: this.isListening,
-            isHardwareReady: this.isHardwareReady,
-            stats: { ...this.stats }
-        };
-    }
-
-    // Tag Simulation
-    async simulateTag(tagId, delay = 0) {
-        if (!this.isRunning) {
-            throw new Error('RFID Listener is not running');
+        if (this.isRunning) {
+            await this.stop();
         }
 
-        return new Promise((resolve) => {
-            setTimeout(() => {
-                this._processTagInput(tagId);
-                resolve();
-            }, delay);
-        });
+        this.disableAutoScan();
+        this.removeAllListeners();
+        this._unregisterAllShortcuts();
+
+        // Reset state
+        this.currentBuffer = '';
+        this.inputBuffer = '';
+        this.registeredShortcuts = [];
+
+        this._log('INFO', 'RFID Listener destroyed');
     }
+
+    // === Input Handling ===
+
+    handleInput(input) {
+        if (!this.isRunning) {
+            return;
+        }
+
+        const now = Date.now();
+        this.lastInputTime = now;
+
+        // Behandle Enter-Taste (Carriage Return) als Tag-Ende
+        if (input === '\r' || input === '\n' || input === '\r\n') {
+            if (this.inputBuffer.length > 0) {
+                this._processCompleteTag(this.inputBuffer);
+                this.inputBuffer = '';
+            }
+            return;
+        }
+
+        // Normale Zeichen zum Buffer hinzufügen
+        if (typeof input === 'string' && input.length === 1) {
+            this.inputBuffer += input;
+
+            // Auto-Complete nach Timeout
+            if (this.bufferTimeout) {
+                clearTimeout(this.bufferTimeout);
+            }
+
+            this.bufferTimeout = setTimeout(() => {
+                if (this.inputBuffer.length > 0) {
+                    this._processCompleteTag(this.inputBuffer);
+                    this.inputBuffer = '';
+                }
+            }, this.bufferTimeoutMs);
+        }
+    }
+
+    _processCompleteTag(tagId) {
+        if (!tagId || tagId.length === 0) {
+            return;
+        }
+
+        // Buffer timeout löschen
+        if (this.bufferTimeout) {
+            clearTimeout(this.bufferTimeout);
+            this.bufferTimeout = null;
+        }
+
+        // Tag verarbeiten
+        this._processTagInput(tagId.trim());
+    }
+
+    // === Tag Processing ===
 
     _processTagInput(tagId) {
         const startTime = process.hrtime.bigint();
@@ -212,8 +257,8 @@ class MockRFIDListener extends EventEmitter {
             timestamp: this.stats.lastScanTime
         });
 
-        if (!this.config.debugMode) {
-            // Only log in non-debug mode for cleaner test output
+        if (this.config.debugMode) {
+            this._log('INFO', `Tag verarbeitet: ${tagId}`);
         }
     }
 
@@ -227,6 +272,7 @@ class MockRFIDListener extends EventEmitter {
 
     _getValidationError(tagId) {
         if (!tagId) return 'Empty tag ID';
+        if (typeof tagId !== 'string') return 'Invalid tag type';
         if (tagId.length < this.config.minTagLength) return 'Tag ID too short';
         if (tagId.length > this.config.maxTagLength) return 'Tag ID too long';
         if (!this.config.allowedCharacters.test(tagId)) return 'Invalid characters';
@@ -247,7 +293,133 @@ class MockRFIDListener extends EventEmitter {
         perf.avgProcessingTime = perf.processingTimes.reduce((a, b) => a + b, 0) / perf.processingTimes.length;
     }
 
-    // Auto Scan Feature
+    // === Statistics and Monitoring ===
+
+    getStats() {
+        return {
+            ...this.stats,
+            uptime: this._calculateUptime()
+        };
+    }
+
+    getStatistics() {
+        return this.getStats();
+    }
+
+    resetStatistics() {
+        this.stats = {
+            totalScans: 0,
+            validScans: 0,
+            invalidScans: 0,
+            errors: 0,
+            startTime: this.stats.startTime, // Keep start time
+            lastScanTime: null,
+            successRate: 0,
+            uptime: 0,
+            performance: {
+                avgProcessingTime: 0,
+                maxProcessingTime: 0,
+                minProcessingTime: Infinity,
+                processingTimes: []
+            }
+        };
+    }
+
+    _calculateUptime() {
+        if (!this.stats.startTime) return 0;
+        return Date.now() - new Date(this.stats.startTime).getTime();
+    }
+
+    // === Configuration ===
+
+    updateConfig(newConfig) {
+        Object.assign(this.config, newConfig);
+        this._log('INFO', 'Konfiguration aktualisiert');
+    }
+
+    getStatus() {
+        return {
+            isRunning: this.isRunning,
+            isListening: this.isListening,
+            isHardwareReady: this.isHardwareReady,
+            stats: { ...this.stats },
+            config: { ...this.config },
+            uptime: this._calculateUptime()
+        };
+    }
+
+    // === Hardware Error Simulation ===
+
+    enableHardwareError() {
+        this.hardwareErrorEnabled = true;
+        this._log('INFO', 'Hardware-Fehler-Simulation aktiviert');
+    }
+
+    disableHardwareError() {
+        this.hardwareErrorEnabled = false;
+        this._log('INFO', 'Hardware-Fehler-Simulation deaktiviert');
+    }
+
+    simulateHardwareError(errorType = 'connection_lost') {
+        if (!this.isRunning) {
+            return;
+        }
+
+        this.stats.errors++;
+
+        const error = {
+            type: errorType,
+            message: this._getErrorMessage(errorType),
+            timestamp: new Date().toISOString()
+        };
+
+        this._log('ERROR', `Hardware-Fehler simuliert: ${error.message}`);
+        this.emit('error', error);
+
+        // Bei kritischen Fehlern Listener stoppen
+        if (['connection_lost', 'device_not_found'].includes(errorType)) {
+            this.isHardwareReady = false;
+            this.isListening = false;
+        }
+    }
+
+    _getErrorMessage(errorType) {
+        const messages = {
+            'connection_lost': 'RFID Reader connection lost',
+            'device_not_found': 'RFID Reader device not found',
+            'permission_denied': 'Permission denied to access RFID Reader',
+            'timeout': 'RFID Reader communication timeout',
+            'unknown': 'Unknown hardware error'
+        };
+        return messages[errorType] || messages['unknown'];
+    }
+
+    // === Tag Simulation ===
+
+    async simulateTag(tagId, delay = 0) {
+        if (!this.isRunning) {
+            throw new Error('RFID Listener is not running');
+        }
+
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                this._processTagInput(tagId);
+                resolve();
+            }, delay);
+        });
+    }
+
+    async simulateMultipleTags(tags, intervalMs = 100) {
+        for (const tag of tags) {
+            await this.simulateTag(tag);
+            if (intervalMs > 0) {
+                await this._delay(intervalMs);
+            }
+        }
+    }
+
+    // === Auto Scan Feature ===
+
     enableAutoScan(intervalMs = 2000) {
         if (this.autoScanEnabled) {
             this.disableAutoScan();
@@ -285,107 +457,62 @@ class MockRFIDListener extends EventEmitter {
     }
 
     setMockTags(tags) {
-        this.mockTags = Array.isArray(tags) ? [...tags] : null;
-        this._log('INFO', `Mock-Tags gesetzt: ${tags?.length || 0} Tags`);
+        this.mockTags = Array.isArray(tags) ? tags : [tags];
+        this._log('INFO', `Mock-Tags gesetzt: ${this.mockTags.length} Tags`);
     }
 
-    // Hardware Error Simulation - FIXED
-    simulateHardwareError(errorType = 'connection_lost') {
-        const errorMessages = {
-            'connection_lost': 'RFID reader connection lost',
-            'device_not_found': 'RFID device not found',
-            'permission_denied': 'Permission denied to access RFID device',
-            'timeout': 'RFID operation timeout',
-            'invalid_response': 'Invalid response from RFID device'
-        };
+    // === Mock Shortcuts ===
 
-        const message = errorMessages[errorType] || errorMessages['connection_lost'];
-        const error = new Error(message);
-        error.type = errorType;
-
-        this.stats.errors++;
-
-        // Emit error event instead of throwing
-        process.nextTick(() => {
-            this.emit('error', error);
-        });
-
-        return error; // Return error for test verification
-    }
-
-    // Shortcut Management
-    _setupShortcuts() {
+    _registerMockShortcuts() {
         if (!global.mockElectron?.globalShortcut) {
             return;
         }
 
-        // Test shortcuts
-        const shortcuts = ['F1', 'F2', 'F3'];
-        shortcuts.forEach(shortcut => {
-            const success = global.mockElectron.globalShortcut.register(shortcut, () => {
-                this._processTagInput(`SHORTCUT_${shortcut}_${Date.now()}`);
-            });
+        const shortcuts = [
+            { key: 'F1', action: () => this.simulateTag('53004114') },
+            { key: 'F2', action: () => this.simulateTag('53004115') },
+            { key: 'F3', action: () => this.simulateTag('53004116') }
+        ];
 
-            if (success) {
-                this.registeredShortcuts.push(shortcut);
+        shortcuts.forEach(shortcut => {
+            try {
+                global.mockElectron.globalShortcut.register(shortcut.key, shortcut.action);
+                this.registeredShortcuts.push(shortcut.key);
+            } catch (error) {
+                this._log('WARN', `Shortcut-Registrierung fehlgeschlagen: ${shortcut.key}`);
             }
         });
     }
 
-    _clearShortcuts() {
+    _unregisterAllShortcuts() {
         if (!global.mockElectron?.globalShortcut) {
             return;
         }
 
-        this.registeredShortcuts.forEach(shortcut => {
-            global.mockElectron.globalShortcut.unregister(shortcut);
+        this.registeredShortcuts.forEach(key => {
+            try {
+                global.mockElectron.globalShortcut.unregister(key);
+            } catch (error) {
+                // Ignoriere Fehler beim Deregistrieren
+            }
         });
+
         this.registeredShortcuts = [];
     }
 
-    // Logging
+    // === Utility Methods ===
+
+    async _delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
     _log(level, message) {
-        if (!this.config.debugMode && level === 'INFO') {
-            return; // Skip info logs in non-debug mode for cleaner test output
-        }
-
         const timestamp = new Date().toISOString();
-        console.log(`[${timestamp}] [RFID-Mock] [${level}] ${message}`);
-    }
+        const logMessage = `[${timestamp}] [RFID-Mock] [${level}] ${message}`;
 
-    // Statistics and Monitoring
-    getStatistics() {
-        const uptime = this.stats.startTime ?
-            Date.now() - new Date(this.stats.startTime).getTime() : 0;
-
-        return {
-            ...this.stats,
-            uptime: Math.round(uptime / 1000), // seconds
-            isRunning: this.isRunning,
-            autoScanEnabled: this.autoScanEnabled
-        };
-    }
-
-    resetStatistics() {
-        const wasRunning = this.isRunning;
-        const startTime = wasRunning ? new Date().toISOString() : null;
-
-        this.stats = {
-            totalScans: 0,
-            validScans: 0,
-            invalidScans: 0,
-            errors: 0,
-            startTime,
-            lastScanTime: null,
-            successRate: 0,
-            uptime: 0,
-            performance: {
-                avgProcessingTime: 0,
-                maxProcessingTime: 0,
-                minProcessingTime: Infinity,
-                processingTimes: []
-            }
-        };
+        if (process.env.NODE_ENV !== 'test' || process.env.DEBUG_RFID_MOCK) {
+            console.log(logMessage);
+        }
     }
 }
 

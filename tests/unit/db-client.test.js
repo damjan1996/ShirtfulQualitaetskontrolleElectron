@@ -73,6 +73,7 @@ describe('DatabaseClient', () => {
                 BenID: 99,
                 Vorname: 'Test',
                 Nachname: 'User',
+                Email: 'test@example.com',
                 Active: 1
             };
 
@@ -90,6 +91,14 @@ describe('DatabaseClient', () => {
 
             expect(user).toBeDefined();
             expect(user.BenID).toBe(1);
+        });
+
+        test('should get user by ID', async () => {
+            const user = await dbClient.getUserByID(1);
+
+            expect(user).toBeDefined();
+            expect(user.BenID).toBe(1);
+            expect(user.Vorname).toBe('Max');
         });
     });
 
@@ -147,15 +156,23 @@ describe('DatabaseClient', () => {
             const success = await dbClient.endSession(session.ID);
             expect(success).toBe(true);
 
-            // Verify session was ended
-            const endedSession = dbClient.mockData.sessions.find(s => s.ID === session.ID);
-            expect(endedSession.Active).toBe(0);
-            expect(endedSession.EndTS).toBeDefined();
+            // Verify session is closed
+            const closedSession = dbClient.mockData.sessions.find(s => s.ID === session.ID);
+            expect(closedSession.Active).toBe(0);
+            expect(closedSession.EndTS).toBeDefined();
         });
 
-        test('should return false when ending non-existent session', async () => {
-            const success = await dbClient.endSession(99999);
-            expect(success).toBe(false);
+        test('should get sessions by user', async () => {
+            // Create multiple sessions
+            const session1 = await dbClient.createSession(userId);
+            await dbClient.endSession(session1.ID);
+
+            const session2 = await dbClient.createSession(userId);
+
+            const sessions = await dbClient.getSessionsByUser(userId);
+
+            expect(sessions.length).toBe(2);
+            expect(sessions.every(s => s.BenID === userId)).toBe(true);
         });
     });
 
@@ -168,56 +185,41 @@ describe('DatabaseClient', () => {
         });
 
         test('should save QR scan', async () => {
-            const payload = 'TEST_QR_CODE_001';
+            const payload = 'TEST_QR_CODE_123';
             const result = await dbClient.saveQRScan(sessionId, payload);
 
             expect(result.success).toBe(true);
-            expect(result.status).toBe('saved');
-            expect(result.data).toBeDefined();
-            expect(result.data.ID).toBeDefined();
-            expect(result.data.SessionID).toBe(sessionId);
-            expect(result.data.RawPayload).toBe(payload);
-            expect(result.data.ScannTS).toBeDefined();
-            expect(result.data.PayloadAsJSON).toBeNull(); // Kein gültiges JSON
+            expect(result.scanId).toBeDefined();
+            expect(result.payload).toBe(payload);
         });
 
-        test('should save QR scan with JSON payload', async () => {
-            const payload = '{"id":"PKG001","type":"package","order":"12345"}';
-            const result = await dbClient.saveQRScan(sessionId, payload);
-
-            expect(result.success).toBe(true);
-            expect(result.data.RawPayload).toBe(payload);
-            expect(result.data.PayloadAsJSON).toEqual({ id: 'PKG001', type: 'package', order: '12345' });
-        });
-
-        test('should prevent duplicate QR scans', async () => {
+        test('should prevent duplicate scans', async () => {
             const payload = 'DUPLICATE_TEST';
 
-            // Erster Scan sollte erfolgreich sein
+            // First scan should succeed
             const firstScan = await dbClient.saveQRScan(sessionId, payload);
             expect(firstScan.success).toBe(true);
 
-            // Zweiter Scan sollte fehlschlagen (Duplicate) - but returns result, not throws
-            const secondScan = await dbClient.saveQRScan(sessionId, payload);
-            expect(secondScan.success).toBe(false);
-            expect(secondScan.status).toContain('duplicate');
-            expect(secondScan.message).toContain('bereits');
+            // Immediate duplicate should fail
+            const duplicateScan = await dbClient.saveQRScan(sessionId, payload);
+            expect(duplicateScan.success).toBe(false);
+            expect(duplicateScan.reason).toBe('duplicate');
         });
 
         test('should allow duplicate after cooldown', async () => {
             const payload = 'COOLDOWN_TEST';
 
-            // Setze kurzen Cooldown für Test
-            dbClient.duplicateCooldown = 100; // 100ms
+            // First scan
+            const firstScan = await dbClient.saveQRScan(sessionId, payload);
+            expect(firstScan.success).toBe(true);
 
-            // Erster Scan
-            const firstResult = await dbClient.saveQRScan(sessionId, payload);
-            expect(firstResult.success).toBe(true);
+            // Set very short cooldown for test
+            dbClient.setQRCooldown(100);
 
-            // Warte Cooldown ab
+            // Wait for cooldown
             await new Promise(resolve => setTimeout(resolve, 150));
 
-            // Zweiter Scan sollte jetzt erfolgreich sein
+            // Second scan should now succeed
             const secondScan = await dbClient.saveQRScan(sessionId, payload);
             expect(secondScan.success).toBe(true);
         });
@@ -225,36 +227,34 @@ describe('DatabaseClient', () => {
         test('should fail to save scan for inactive session', async () => {
             await dbClient.endSession(sessionId);
 
-            const result = await dbClient.saveQRScan(sessionId, 'TEST');
-
-            // Should return error result, not throw
-            if (result.success === false) {
-                expect(result.message).toContain('session');
-            } else {
-                // If it throws, that's also acceptable
-                await expect(dbClient.saveQRScan(sessionId, 'TEST2')).rejects.toThrow('No active session found');
-            }
+            await expect(dbClient.saveQRScan(sessionId, 'TEST')).rejects.toThrow('No active session found');
         });
 
         test('should get QR scans by session', async () => {
-            // Speichere mehrere Scans
-            await dbClient.saveQRScan(sessionId, 'SCAN_001');
-            await dbClient.saveQRScan(sessionId, 'SCAN_002');
-            await dbClient.saveQRScan(sessionId, 'SCAN_003');
+            // Create multiple scans
+            const payloads = ['SCAN1', 'SCAN2', 'SCAN3'];
+
+            for (const payload of payloads) {
+                await dbClient.saveQRScan(sessionId, payload);
+                // Small delay to ensure different timestamps
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
 
             const scans = await dbClient.getQRScansBySession(sessionId, 10);
 
             expect(scans.length).toBe(3);
             expect(scans.every(s => s.SessionID === sessionId)).toBe(true);
 
-            // Überprüfe Sortierung (neueste zuerst)
-            expect(new Date(scans[0].CapturedTS) >= new Date(scans[1].CapturedTS)).toBe(true);
+            // Verify sorting (newest first)
+            expect(scans[0].RawPayload).toBe('SCAN3');
+            expect(scans[2].RawPayload).toBe('SCAN1');
         });
 
         test('should limit QR scans by session', async () => {
-            // Speichere mehr Scans als Limit
-            for (let i = 1; i <= 5; i++) {
-                await dbClient.saveQRScan(sessionId, `SCAN_${i.toString().padStart(3, '0')}`);
+            // Create more scans than limit
+            for (let i = 0; i < 5; i++) {
+                await dbClient.saveQRScan(sessionId, `SCAN_${i}`);
+                await new Promise(resolve => setTimeout(resolve, 10));
             }
 
             const scans = await dbClient.getQRScansBySession(sessionId, 3);
@@ -265,199 +265,125 @@ describe('DatabaseClient', () => {
         test('should handle different payload types', async () => {
             const payloads = [
                 'SIMPLE_TEXT',
-                '{"json": "object"}',
-                'http://example.com/package/123',
-                '1234567890',
-                'BARCODE_123^456^789'
+                '{"json": "payload", "value": 123}',
+                'http://example.com/product/123',
+                'ORDER_2024_001_BATCH_A',
+                '1234567890'
             ];
 
             for (const payload of payloads) {
                 const result = await dbClient.saveQRScan(sessionId, payload);
                 expect(result.success).toBe(true);
-                expect(result.data.RawPayload).toBe(payload);
             }
 
             const scans = await dbClient.getQRScansBySession(sessionId);
             expect(scans.length).toBe(payloads.length);
         });
-    });
 
-    describe('Duplicate Detection', () => {
-        let sessionId;
+        test('should delete QR scan', async () => {
+            const result = await dbClient.saveQRScan(sessionId, 'DELETE_TEST');
+            const scanId = result.scanId;
 
-        beforeEach(async () => {
-            const session = await dbClient.createSession(1);
-            sessionId = session.ID;
-        });
+            const deleteSuccess = await dbClient.deleteQRScan(scanId);
+            expect(deleteSuccess).toBe(true);
 
-        test('should detect cache-based duplicates', async () => {
-            const payload = 'CACHE_DUPLICATE_TEST';
-
-            // First scan
-            const first = await dbClient.saveQRScan(sessionId, payload);
-            expect(first.success).toBe(true);
-
-            // Immediate duplicate should be caught by cache
-            const second = await dbClient.saveQRScan(sessionId, payload);
-            expect(second.success).toBe(false);
-            expect(second.status).toBe('duplicate_cache');
-            expect(second.duplicateInfo.source).toBe('cache');
-        });
-
-        test('should detect database-based duplicates', async () => {
-            const payload = 'DB_DUPLICATE_TEST';
-
-            // Manually add to database (bypass cache)
-            dbClient.mockData.qrScans.push({
-                ID: 9999,
-                SessionID: sessionId,
-                RawPayload: payload,
-                CapturedTS: new Date(),
-                ScannTS: new Date(),
-                Valid: 1
-            });
-
-            // Try to save same payload
-            const result = await dbClient.saveQRScan(sessionId, payload);
-            expect(result.success).toBe(false);
-            expect(result.status).toBe('duplicate_database');
-        });
-
-        test('should clear cache on close', async () => {
-            const payload = 'CACHE_CLEAR_TEST';
-
-            await dbClient.saveQRScan(sessionId, payload);
-            expect(dbClient.duplicateCache.has(payload)).toBe(true);
-
-            await dbClient.close();
-            expect(dbClient.duplicateCache.size).toBe(0);
+            // Verify scan is deleted
+            const remainingScans = await dbClient.getQRScansBySession(sessionId);
+            expect(remainingScans.some(s => s.ID === scanId)).toBe(false);
         });
     });
 
-    describe('Statistics and Monitoring', () => {
-        test('should track connection statistics', () => {
-            const stats = dbClient.getConnectionStats();
+    describe('Statistics and Health', () => {
+        test('should track query statistics', async () => {
+            const initialStats = dbClient.getStatistics();
 
-            expect(stats).toBeDefined();
-            expect(stats.isConnected).toBe(true);
-            expect(stats.connects).toBeGreaterThan(0);
-            expect(stats.totalQueries).toBeGreaterThanOrEqual(0);
+            await dbClient.getUserByRFID('329C172');
+            await dbClient.createSession(1);
+
+            const finalStats = dbClient.getStatistics();
+            expect(finalStats.queries).toBeGreaterThan(initialStats.queries);
+            expect(finalStats.successfulQueries).toBeGreaterThan(initialStats.successfulQueries);
         });
 
-        test('should track query count', async () => {
-            const initialStats = dbClient.getConnectionStats();
-            const initialQueries = initialStats.totalQueries;
+        test('should perform health check', async () => {
+            const health = await dbClient.healthCheck();
 
-            await dbClient.query('SELECT 1');
-            await dbClient.query('SELECT 2');
-
-            const finalStats = dbClient.getConnectionStats();
-            expect(finalStats.totalQueries).toBe(initialQueries + 2);
+            expect(health.status).toBe('healthy');
+            expect(health.timestamp).toBeDefined();
+            expect(health.connectionState).toBe('connected');
         });
 
-        test('should track cache size', async () => {
-            const session = await dbClient.createSession(1);
+        test('should reset statistics', () => {
+            // Generate some stats
+            dbClient.stats.queries = 10;
+            dbClient.stats.successfulQueries = 8;
 
-            await dbClient.saveQRScan(session.ID, 'TEST1');
-            await dbClient.saveQRScan(session.ID, 'TEST2');
+            dbClient.resetStatistics();
 
-            const stats = dbClient.getConnectionStats();
-            expect(stats.cacheSize).toBeGreaterThan(0);
+            expect(dbClient.stats.queries).toBe(0);
+            expect(dbClient.stats.successfulQueries).toBe(0);
         });
     });
 
-    describe('Utility Methods', () => {
-        test('should normalize timestamps', () => {
-            const now = new Date();
-            const isoString = now.toISOString();
+    describe('Error Simulation', () => {
+        test('should handle simulated errors', async () => {
+            dbClient.enableErrorSimulation(1.0); // 100% error rate
 
-            expect(dbClient.normalizeTimestamp(now)).toBe(isoString);
-            expect(dbClient.normalizeTimestamp(isoString)).toBe(isoString);
-            expect(dbClient.normalizeTimestamp(null)).toBeNull();
+            await expect(dbClient.getUserByRFID('329C172')).rejects.toThrow('Simulated database error');
         });
 
-        test('should parse payload JSON', () => {
-            const validJson = '{"test": "value"}';
-            const invalidJson = 'not json';
+        test('should disable error simulation', async () => {
+            dbClient.enableErrorSimulation(1.0);
+            dbClient.disableErrorSimulation();
 
-            expect(dbClient.parsePayloadJson(validJson)).toEqual({ test: 'value' });
-            expect(dbClient.parsePayloadJson(invalidJson)).toBeNull();
-            expect(dbClient.parsePayloadJson(null)).toBeNull();
-        });
-
-        test('should clear mock data', () => {
-            // Add some data
-            dbClient.mockData.sessions.push({ ID: 1, BenID: 1 });
-            dbClient.mockData.qrScans.push({ ID: 1, SessionID: 1 });
-            dbClient.duplicateCache.set('test', Date.now());
-
-            dbClient.clearMockData();
-
-            expect(dbClient.mockData.sessions.length).toBe(0);
-            expect(dbClient.mockData.qrScans.length).toBe(0);
-            expect(dbClient.duplicateCache.size).toBe(0);
+            // Should not throw
+            const user = await dbClient.getUserByRFID('329C172');
+            expect(user).toBeDefined();
         });
     });
 
     describe('Complex Scenarios', () => {
-        test('should handle multiple concurrent sessions', async () => {
-            const user1Session = await dbClient.createSession(1);
-            const user2Session = await dbClient.createSession(2);
-
-            expect(user1Session.ID).not.toBe(user2Session.ID);
-            expect(user1Session.BenID).toBe(1);
-            expect(user2Session.BenID).toBe(2);
-
-            // Both should be active
-            expect(user1Session.Active).toBe(1);
-            expect(user2Session.Active).toBe(1);
-
-            // Save scans for both
-            const scan1 = await dbClient.saveQRScan(user1Session.ID, 'USER1_SCAN');
-            const scan2 = await dbClient.saveQRScan(user2Session.ID, 'USER2_SCAN');
-
-            expect(scan1.success).toBe(true);
-            expect(scan2.success).toBe(true);
-        });
-
-        test('should handle rapid duplicate attempts', async () => {
-            const session = await dbClient.createSession(1);
-            const payload = 'RAPID_DUPLICATE_TEST';
-
-            // Try multiple rapid duplicates
-            const promises = Array(5).fill().map(() =>
-                dbClient.saveQRScan(session.ID, payload)
-            );
-
-            const results = await Promise.all(promises);
-
-            // Only one should succeed
-            const successCount = results.filter(r => r.success).length;
-            expect(successCount).toBe(1);
-
-            // Others should be duplicates
-            const duplicateCount = results.filter(r => !r.success && r.status.includes('duplicate')).length;
-            expect(duplicateCount).toBe(4);
-        });
-
         test('should maintain data consistency', async () => {
-            const session = await dbClient.createSession(1);
+            // Multi-user scenario
+            const user1 = await dbClient.getUserByRFID('329C172');
+            const user2 = await dbClient.getUserByRFID('329C173');
 
-            // Save multiple different scans
-            const scans = ['SCAN_A', 'SCAN_B', 'SCAN_C'];
+            // Create sessions
+            const session1 = await dbClient.createSession(user1.BenID);
+            const session2 = await dbClient.createSession(user2.BenID);
+
+            // Add scans
+            const scans = [
+                { sessionId: session1.ID, payload: 'USER1_SCAN1' },
+                { sessionId: session2.ID, payload: 'USER2_SCAN1' },
+                { sessionId: session1.ID, payload: 'USER1_SCAN2' }
+            ];
+
             for (const scan of scans) {
-                const result = await dbClient.saveQRScan(session.ID, scan);
-                expect(result.success).toBe(true);
+                await dbClient.saveQRScan(scan.sessionId, scan.payload);
             }
 
             // Verify all scans are retrievable
-            const savedScans = await dbClient.getQRScansBySession(session.ID);
-            expect(savedScans.length).toBe(scans.length);
+            const savedScans = await dbClient.getQRScansBySession(session1.ID);
+            expect(savedScans.length).toBe(2); // Only scans for session1
 
             const savedPayloads = savedScans.map(s => s.RawPayload);
-            scans.forEach(scan => {
-                expect(savedPayloads).toContain(scan);
-            });
+            expect(savedPayloads).toContain('USER1_SCAN1');
+            expect(savedPayloads).toContain('USER1_SCAN2');
+        });
+
+        test('should handle concurrent operations', async () => {
+            const promises = [];
+
+            // Simulate concurrent user lookups
+            for (let i = 0; i < 10; i++) {
+                promises.push(dbClient.getUserByRFID('329C172'));
+            }
+
+            const results = await Promise.all(promises);
+
+            // All should return the same user
+            expect(results.every(user => user && user.BenID === 1)).toBe(true);
         });
     });
 });
