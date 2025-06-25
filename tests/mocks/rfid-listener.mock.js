@@ -2,7 +2,7 @@
 /**
  * Mock RFID Listener für Tests
  * Simuliert Hardware-RFID-Reader ohne echte Hardware-Abhängigkeiten
- * Vollständig korrigiert mit allen erforderlichen Methoden
+ * Vollständig korrigiert für stabile Tests
  */
 
 const { EventEmitter } = require('events');
@@ -11,7 +11,9 @@ class MockRFIDListener extends EventEmitter {
     constructor() {
         super();
 
+        // Grundlegende Status-Eigenschaften
         this.isRunning = false;
+        this.isListening = false;
         this.isHardwareReady = false;
         this.currentBuffer = '';
         this.registeredShortcuts = [];
@@ -42,7 +44,7 @@ class MockRFIDListener extends EventEmitter {
             maxTagLength: 20,
             allowedCharacters: /^[0-9A-Fa-f]+$/,
             simulateHardwareErrors: false,
-            hardwareErrorRate: 0.001, // Reduziert auf 0.1% für stabilere Tests
+            hardwareErrorRate: 0,  // Für Tests auf 0 setzen
             debugMode: false
         };
 
@@ -51,197 +53,231 @@ class MockRFIDListener extends EventEmitter {
         this.simulationQueue = [];
         this.simulationInterval = null;
         this.autoScanEnabled = false;
-        this.autoScanTags = ['53004114', '12345678', 'ABCDEF12'];
-        this.autoScanInterval = null;
-        this.inputBuffer = '';
-        this.processingCallbacks = [];
+        this.autoScanTags = ['53004114', '53004115', '53004116'];
+        this.autoScanCurrentIndex = 0;
+        this.autoScanIntervalMs = 1000;
 
-        // Performance-optimierte Einstellungen
-        this._fastMode = false;
-        this._silentMode = false;
+        // Mock tags für deterministische Tests
+        this.mockTags = ['53004114', '53004115', '53004116'];
+        this.mockTagIndex = 0;
+
+        // Hardware error control für Tests
+        this.forceHardwareError = false;
+        this.hardwareErrorDisabled = false;
+
+        // Cleanup tracking
+        this.activeTimeouts = new Set();
+        this.activeIntervals = new Set();
+
+        // Bind methods to preserve this context
+        this._handleKeyPress = this._handleKeyPress.bind(this);
+        this._processBuffer = this._processBuffer.bind(this);
+        this._processScanResult = this._processScanResult.bind(this);
     }
 
-    /**
-     * RFID Listener starten
-     */
-    async start() {
-        if (this.isRunning) {
-            this._log('RFID Listener läuft bereits');
-            return;
-        }
+    // =================== PUBLIC API ===================
 
+    async start() {
         try {
             this._log('Starte RFID Listener (Mock-Modus)...');
 
-            // Hardware initialisieren (simuliert)
+            if (this.isRunning) {
+                this._log('RFID Listener läuft bereits');
+                return;
+            }
+
+            // Hardware initialisieren (deterministisch für Tests)
             await this._initializeHardware();
 
-            // Shortcuts registrieren (für Electron-Integration)
+            // Shortcuts registrieren
             this._registerShortcuts();
 
+            // Status setzen
             this.isRunning = true;
+            this.isListening = true;
+            this.isHardwareReady = true;
             this.stats.startTime = Date.now();
 
             this._log('RFID Listener erfolgreich gestartet');
             this.emit('started');
 
         } catch (error) {
-            this.stats.errors++;
             this._log(`Fehler beim Starten: ${error.message}`, 'error');
             this.emit('error', error);
             throw error;
         }
     }
 
-    /**
-     * RFID Listener stoppen
-     */
     async stop() {
-        if (!this.isRunning) {
-            this._log('RFID Listener läuft nicht');
-            return;
-        }
-
         try {
             this._log('Stoppe RFID Listener...');
 
-            // Auto-Scan deaktivieren
+            if (!this.isRunning) {
+                this._log('RFID Listener läuft nicht');
+                return;
+            }
+
+            // Auto-scan deaktivieren
             this.disableAutoScan();
+
+            // Buffer timeout clearen
+            if (this.bufferTimeout) {
+                clearTimeout(this.bufferTimeout);
+                this.bufferTimeout = null;
+            }
 
             // Shortcuts abmelden
             this._unregisterShortcuts();
 
-            // Buffer leeren
-            this._clearBuffer();
-
-            // Hardware beenden
+            // Hardware herunterfahren
             await this._shutdownHardware();
 
+            // Status zurücksetzen
             this.isRunning = false;
+            this.isListening = false;
             this.isHardwareReady = false;
+            this.currentBuffer = '';
+
+            // Cleanup
+            this._cleanup();
 
             this._log('RFID Listener gestoppt');
             this.emit('stopped');
 
         } catch (error) {
-            this.stats.errors++;
             this._log(`Fehler beim Stoppen: ${error.message}`, 'error');
             this.emit('error', error);
-            throw error;
         }
     }
 
-    /**
-     * Tag-Scan simulieren (für Tests)
-     */
-    simulateTag(tagId) {
-        if (!this.isRunning) {
-            this._log('Listener nicht gestartet - Scan ignoriert', 'warn');
-            return;
-        }
+    async destroy() {
+        try {
+            this._log('Zerstöre RFID Listener...');
 
-        this._log(`Simuliere RFID-Tag: ${tagId}`);
+            // Erst stoppen
+            if (this.isRunning) {
+                await this.stop();
+            }
 
-        // Simuliere Tastatureingabe
-        for (const char of tagId) {
-            this.handleInput(char);
-        }
+            // Alle Event Listener entfernen
+            this.removeAllListeners();
 
-        // Simuliere Enter-Taste
-        this.handleInput('\r');
-    }
+            // Auto-scan komplett deaktivieren
+            this.autoScanEnabled = false;
 
-    /**
-     * Eingabe-Handler für Tastatur-Input
-     */
-    handleInput(char) {
-        if (!this.isRunning) {
-            return;
-        }
+            // Statistiken zurücksetzen
+            this._resetStats();
 
-        // Enter-Taste erkennen (verarbeite aktuellen Buffer)
-        if (char === '\r' || char === '\n') {
-            this._processBuffer();
-            return;
-        }
+            // Mock-Daten zurücksetzen
+            this.mockTags = [];
+            this.mockTagIndex = 0;
 
-        // Zeichen zum Buffer hinzufügen
-        this.currentBuffer += char;
+            this._log('RFID Listener zerstört');
 
-        // Buffer-Timeout zurücksetzen
-        this._resetBufferTimeout();
-    }
-
-    /**
-     * Tag verarbeiten (für Performance-Tests)
-     */
-    processTag() {
-        if (this.currentBuffer.length > 0) {
-            this._processBuffer();
+        } catch (error) {
+            this._log(`Fehler beim Zerstören: ${error.message}`, 'error');
         }
     }
 
-    /**
-     * Auto-Scan aktivieren (für Tests)
-     */
-    enableAutoScan(intervalMs = 1000, customTags = null) {
+    // =================== SIMULATION METHODS ===================
+
+    simulateTag(tagId, delay = 10) {
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                this.activeTimeouts.delete(timeout);
+                if (this.isListening) {
+                    this._simulateRFIDInput(tagId);
+                }
+                resolve();
+            }, delay);
+            this.activeTimeouts.add(timeout);
+        });
+    }
+
+    simulateHardwareError(errorType = 'connection_lost') {
+        const errorMessages = {
+            'connection_lost': 'RFID reader connection lost',
+            'device_not_found': 'RFID reader device not found',
+            'permission_denied': 'Permission denied accessing RFID reader',
+            'timeout': 'RFID reader timeout',
+            'invalid_response': 'Invalid response from RFID reader'
+        };
+
+        const message = errorMessages[errorType] || errorMessages['connection_lost'];
+        const error = new Error(message);
+        error.type = errorType;
+
+        this.stats.errors++;
+        this.emit('error', error);
+
+        return error;
+    }
+
+    enableAutoScan(intervalMs = 1000) {
         if (this.autoScanEnabled) {
             return;
         }
 
-        if (customTags) {
-            this.autoScanTags = [...customTags];
-        }
-
         this.autoScanEnabled = true;
-        let tagIndex = 0;
+        this.autoScanIntervalMs = intervalMs;
+        this.autoScanCurrentIndex = 0;
 
-        this.autoScanInterval = setInterval(() => {
-            if (!this.autoScanEnabled) {
+        const interval = setInterval(() => {
+            if (!this.autoScanEnabled || !this.isListening) {
+                clearInterval(interval);
+                this.activeIntervals.delete(interval);
                 return;
             }
 
-            const tag = this.autoScanTags[tagIndex % this.autoScanTags.length];
-            this.simulateTag(tag);
-            tagIndex++;
-        }, intervalMs);
+            const tags = this.mockTags.length > 0 ? this.mockTags : this.autoScanTags;
+            if (tags.length > 0) {
+                const tag = tags[this.autoScanCurrentIndex % tags.length];
+                this._simulateRFIDInput(tag);
+                this.autoScanCurrentIndex++;
+            }
+        }, this.autoScanIntervalMs);
 
-        this._log(`Auto-Scan aktiviert mit ${this.autoScanTags.length} Tags`);
+        this.activeIntervals.add(interval);
+        this._log('Auto-Scan aktiviert');
     }
 
-    /**
-     * Auto-Scan deaktivieren
-     */
     disableAutoScan() {
-        if (!this.autoScanEnabled) {
-            return;
-        }
-
         this.autoScanEnabled = false;
+        this.autoScanCurrentIndex = 0;
 
-        if (this.autoScanInterval) {
-            clearInterval(this.autoScanInterval);
-            this.autoScanInterval = null;
-        }
+        // Clear alle Auto-scan intervals
+        this.activeIntervals.forEach(interval => {
+            clearInterval(interval);
+        });
+        this.activeIntervals.clear();
 
         this._log('Auto-Scan deaktiviert');
     }
 
-    /**
-     * Konfiguration aktualisieren
-     */
+    setMockTags(tags) {
+        this.mockTags = [...tags];
+        this.mockTagIndex = 0;
+        this.autoScanCurrentIndex = 0;
+        this._log(`Mock Tags gesetzt: ${tags.join(', ')}`);
+    }
+
+    // =================== CONFIGURATION ===================
+
     updateConfig(newConfig) {
         this.config = { ...this.config, ...newConfig };
         this._log('Konfiguration aktualisiert');
     }
 
-    /**
-     * Statistiken abrufen
-     */
     getStats() {
-        const uptime = this.stats.startTime ? Date.now() - this.stats.startTime : 0;
-        const successRate = this.stats.totalScans > 0 ?
-            (this.stats.validScans / this.stats.totalScans) * 100 : 0;
+        const now = Date.now();
+        const uptime = this.stats.startTime ? now - this.stats.startTime : 0;
+        const total = this.stats.validScans + this.stats.invalidScans;
+        const successRate = total > 0 ? Math.round((this.stats.validScans / total) * 100) : 0;
+
+        // Performance-Metriken berechnen
+        const avgProcessingTime = this.stats.performance.processingTimes.length > 0
+            ? this.stats.performance.processingTimes.reduce((a, b) => a + b, 0) / this.stats.performance.processingTimes.length
+            : 0;
 
         return {
             ...this.stats,
@@ -249,190 +285,219 @@ class MockRFIDListener extends EventEmitter {
             successRate,
             performance: {
                 ...this.stats.performance,
-                avgProcessingTime: this.stats.performance.processingTimes.length > 0 ?
-                    this.stats.performance.processingTimes.reduce((a, b) => a + b, 0) /
-                    this.stats.performance.processingTimes.length : 0
+                avgProcessingTime
             }
         };
     }
 
-    /**
-     * Status-Informationen abrufen
-     */
-    getStatus() {
-        return {
-            isRunning: this.isRunning,
-            isHardwareReady: this.isHardwareReady,
-            autoScanEnabled: this.autoScanEnabled,
-            bufferLength: this.currentBuffer.length,
-            stats: this.getStats(),
-            config: { ...this.config }
-        };
-    }
+    // =================== TEST UTILITIES ===================
 
-    /**
-     * Statistiken zurücksetzen
-     */
-    resetStats() {
-        this.stats = {
-            totalScans: 0,
-            validScans: 0,
-            invalidScans: 0,
-            errors: 0,
-            startTime: this.stats.startTime, // Start-Zeit beibehalten
-            lastScanTime: null,
-            successRate: 0,
-            uptime: 0,
-            performance: {
-                avgProcessingTime: 0,
-                maxProcessingTime: 0,
-                minProcessingTime: Infinity,
-                processingTimes: []
-            }
-        };
-        this._log('Statistiken zurückgesetzt');
-    }
-
-    /**
-     * Hardware-Fehler simulieren
-     */
     enableHardwareError() {
-        this.config.simulateHardwareErrors = true;
-        this._log('Hardware-Fehler-Simulation aktiviert');
+        this.forceHardwareError = true;
+        this.hardwareErrorDisabled = false;
     }
 
     disableHardwareError() {
-        this.config.simulateHardwareErrors = false;
-        this._log('Hardware-Fehler-Simulation deaktiviert');
+        this.forceHardwareError = false;
+        this.hardwareErrorDisabled = true;
     }
 
-    /**
-     * Performance-Optimierungen
-     */
-    enableFastMode() {
-        this._fastMode = true;
-        this._log('Fast Mode aktiviert');
-    }
-
-    disableFastMode() {
-        this._fastMode = false;
-        this._log('Fast Mode deaktiviert');
-    }
-
-    enableSilentMode() {
-        this._silentMode = true;
-        this.config.debugMode = false;
-    }
-
-    disableSilentMode() {
-        this._silentMode = false;
-    }
-
-    // ===== PRIVATE METHODEN =====
+    // =================== PRIVATE METHODS ===================
 
     async _initializeHardware() {
-        // Simuliere Hardware-Initialisierung
-        await this._delay(this._fastMode ? 5 : 50);
-
-        // Simuliere seltene Hardware-Fehler (nur bei aktivierter Simulation)
-        if (this.config.simulateHardwareErrors && Math.random() < this.config.hardwareErrorRate) {
+        // Deterministisches Verhalten für Tests
+        if (this.forceHardwareError && !this.hardwareErrorDisabled) {
             throw new Error('Hardware initialization failed');
         }
 
-        this.isHardwareReady = true;
+        // Simuliere Hardware-Initialisierung
+        await new Promise(resolve => {
+            const timeout = setTimeout(() => {
+                this.activeTimeouts.delete(timeout);
+                resolve();
+            }, 50);
+            this.activeTimeouts.add(timeout);
+        });
+
         this._log('Hardware initialized successfully');
     }
 
     async _shutdownHardware() {
         // Simuliere Hardware-Shutdown
-        await this._delay(this._fastMode ? 2 : 20);
-        this.isHardwareReady = false;
+        await new Promise(resolve => {
+            const timeout = setTimeout(() => {
+                this.activeTimeouts.delete(timeout);
+                resolve();
+            }, 30);
+            this.activeTimeouts.add(timeout);
+        });
+
         this._log('Hardware shutdown complete');
     }
 
     _registerShortcuts() {
-        // Mock für Electron-Shortcuts
-        this.registeredShortcuts = [
-            'CmdOrCtrl+R', // Test-Tag scannen
-            'CmdOrCtrl+T'  // Auto-Scan toggle
-        ];
-        this._log(`${this.registeredShortcuts.length} Shortcuts registriert`);
-    }
-
-    _unregisterShortcuts() {
-        this.registeredShortcuts = [];
-        this._log('Shortcuts abgemeldet');
-    }
-
-    _processBuffer() {
-        const startTime = Date.now();
-
-        if (this.currentBuffer.length === 0) {
+        if (!global.mockElectron?.globalShortcut) {
+            this._log('Electron globalShortcut nicht verfügbar (Mock-Umgebung)');
             return;
         }
 
-        const tagId = this.currentBuffer.trim();
-        this._log(`Verarbeite Tag: ${tagId}`);
+        const shortcuts = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'Enter'];
+        let registeredCount = 0;
 
-        // Statistiken aktualisieren
+        shortcuts.forEach(key => {
+            try {
+                const success = global.mockElectron.globalShortcut.register(key, () => {
+                    this._handleKeyPress(key);
+                });
+
+                if (success) {
+                    this.registeredShortcuts.push(key);
+                    registeredCount++;
+                }
+            } catch (error) {
+                this._log(`Fehler beim Registrieren von Shortcut ${key}: ${error.message}`, 'error');
+            }
+        });
+
+        this._log(`${registeredCount} Shortcuts registriert`);
+    }
+
+    _unregisterShortcuts() {
+        if (!global.mockElectron?.globalShortcut) {
+            this._log('Electron globalShortcut nicht verfügbar');
+            return;
+        }
+
+        try {
+            global.mockElectron.globalShortcut.unregisterAll();
+            this.registeredShortcuts = [];
+            this._log('Shortcuts abgemeldet');
+        } catch (error) {
+            this._log(`Fehler beim Abmelden der Shortcuts: ${error.message}`, 'error');
+        }
+    }
+
+    _handleKeyPress(key) {
+        if (!this.isListening) {
+            return;
+        }
+
+        const startTime = process.hrtime.bigint();
+
+        try {
+            if (key === 'Enter') {
+                this._processBuffer();
+            } else {
+                this.currentBuffer += key;
+
+                // Buffer timeout neu setzen
+                if (this.bufferTimeout) {
+                    clearTimeout(this.bufferTimeout);
+                    this.activeTimeouts.delete(this.bufferTimeout);
+                }
+
+                const timeout = setTimeout(() => {
+                    this.activeTimeouts.delete(timeout);
+                    this._processBuffer();
+                }, this.bufferTimeoutMs);
+                this.bufferTimeout = timeout;
+                this.activeTimeouts.add(timeout);
+            }
+
+            // Performance tracking
+            const endTime = process.hrtime.bigint();
+            const processingTime = Number(endTime - startTime) / 1000000; // Convert to ms
+            this._updatePerformanceStats(processingTime);
+
+        } catch (error) {
+            this._log(`Fehler bei Tastenverarbeitung: ${error.message}`, 'error');
+            this.stats.errors++;
+        }
+    }
+
+    _processBuffer() {
+        if (this.bufferTimeout) {
+            clearTimeout(this.bufferTimeout);
+            this.activeTimeouts.delete(this.bufferTimeout);
+            this.bufferTimeout = null;
+        }
+
+        const tagId = this.currentBuffer.trim();
+        this.currentBuffer = '';
+
+        if (tagId.length === 0) {
+            return;
+        }
+
+        this._processScanResult(tagId);
+    }
+
+    _processScanResult(tagId) {
         this.stats.totalScans++;
         this.stats.lastScanTime = Date.now();
 
-        // Tag validieren
-        const validationResult = this._validateTag(tagId);
+        const validation = this._validateTag(tagId);
 
-        if (validationResult.isValid) {
+        if (validation.isValid) {
             this.stats.validScans++;
-            this._log(`Gültiger RFID-Tag gescannt: ${tagId}`);
-            this._updatePerformanceStats(Date.now() - startTime);
-            this.emit('tag-scanned', tagId);
+            this._log(`Valid Tag: ${tagId}`);
+            this.emit('tag-detected', { tagId, timestamp: new Date().toISOString() });
         } else {
             this.stats.invalidScans++;
-            this._log(`Ungültiger RFID-Tag: ${tagId} - ${validationResult.reason}`, 'warn');
+            this._log(`Invalid Tag: ${tagId} - ${validation.reason}`);
             this.emit('invalid-scan', {
-                tagId: tagId,
-                reason: validationResult.reason
+                tagId,
+                reason: validation.reason,
+                timestamp: new Date().toISOString()
             });
         }
 
-        // Buffer leeren
-        this._clearBuffer();
+        // Success rate aktualisieren
+        const total = this.stats.validScans + this.stats.invalidScans;
+        this.stats.successRate = total > 0 ? Math.round((this.stats.validScans / total) * 100) : 0;
     }
 
     _validateTag(tagId) {
+        // Leerer Tag
+        if (!tagId || tagId.length === 0) {
+            return { isValid: false, reason: 'Empty tag ID' };
+        }
+
         // Länge prüfen
         if (tagId.length < this.config.minTagLength) {
-            return {
-                isValid: false,
-                reason: `Tag too short (min: ${this.config.minTagLength})`
-            };
+            return { isValid: false, reason: 'Tag ID too short' };
         }
 
         if (tagId.length > this.config.maxTagLength) {
-            return {
-                isValid: false,
-                reason: `Tag too long (max: ${this.config.maxTagLength})`
-            };
+            return { isValid: false, reason: 'Tag ID too long' };
         }
 
-        // Zeichen prüfen
+        // Gültige Zeichen prüfen
         if (!this.config.allowedCharacters.test(tagId)) {
-            return {
-                isValid: false,
-                reason: 'Invalid hex characters'
-            };
+            return { isValid: false, reason: 'Invalid hex characters' };
         }
 
-        return {
-            isValid: true,
-            reason: null
-        };
+        return { isValid: true };
+    }
+
+    _simulateRFIDInput(tagId) {
+        if (!this.isListening) {
+            return;
+        }
+
+        // Simuliere Tasteneingabe für jeden Charakter
+        for (const char of tagId) {
+            this._handleKeyPress(char);
+        }
+
+        // Simuliere Enter-Taste
+        this._handleKeyPress('Enter');
     }
 
     _updatePerformanceStats(processingTime) {
         this.stats.performance.processingTimes.push(processingTime);
 
-        // Behalte nur die letzten 100 Messungen
+        // Nur die letzten 100 Messungen behalten
         if (this.stats.performance.processingTimes.length > 100) {
             this.stats.performance.processingTimes.shift();
         }
@@ -448,203 +513,49 @@ class MockRFIDListener extends EventEmitter {
         );
     }
 
-    _resetBufferTimeout() {
-        if (this.bufferTimeout) {
-            clearTimeout(this.bufferTimeout);
-        }
-
-        this.bufferTimeout = setTimeout(() => {
-            if (this.currentBuffer.length > 0) {
-                this._log('Buffer-Timeout erreicht, verarbeite unvollständigen Input', 'warn');
-                this._processBuffer();
+    _resetStats() {
+        this.stats = {
+            totalScans: 0,
+            validScans: 0,
+            invalidScans: 0,
+            errors: 0,
+            startTime: null,
+            lastScanTime: null,
+            successRate: 0,
+            uptime: 0,
+            performance: {
+                avgProcessingTime: 0,
+                maxProcessingTime: 0,
+                minProcessingTime: Infinity,
+                processingTimes: []
             }
-        }, this.bufferTimeoutMs);
+        };
     }
 
-    _clearBuffer() {
+    _cleanup() {
+        // Clear alle aktiven Timeouts
+        this.activeTimeouts.forEach(timeout => {
+            clearTimeout(timeout);
+        });
+        this.activeTimeouts.clear();
+
+        // Clear alle aktiven Intervals
+        this.activeIntervals.forEach(interval => {
+            clearInterval(interval);
+        });
+        this.activeIntervals.clear();
+
+        // Buffer zurücksetzen
         this.currentBuffer = '';
-
-        if (this.bufferTimeout) {
-            clearTimeout(this.bufferTimeout);
-            this.bufferTimeout = null;
-        }
-    }
-
-    async _delay(ms) {
-        if (this._fastMode) {
-            // Im Fast Mode sehr kurze oder keine Delays
-            return Promise.resolve();
-        }
-        return new Promise(resolve => setTimeout(resolve, ms));
+        this.bufferTimeout = null;
     }
 
     _log(message, level = 'info') {
-        if (this._silentMode) {
-            return; // Kein Logging im Silent Mode
+        if (this.config.debugMode || level === 'error') {
+            const timestamp = new Date().toISOString();
+            const prefix = `[${timestamp}] [RFID-Mock] [${level.toUpperCase()}]`;
+            console.log(`${prefix} ${message}`);
         }
-
-        if (!this.config.debugMode && level === 'debug') {
-            return;
-        }
-
-        const timestamp = new Date().toISOString();
-        const prefix = `[${timestamp}] [RFID-Mock] [${level.toUpperCase()}]`;
-
-        switch (level) {
-            case 'error':
-                console.error(`${prefix} ${message}`);
-                break;
-            case 'warn':
-                console.warn(`${prefix} ${message}`);
-                break;
-            case 'debug':
-                console.debug(`${prefix} ${message}`);
-                break;
-            default:
-                console.log(`${prefix} ${message}`);
-        }
-    }
-
-    // ===== ERWEITERTE TEST-HILFSMETHODEN =====
-
-    /**
-     * Simuliere mehrere Tags in schneller Folge
-     */
-    simulateRapidTags(tagCount, baseTagId = '50000000') {
-        for (let i = 0; i < tagCount; i++) {
-            const tagId = (parseInt(baseTagId, 16) + i).toString(16).toUpperCase().padStart(8, '0');
-            this.simulateTag(tagId);
-        }
-    }
-
-    /**
-     * Simuliere ungültige Tags
-     */
-    simulateInvalidTag(invalidTag = 'INVALID!') {
-        this.simulateTag(invalidTag);
-    }
-
-    /**
-     * Teste Buffer-Verhalten
-     */
-    testBufferBehavior(input) {
-        for (const char of input) {
-            this.handleInput(char);
-        }
-    }
-
-    /**
-     * Setze Mock-Daten für Tests
-     */
-    setMockStats(stats) {
-        this.stats = { ...this.stats, ...stats };
-    }
-
-    /**
-     * Simuliere Hardware-Probleme
-     */
-    simulateHardwareProblem() {
-        this.isHardwareReady = false;
-        this.emit('hardware-error', new Error('Simulated hardware problem'));
-    }
-
-    /**
-     * Repariere Hardware-Probleme
-     */
-    repairHardware() {
-        this.isHardwareReady = true;
-        this.emit('hardware-recovered');
-    }
-
-    /**
-     * Batch-Verarbeitung für Performance-Tests
-     */
-    async processBatch(tags, delayMs = 0) {
-        for (let i = 0; i < tags.length; i++) {
-            this.simulateTag(tags[i]);
-
-            if (delayMs > 0 && i < tags.length - 1) {
-                await this._delay(delayMs);
-            }
-        }
-    }
-
-    /**
-     * Stress-Test-Methoden
-     */
-    runStressTest(duration = 5000, tagsPerSecond = 10) {
-        const interval = 1000 / tagsPerSecond;
-        let counter = 0;
-
-        const stressInterval = setInterval(() => {
-            const tagId = (70000000 + counter++).toString(16).toUpperCase().padStart(8, '0');
-            this.simulateTag(tagId);
-        }, interval);
-
-        setTimeout(() => {
-            clearInterval(stressInterval);
-            this.emit('stress-test-complete', {
-                duration,
-                totalTags: counter,
-                tagsPerSecond: counter / (duration / 1000)
-            });
-        }, duration);
-
-        return { interval: stressInterval, expectedTags: Math.floor(duration / interval) };
-    }
-
-    /**
-     * Cleanup für Tests
-     */
-    cleanup() {
-        // Alle Timeouts und Intervals bereinigen
-        if (this.bufferTimeout) {
-            clearTimeout(this.bufferTimeout);
-            this.bufferTimeout = null;
-        }
-
-        if (this.autoScanInterval) {
-            clearInterval(this.autoScanInterval);
-            this.autoScanInterval = null;
-        }
-
-        if (this.simulationInterval) {
-            clearInterval(this.simulationInterval);
-            this.simulationInterval = null;
-        }
-
-        // Buffer und Queues leeren
-        this.currentBuffer = '';
-        this.simulationQueue = [];
-        this.processingCallbacks = [];
-
-        // Event-Listener bereinigen
-        this.removeAllListeners();
-
-        this._log('Cleanup abgeschlossen');
-    }
-
-    /**
-     * Deep-Kopie der Statistiken für Tests
-     */
-    getStatsCopy() {
-        return JSON.parse(JSON.stringify(this.getStats()));
-    }
-
-    /**
-     * Performance-Metriken für Tests
-     */
-    getPerformanceMetrics() {
-        const stats = this.getStats();
-        return {
-            totalProcessingTime: stats.performance.processingTimes.reduce((a, b) => a + b, 0),
-            averageProcessingTime: stats.performance.avgProcessingTime,
-            maxProcessingTime: stats.performance.maxProcessingTime,
-            minProcessingTime: stats.performance.minProcessingTime === Infinity ? 0 : stats.performance.minProcessingTime,
-            throughput: stats.totalScans / (stats.uptime / 1000), // Tags pro Sekunde
-            errorRate: stats.totalScans > 0 ? (stats.invalidScans / stats.totalScans) * 100 : 0,
-            successRate: stats.successRate
-        };
     }
 }
 
