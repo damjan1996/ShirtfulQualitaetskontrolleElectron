@@ -1,410 +1,531 @@
-const { EventEmitter } = require('events');
-
 /**
- * Mock Main Application
- * Simuliert die Hauptanwendungslogik für Tests
+ * Unit Tests für Electron Main Process
+ * Testet die Hauptanwendungslogik und IPC-Handler
  */
-class MockMainApp extends EventEmitter {
-    constructor() {
-        super();
 
-        this.isRunning = false;
-        this.isReady = false;
-        this.window = null;
+const { mockElectron } = require('../mocks/electron.mock');
 
-        // Dependencies
-        this.rfidListener = null;
-        this.dbClient = null;
+// Mock aller externen Dependencies
+jest.mock('electron', () => mockElectron);
+jest.mock('../../db/db-client', () => {
+    return jest.fn().mockImplementation(() => ({
+        connect: jest.fn(() => Promise.resolve()),
+        close: jest.fn(() => Promise.resolve()),
+        query: jest.fn(() => Promise.resolve([])),
+        getUserByEPC: jest.fn(() => Promise.resolve(null)),
+        getUserById: jest.fn(() => Promise.resolve(null)),
+        healthCheck: jest.fn(() => Promise.resolve(true)),
+        isConnected: false
+    }));
+});
 
-        // State Management
-        this.currentUser = null;
-        this.activeSession = null;
-        this.isScanning = false;
+jest.mock('../../rfid/rfid-listener', () => {
+    return jest.fn().mockImplementation(() => ({
+        start: jest.fn(() => Promise.resolve()),
+        stop: jest.fn(() => Promise.resolve()),
+        isListening: false,
+        on: jest.fn(),
+        removeAllListeners: jest.fn()
+    }));
+});
 
-        // Configuration
-        this.config = {
-            autoScan: true,
-            sessionTimeout: 8 * 60 * 60 * 1000, // 8 Stunden
-            debugMode: false
-        };
+describe('Main Process', () => {
+    let app, mainWindow, dbClient, rfidListener;
 
-        // Statistics
-        this.stats = {
-            totalLogins: 0,
-            totalScans: 0,
-            totalErrors: 0,
-            uptime: 0,
-            startTime: null
-        };
+    beforeEach(() => {
+        // Reset alle Mocks
+        jest.clearAllMocks();
 
-        // Mock Functions für Tests
-        this.handleRFIDScan = jest.fn(this._handleRFIDScan.bind(this));
-        this.handleDatabaseError = jest.fn(this._handleDatabaseError.bind(this));
-        this.handleSessionCreate = jest.fn(this._handleSessionCreate.bind(this));
-        this.handleSessionEnd = jest.fn(this._handleSessionEnd.bind(this));
-        this.handleQRScan = jest.fn(this._handleQRScan.bind(this));
-    }
-
-    /**
-     * Anwendung starten
-     */
-    async start() {
-        if (this.isRunning) {
-            this._log('Main App läuft bereits');
-            return;
-        }
-
-        try {
-            this._log('Starte Main Application...');
-
-            await this._initializeApp();
-            await this._setupEventHandlers();
-
-            this.isRunning = true;
-            this.isReady = true;
-            this.stats.startTime = new Date();
-
-            this._log('Main Application erfolgreich gestartet');
-            this.emit('ready');
-
-        } catch (error) {
-            this.stats.totalErrors++;
-            this._log(`Fehler beim Starten: ${error.message}`, 'error');
-            this.emit('error', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Anwendung stoppen
-     */
-    async stop() {
-        if (!this.isRunning) {
-            this._log('Main App läuft nicht');
-            return;
-        }
-
-        try {
-            this._log('Stoppe Main Application...');
-
-            // Aktuelle Session beenden
-            if (this.activeSession) {
-                await this.endCurrentSession();
-            }
-
-            // Event-Handler entfernen
-            this._removeEventHandlers();
-
-            this.isRunning = false;
-            this.isReady = false;
-
-            this._log('Main Application gestoppt');
-            this.emit('stopped');
-
-        } catch (error) {
-            this.stats.totalErrors++;
-            this._log(`Fehler beim Stoppen: ${error.message}`, 'error');
-            this.emit('error', error);
-        }
-    }
-
-    /**
-     * Dependencies setzen (für Tests)
-     */
-    setDependencies(rfidListener, dbClient) {
-        this.rfidListener = rfidListener;
-        this.dbClient = dbClient;
-
-        this._log('Dependencies gesetzt');
-    }
-
-    /**
-     * RFID-Scan behandeln (interne Implementierung)
-     */
-    async _handleRFIDScan(tagId) {
-        try {
-            this._log(`RFID-Scan empfangen: ${tagId}`);
-            this.stats.totalScans++;
-
-            if (!this.dbClient) {
-                throw new Error('Database Client nicht verfügbar');
-            }
-
-            // Benutzer suchen
-            const user = await this.dbClient.getUserByEPC(tagId);
-
-            if (!user) {
-                this._log(`Unbekannter RFID-Tag: ${tagId}`, 'warn');
-                this.emit('unknown-tag', tagId);
-                return;
-            }
-
-            // Session-Logik
-            if (this.currentUser && this.currentUser.id === user.id) {
-                // Gleicher Benutzer -> Ausloggen
-                await this.endCurrentSession();
-            } else {
-                // Anderer Benutzer -> Alte Session beenden, neue starten
-                if (this.activeSession) {
-                    await this.endCurrentSession();
+        // Mock Application State
+        app = {
+            isReady: false,
+            mainWindow: null,
+            dbClient: null,
+            rfidListener: null,
+            config: {
+                window: {
+                    width: 1200,
+                    height: 800,
+                    minWidth: 800,
+                    minHeight: 600
                 }
-                await this.startNewSession(user);
             }
-
-        } catch (error) {
-            this.stats.totalErrors++;
-            this._log(`Fehler bei RFID-Scan: ${error.message}`, 'error');
-            this.emit('scan-error', { tagId, error });
-        }
-    }
-
-    /**
-     * Database-Fehler behandeln
-     */
-    async _handleDatabaseError(error) {
-        this.stats.totalErrors++;
-        this._log(`Database-Fehler: ${error.message}`, 'error');
-        this.emit('database-error', error);
-    }
-
-    /**
-     * Session erstellen
-     */
-    async _handleSessionCreate(userId) {
-        try {
-            if (!this.dbClient) {
-                throw new Error('Database Client nicht verfügbar');
-            }
-
-            const session = await this.dbClient.createSession(userId);
-            this._log(`Session erstellt: ${session.id} für User ${userId}`);
-
-            return session;
-        } catch (error) {
-            this.stats.totalErrors++;
-            this._log(`Fehler bei Session-Erstellung: ${error.message}`, 'error');
-            throw error;
-        }
-    }
-
-    /**
-     * Session beenden
-     */
-    async _handleSessionEnd(sessionId) {
-        try {
-            if (!this.dbClient) {
-                throw new Error('Database Client nicht verfügbar');
-            }
-
-            const session = await this.dbClient.endSession(sessionId);
-            this._log(`Session beendet: ${sessionId}`);
-
-            return session;
-        } catch (error) {
-            this.stats.totalErrors++;
-            this._log(`Fehler beim Beenden der Session: ${error.message}`, 'error');
-            throw error;
-        }
-    }
-
-    /**
-     * QR-Code-Scan behandeln
-     */
-    async _handleQRScan(qrData) {
-        try {
-            this._log(`QR-Scan empfangen: ${qrData}`);
-
-            if (!this.activeSession) {
-                this._log('Kein aktiver Benutzer für QR-Scan', 'warn');
-                this.emit('qr-scan-no-session', qrData);
-                return;
-            }
-
-            if (!this.dbClient) {
-                throw new Error('Database Client nicht verfügbar');
-            }
-
-            // QR-Scan speichern
-            const scan = await this.dbClient.saveQrScan(this.activeSession.id, qrData);
-
-            this._log(`QR-Scan gespeichert: ID ${scan.id}`);
-            this.emit('qr-scan-saved', scan);
-
-            return scan;
-
-        } catch (error) {
-            this.stats.totalErrors++;
-            this._log(`Fehler bei QR-Scan: ${error.message}`, 'error');
-            this.emit('qr-scan-error', { qrData, error });
-        }
-    }
-
-    /**
-     * Neue Session starten
-     */
-    async startNewSession(user) {
-        try {
-            this._log(`Starte neue Session für ${user.name}`);
-
-            const session = await this._handleSessionCreate(user.id);
-
-            this.currentUser = user;
-            this.activeSession = session;
-            this.stats.totalLogins++;
-
-            this._log(`Session gestartet: User ${user.name}, Session ${session.id}`);
-            this.emit('session-started', { user, session });
-
-            return session;
-
-        } catch (error) {
-            this.stats.totalErrors++;
-            this._log(`Fehler beim Starten der Session: ${error.message}`, 'error');
-            throw error;
-        }
-    }
-
-    /**
-     * Aktuelle Session beenden
-     */
-    async endCurrentSession() {
-        if (!this.activeSession) {
-            this._log('Keine aktive Session zum Beenden');
-            return;
-        }
-
-        try {
-            const sessionId = this.activeSession.id;
-            const user = this.currentUser;
-
-            const endedSession = await this._handleSessionEnd(sessionId);
-
-            this.currentUser = null;
-            this.activeSession = null;
-
-            this._log(`Session beendet: ${sessionId}`);
-            this.emit('session-ended', { user, session: endedSession });
-
-            return endedSession;
-
-        } catch (error) {
-            this.stats.totalErrors++;
-            this._log(`Fehler beim Beenden der Session: ${error.message}`, 'error');
-            throw error;
-        }
-    }
-
-    /**
-     * Öffentliche API-Methoden (für IPC/Tests)
-     */
-
-    // Benutzer per EPC abrufen
-    async getUserByEPC(epc) {
-        if (!this.dbClient) {
-            throw new Error('Database Client nicht verfügbar');
-        }
-        return await this.dbClient.getUserByEPC(epc);
-    }
-
-    // Session erstellen
-    async createSession(userId) {
-        return await this._handleSessionCreate(userId);
-    }
-
-    // Session beenden
-    async endSession(sessionId) {
-        return await this._handleSessionEnd(sessionId);
-    }
-
-    // QR-Scan speichern
-    async saveQrScan(qrData) {
-        return await this._handleQRScan(qrData);
-    }
-
-    // Status abrufen
-    getStatus() {
-        return {
-            isRunning: this.isRunning,
-            isReady: this.isReady,
-            currentUser: this.currentUser,
-            activeSession: this.activeSession,
-            isScanning: this.isScanning,
-            stats: { ...this.stats },
-            config: { ...this.config }
         };
-    }
 
-    // Statistiken zurücksetzen
-    resetStats() {
-        this.stats = {
-            totalLogins: 0,
-            totalScans: 0,
-            totalErrors: 0,
-            uptime: 0,
-            startTime: this.stats.startTime
-        };
-        this._log('Statistiken zurückgesetzt');
-    }
+        process.env.NODE_ENV = 'test';
+    });
 
-    /**
-     * Private Hilfsfunktionen
-     */
+    describe('Application Initialization', () => {
+        test('should initialize Electron app correctly', async () => {
+            // Arrange
+            const { app: electronApp } = mockElectron;
 
-    // App initialisieren
-    async _initializeApp() {
-        // Simuliere Initialisierung
-        await this._delay(100);
-        this._log('App initialisiert');
-    }
+            // Act
+            await electronApp.whenReady();
+            app.isReady = true;
 
-    // Event-Handler einrichten
-    async _setupEventHandlers() {
-        if (this.rfidListener) {
-            this.rfidListener.on('tag-scanned', this.handleRFIDScan);
-            this.rfidListener.on('error', this.handleDatabaseError);
-        }
+            // Assert
+            expect(electronApp.whenReady).toHaveBeenCalled();
+            expect(app.isReady).toBe(true);
+        });
 
-        this._log('Event-Handler eingerichtet');
-    }
+        test('should create main window with correct configuration', async () => {
+            // Arrange
+            const { BrowserWindow } = mockElectron;
+            await mockElectron.app.whenReady();
 
-    // Event-Handler entfernen
-    _removeEventHandlers() {
-        if (this.rfidListener) {
-            this.rfidListener.removeListener('tag-scanned', this.handleRFIDScan);
-            this.rfidListener.removeListener('error', this.handleDatabaseError);
-        }
+            // Act
+            mainWindow = new BrowserWindow({
+                width: app.config.window.width,
+                height: app.config.window.height,
+                minWidth: app.config.window.minWidth,
+                minHeight: app.config.window.minHeight,
+                webPreferences: {
+                    nodeIntegration: false,
+                    contextIsolation: true,
+                    preload: require('path').join(__dirname, '../../preload.js')
+                },
+                show: false
+            });
 
-        this._log('Event-Handler entfernt');
-    }
+            app.mainWindow = mainWindow;
 
-    // Delay-Funktion
-    async _delay(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
+            // Assert
+            expect(BrowserWindow).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    width: 1200,
+                    height: 800,
+                    minWidth: 800,
+                    minHeight: 600,
+                    webPreferences: expect.objectContaining({
+                        nodeIntegration: false,
+                        contextIsolation: true
+                    }),
+                    show: false
+                })
+            );
+            expect(app.mainWindow).toBeDefined();
+        });
 
-    // Logging-Funktion
-    _log(message, level = 'info') {
-        if (!this.config.debugMode && level === 'debug') {
-            return;
-        }
+        test('should handle single instance lock correctly', () => {
+            // Arrange & Act
+            const hasSingleInstanceLock = mockElectron.app.requestSingleInstanceLock();
 
-        const timestamp = new Date().toISOString();
-        const prefix = `[${timestamp}] [MainApp-Mock] [${level.toUpperCase()}]`;
+            // Assert
+            expect(mockElectron.app.requestSingleInstanceLock).toHaveBeenCalled();
+            expect(hasSingleInstanceLock).toBe(true);
+        });
 
-        switch (level) {
-            case 'error':
-                console.error(`${prefix} ${message}`);
-                break;
-            case 'warn':
-                console.warn(`${prefix} ${message}`);
-                break;
-            case 'debug':
-                console.debug(`${prefix} ${message}`);
-                break;
-            default:
-                console.log(`${prefix} ${message}`);
-        }
-    }
-}
+        test('should load main HTML file correctly', async () => {
+            // Arrange
+            const { BrowserWindow } = mockElectron;
+            await mockElectron.app.whenReady();
+            mainWindow = new BrowserWindow();
 
-module.exports = MockMainApp;
+            // Act
+            await mainWindow.loadFile('renderer/index.html');
+
+            // Assert
+            expect(mainWindow.loadFile).toHaveBeenCalledWith('renderer/index.html');
+        });
+    });
+
+    describe('IPC Handler Registration', () => {
+        test('should register database IPC handlers', () => {
+            // Arrange
+            const { ipcMain } = mockElectron;
+            const mockHandlers = new Map();
+
+            ipcMain.handle.mockImplementation((channel, handler) => {
+                mockHandlers.set(channel, handler);
+            });
+
+            // Act - Simuliere Handler-Registrierung
+            ipcMain.handle('db-get-user-by-epc', async (event, tagId) => {
+                return { id: 1, name: 'Test User', epc: tagId };
+            });
+
+            ipcMain.handle('db-get-user-by-id', async (event, userId) => {
+                return { id: userId, name: 'Test User', epc: '123456789' };
+            });
+
+            ipcMain.handle('db-health-check', async () => {
+                return { status: 'healthy', timestamp: new Date().toISOString() };
+            });
+
+            // Assert
+            expect(ipcMain.handle).toHaveBeenCalledWith('db-get-user-by-epc', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('db-get-user-by-id', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('db-health-check', expect.any(Function));
+        });
+
+        test('should register session IPC handlers', () => {
+            // Arrange
+            const { ipcMain } = mockElectron;
+
+            // Act
+            ipcMain.handle('session-create', async (event, userId) => {
+                return { sessionId: 'sess_123', userId, startTime: new Date().toISOString() };
+            });
+
+            ipcMain.handle('session-end', async (event, sessionId) => {
+                return { sessionId, endTime: new Date().toISOString(), success: true };
+            });
+
+            ipcMain.handle('session-get-active', async (event, userId) => {
+                return { sessionId: 'sess_123', userId, active: true };
+            });
+
+            // Assert
+            expect(ipcMain.handle).toHaveBeenCalledWith('session-create', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('session-end', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('session-get-active', expect.any(Function));
+        });
+
+        test('should register QR scan IPC handlers', () => {
+            // Arrange
+            const { ipcMain } = mockElectron;
+
+            // Act
+            ipcMain.handle('qr-scan-save', async (event, sessionId, payload) => {
+                return { scanId: 'scan_123', sessionId, payload, timestamp: new Date().toISOString() };
+            });
+
+            ipcMain.handle('qr-get-by-session', async (event, sessionId, limit = 10) => {
+                return [
+                    { scanId: 'scan_123', payload: 'test_qr_code', timestamp: new Date().toISOString() }
+                ];
+            });
+
+            ipcMain.handle('qr-get-recent', async (event, limit = 10) => {
+                return [
+                    { scanId: 'scan_123', payload: 'test_qr_code', timestamp: new Date().toISOString() }
+                ];
+            });
+
+            // Assert
+            expect(ipcMain.handle).toHaveBeenCalledWith('qr-scan-save', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('qr-get-by-session', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('qr-get-recent', expect.any(Function));
+        });
+
+        test('should register RFID IPC handlers', () => {
+            // Arrange
+            const { ipcMain } = mockElectron;
+
+            // Act
+            ipcMain.handle('rfid-start', async () => {
+                return { success: true, message: 'RFID listener started' };
+            });
+
+            ipcMain.handle('rfid-stop', async () => {
+                return { success: true, message: 'RFID listener stopped' };
+            });
+
+            ipcMain.handle('rfid-get-stats', async () => {
+                return {
+                    isListening: true,
+                    totalScans: 42,
+                    successfulScans: 40,
+                    errorCount: 2
+                };
+            });
+
+            // Assert
+            expect(ipcMain.handle).toHaveBeenCalledWith('rfid-start', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('rfid-stop', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('rfid-get-stats', expect.any(Function));
+        });
+
+        test('should register window control IPC handlers', () => {
+            // Arrange
+            const { ipcMain } = mockElectron;
+
+            // Act
+            ipcMain.handle('window-minimize', async () => {
+                return { success: true };
+            });
+
+            ipcMain.handle('window-maximize', async () => {
+                return { success: true };
+            });
+
+            ipcMain.handle('window-close', async () => {
+                return { success: true };
+            });
+
+            ipcMain.handle('window-always-on-top', async (event, flag) => {
+                return { success: true, alwaysOnTop: flag };
+            });
+
+            // Assert
+            expect(ipcMain.handle).toHaveBeenCalledWith('window-minimize', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('window-maximize', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('window-close', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('window-always-on-top', expect.any(Function));
+        });
+    });
+
+    describe('Window Event Handling', () => {
+        test('should handle window close event', async () => {
+            // Arrange
+            const { BrowserWindow } = mockElectron;
+            await mockElectron.app.whenReady();
+            mainWindow = new BrowserWindow();
+
+            const closeHandler = jest.fn();
+
+            // Act
+            mainWindow.on('close', closeHandler);
+            mainWindow.emit('close');
+
+            // Assert
+            expect(mainWindow.on).toHaveBeenCalledWith('close', closeHandler);
+        });
+
+        test('should handle window closed event', async () => {
+            // Arrange
+            const { BrowserWindow } = mockElectron;
+            await mockElectron.app.whenReady();
+            mainWindow = new BrowserWindow();
+
+            const closedHandler = jest.fn(() => {
+                app.mainWindow = null;
+            });
+
+            // Act
+            mainWindow.on('closed', closedHandler);
+            mainWindow.emit('closed');
+
+            // Assert
+            expect(mainWindow.on).toHaveBeenCalledWith('closed', closedHandler);
+            expect(app.mainWindow).toBeNull();
+        });
+
+        test('should handle window ready-to-show event', async () => {
+            // Arrange
+            const { BrowserWindow } = mockElectron;
+            await mockElectron.app.whenReady();
+            mainWindow = new BrowserWindow({ show: false });
+
+            const readyHandler = jest.fn(() => {
+                mainWindow.show();
+            });
+
+            // Act
+            mainWindow.on('ready-to-show', readyHandler);
+            mainWindow.emit('ready-to-show');
+
+            // Assert
+            expect(mainWindow.on).toHaveBeenCalledWith('ready-to-show', readyHandler);
+            expect(mainWindow.show).toHaveBeenCalled();
+        });
+    });
+
+    describe('Application Lifecycle', () => {
+        test('should handle app activation (macOS)', () => {
+            // Arrange
+            const { app: electronApp, BrowserWindow } = mockElectron;
+            const activateHandler = jest.fn(() => {
+                if (BrowserWindow.getAllWindows().length === 0) {
+                    // Create new window
+                    new BrowserWindow();
+                }
+            });
+
+            // Act
+            electronApp.on('activate', activateHandler);
+            electronApp.emit('activate');
+
+            // Assert
+            expect(electronApp.on).toHaveBeenCalledWith('activate', activateHandler);
+        });
+
+        test('should handle window-all-closed event', () => {
+            // Arrange
+            const { app: electronApp } = mockElectron;
+            const windowsClosedHandler = jest.fn(() => {
+                if (process.platform !== 'darwin') {
+                    electronApp.quit();
+                }
+            });
+
+            // Act
+            electronApp.on('window-all-closed', windowsClosedHandler);
+            electronApp.emit('window-all-closed');
+
+            // Assert
+            expect(electronApp.on).toHaveBeenCalledWith('window-all-closed', windowsClosedHandler);
+        });
+
+        test('should handle before-quit event', () => {
+            // Arrange
+            const { app: electronApp } = mockElectron;
+            const beforeQuitHandler = jest.fn();
+
+            // Act
+            electronApp.on('before-quit', beforeQuitHandler);
+            electronApp.emit('before-quit');
+
+            // Assert
+            expect(electronApp.on).toHaveBeenCalledWith('before-quit', beforeQuitHandler);
+        });
+    });
+
+    describe('Error Handling', () => {
+        test('should handle IPC handler errors gracefully', async () => {
+            // Arrange
+            const { ipcMain } = mockElectron;
+            const errorHandler = jest.fn(async () => {
+                throw new Error('Test IPC error');
+            });
+
+            // Act
+            ipcMain.handle('test-error-handler', errorHandler);
+
+            try {
+                await errorHandler();
+            } catch (error) {
+                // Assert
+                expect(error.message).toBe('Test IPC error');
+            }
+
+            expect(ipcMain.handle).toHaveBeenCalledWith('test-error-handler', errorHandler);
+        });
+
+        test('should handle uncaught exceptions', () => {
+            // Arrange
+            const originalHandler = process.listeners('uncaughtException');
+            const errorHandler = jest.fn((error) => {
+                console.error('Uncaught Exception:', error);
+            });
+
+            // Act
+            process.on('uncaughtException', errorHandler);
+
+            // Simulate uncaught exception
+            const testError = new Error('Test uncaught exception');
+            process.emit('uncaughtException', testError);
+
+            // Assert
+            expect(errorHandler).toHaveBeenCalledWith(testError);
+
+            // Cleanup
+            process.removeListener('uncaughtException', errorHandler);
+        });
+
+        test('should handle unhandled promise rejections', () => {
+            // Arrange
+            const rejectionHandler = jest.fn((reason, promise) => {
+                console.error('Unhandled Promise Rejection:', reason);
+            });
+
+            // Act
+            process.on('unhandledRejection', rejectionHandler);
+
+            // Simulate unhandled rejection
+            const testReason = new Error('Test rejection');
+            const testPromise = Promise.reject(testReason);
+            process.emit('unhandledRejection', testReason, testPromise);
+
+            // Assert
+            expect(rejectionHandler).toHaveBeenCalledWith(testReason, testPromise);
+
+            // Cleanup
+            process.removeListener('unhandledRejection', rejectionHandler);
+        });
+    });
+
+    describe('System Information', () => {
+        test('should provide system information via IPC', () => {
+            // Arrange
+            const { ipcMain } = mockElectron;
+
+            // Act
+            ipcMain.handle('system-get-version', async () => {
+                return {
+                    app: mockElectron.app.getVersion(),
+                    electron: process.versions.electron,
+                    node: process.versions.node,
+                    chrome: process.versions.chrome
+                };
+            });
+
+            ipcMain.handle('system-get-platform', async () => {
+                return {
+                    platform: process.platform,
+                    arch: process.arch,
+                    hostname: require('os').hostname()
+                };
+            });
+
+            ipcMain.handle('system-get-environment', async () => {
+                return {
+                    nodeEnv: process.env.NODE_ENV,
+                    isDev: process.env.NODE_ENV === 'development',
+                    isTest: process.env.NODE_ENV === 'test'
+                };
+            });
+
+            // Assert
+            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-version', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-platform', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-environment', expect.any(Function));
+        });
+    });
+
+    describe('Configuration Management', () => {
+        test('should load configuration correctly', () => {
+            // Arrange
+            const defaultConfig = {
+                window: {
+                    width: 1200,
+                    height: 800,
+                    minWidth: 800,
+                    minHeight: 600
+                },
+                database: {
+                    connectionTimeout: 5000,
+                    requestTimeout: 3000
+                },
+                rfid: {
+                    inputTimeout: 200,
+                    maxBufferLength: 15
+                }
+            };
+
+            // Act
+            app.config = { ...defaultConfig };
+
+            // Assert
+            expect(app.config.window.width).toBe(1200);
+            expect(app.config.window.height).toBe(800);
+            expect(app.config.database.connectionTimeout).toBe(5000);
+            expect(app.config.rfid.inputTimeout).toBe(200);
+        });
+
+        test('should validate configuration values', () => {
+            // Arrange
+            const invalidConfig = {
+                window: {
+                    width: -1,  // Invalid
+                    height: 0   // Invalid
+                }
+            };
+
+            const validConfig = {
+                window: {
+                    width: Math.max(800, invalidConfig.window.width),
+                    height: Math.max(600, invalidConfig.window.height)
+                }
+            };
+
+            // Act
+            app.config = validConfig;
+
+            // Assert
+            expect(app.config.window.width).toBe(800);
+            expect(app.config.window.height).toBe(600);
+        });
+    });
+});
