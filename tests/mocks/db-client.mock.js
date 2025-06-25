@@ -177,12 +177,27 @@ class MockDatabaseClient extends EventEmitter {
     }
 
     async getUserById(userId) {
-        return await this._executeQuery(async () => {
-            const user = this.mockData.users.find(u =>
-                u.ID === userId && u.xStatus === 0
-            );
-            return user ? { ...user } : null;
-        }, 'getUserById');
+        try {
+            console.log(`[INFO] Suche Benutzer für ID: ${userId}`);
+
+            const result = await this.query(`
+            SELECT ID, Vorname, Nachname, BenutzerName, Email, EPC
+            FROM dbo.ScannBenutzer
+            WHERE ID = ? AND xStatus = 0
+        `, [userId]);
+
+            if (result.recordset.length > 0) {
+                const user = result.recordset[0];
+                customConsole.success(`Benutzer gefunden: ${user.BenutzerName}`);
+                return user;
+            } else {
+                console.log(`[WARN] Kein Benutzer gefunden für ID: ${userId}`);
+                return null;
+            }
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen des Benutzers nach ID:', error);
+            return null;
+        }
     }
 
     async getAllActiveUsers() {

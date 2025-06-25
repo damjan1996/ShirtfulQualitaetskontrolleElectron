@@ -364,6 +364,54 @@ class DatabaseClient {
         }
     }
 
+    async getSessionDuration(sessionId) {
+        try {
+            const result = await this.query(`
+                SELECT 
+                    ID,
+                    StartTS,
+                    EndTS,
+                    Active,
+                    DATEDIFF(SECOND, StartTS, ISNULL(EndTS, SYSDATETIME())) as DurationSeconds
+                FROM dbo.Sessions
+                WHERE ID = ?
+            `, [sessionId]);
+
+            if (result.recordset.length === 0) {
+                return null;
+            }
+
+            const session = result.recordset[0];
+            return {
+                sessionId: session.ID,
+                startTime: this.normalizeTimestamp(session.StartTS),
+                endTime: session.EndTS ? this.normalizeTimestamp(session.EndTS) : null,
+                duration: session.DurationSeconds * 1000, // in Millisekunden
+                isActive: session.Active === 1,
+                formattedDuration: this.formatSessionDuration(session.DurationSeconds)
+            };
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der Session-Dauer:', error);
+            return null;
+        }
+    }
+
+    formatSessionDuration(totalSeconds) {
+        if (!totalSeconds || totalSeconds < 0) return '0s';
+
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        if (hours > 0) {
+            return `${hours}h ${minutes}m ${seconds}s`;
+        } else if (minutes > 0) {
+            return `${minutes}m ${seconds}s`;
+        } else {
+            return `${seconds}s`;
+        }
+    }
+
     // ===== ZEITSTEMPEL-NORMALISIERUNG =====
     normalizeTimestamp(timestamp) {
         try {
@@ -525,7 +573,7 @@ class DatabaseClient {
                 // Einfügen mit korrekter Zeitstempel-Behandlung
                 const insertResult = await request.query(`
                     INSERT INTO dbo.QrScans (SessionID, RawPayload, Valid, CapturedTS)
-                        OUTPUT INSERTED.ID, INSERTED.CapturedTS
+                        OUTPUT INSERTED.ID, INSERTED.CapturedTS, INSERTED.PayloadJson
                     VALUES (@sessionId, @payload, 1, SYSDATETIME())
                 `, {
                     sessionId: { type: sql.BigInt, value: sessionId },
@@ -541,7 +589,8 @@ class DatabaseClient {
                     message: 'QR-Code erfolgreich gespeichert',
                     data: {
                         ...rawResult,
-                        CapturedTS: this.normalizeTimestamp(rawResult.CapturedTS)
+                        CapturedTS: this.normalizeTimestamp(rawResult.CapturedTS),
+                        ParsedPayload: this.parsePayloadJson(rawResult.PayloadJson)
                     },
                     timestamp: new Date().toISOString()
                 };
@@ -567,6 +616,380 @@ class DatabaseClient {
         } finally {
             // Immer aus Pending-Set entfernen
             this.pendingScans.delete(cacheKey);
+        }
+    }
+
+    // ===== NEUE PAYLOADJSON PARSE-METHODEN =====
+    parsePayloadJson(payloadJson) {
+        if (!payloadJson) return null;
+
+        try {
+            const parsed = JSON.parse(payloadJson);
+
+            // Zusätzliche Verarbeitung je nach Type
+            switch (parsed.type) {
+                case 'star_separated':
+                    return {
+                        ...parsed,
+                        fields: {
+                            field1: parsed.parts?.[0] || null,
+                            field2: parsed.parts?.[1] || null,
+                            field3: parsed.parts?.[2] || null,
+                            field4: parsed.parts?.[3] || null,
+                            field5: parsed.parts?.[4] || null,
+                            field6: parsed.parts?.[5] || null
+                        },
+                        display: `${parsed.parts?.slice(0, 3).join(' • ')}...` || parsed.raw
+                    };
+
+                case 'alphanumeric':
+                    // Erweiterte Behandlung für Caret-getrennte Codes (erkannt als alphanumeric)
+                    if (parsed.code && parsed.code.includes('^')) {
+                        const parts = parsed.code.split('^');
+                        return {
+                            ...parsed,
+                            type: 'caret_separated',
+                            parts: parts,
+                            fields: {
+                                field1: parts[0] || null,
+                                field2: parts[1] || null,
+                                field3: parts[2] || null,
+                                field4: parts[3] || null,
+                                field5: parts[4] || null,
+                                field6: parts[5] || null
+                            },
+                            display: `${parts.slice(0, 3).join(' • ')}...`,
+                            parts_count: parts.length
+                        };
+                    }
+                    return {
+                        ...parsed,
+                        display: parsed.code,
+                        formatted: parsed.code.replace(/(\w{4})/g, '$1 ').trim()
+                    };
+
+                case 'barcode':
+                    return {
+                        ...parsed,
+                        display: `Barcode: ${parsed.code}`,
+                        formatted: parsed.code.replace(/(\d{4})/g, '$1 ').trim()
+                    };
+
+                case 'url':
+                    return {
+                        ...parsed,
+                        display: `🔗 ${parsed.url}`,
+                        domain: parsed.url.match(/https?:\/\/([^\/]+)/)?.[1]
+                    };
+
+                case 'text':
+                    return {
+                        ...parsed,
+                        display: parsed.content?.length > 50
+                            ? parsed.content.substring(0, 50) + '...'
+                            : parsed.content
+                    };
+
+                default:
+                    return { ...parsed, display: parsed.raw || 'Unknown format' };
+            }
+        } catch (error) {
+            console.warn('Fehler beim Parsen der PayloadJson:', error);
+            return { type: 'error', raw: payloadJson, display: 'Parse Error' };
+        }
+    }
+
+    // ===== ERWEITERTE QR-SCAN METHODEN =====
+    async getQRScansBySession(sessionId, limit = 50) {
+        try {
+            const result = await this.query(`
+                SELECT 
+                    ID,
+                    SessionID,
+                    RawPayload,
+                    PayloadJson,
+                    JSON_VALUE(PayloadJson, '$.type') as PayloadType,
+                    CapturedTS,
+                    Valid
+                FROM dbo.QrScans 
+                WHERE SessionID = ?
+                ORDER BY CapturedTS DESC
+                ${limit > 0 ? `OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY` : ''}
+            `, [sessionId]);
+
+            // Erweitere jeden Scan mit geparsten Daten
+            const enhancedScans = result.recordset.map(scan => ({
+                ...scan,
+                CapturedTS: this.normalizeTimestamp(scan.CapturedTS),
+                ParsedPayload: this.parsePayloadJson(scan.PayloadJson),
+                FormattedTime: this.formatRelativeTime(scan.CapturedTS)
+            }));
+
+            return enhancedScans;
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der QR-Scans:', error);
+            throw error;
+        }
+    }
+
+    async getQRScanById(scanId) {
+        try {
+            const result = await this.query(`
+                SELECT 
+                    ID,
+                    SessionID,
+                    RawPayload,
+                    PayloadJson,
+                    JSON_VALUE(PayloadJson, '$.type') as PayloadType,
+                    CapturedTS,
+                    Valid
+                FROM dbo.QrScans 
+                WHERE ID = ?
+            `, [scanId]);
+
+            if (result.recordset.length === 0) {
+                return null;
+            }
+
+            const scan = result.recordset[0];
+            return {
+                ...scan,
+                CapturedTS: this.normalizeTimestamp(scan.CapturedTS),
+                ParsedPayload: this.parsePayloadJson(scan.PayloadJson),
+                FormattedTime: this.formatRelativeTime(scan.CapturedTS)
+            };
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen des QR-Scans:', error);
+            throw error;
+        }
+    }
+
+    async getRecentQRScans(limit = 20) {
+        try {
+            const result = await this.query(`
+                SELECT TOP(${limit})
+                    q.ID,
+                    q.SessionID,
+                    q.RawPayload,
+                    q.PayloadJson,
+                    JSON_VALUE(q.PayloadJson, '$.type') as PayloadType,
+                    q.CapturedTS,
+                    q.Valid,
+                    u.BenutzerName
+                FROM dbo.QrScans q
+                    INNER JOIN dbo.Sessions s ON q.SessionID = s.ID
+                    INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                WHERE q.Valid = 1
+                ORDER BY q.CapturedTS DESC
+            `);
+
+            return result.recordset.map(scan => ({
+                ...scan,
+                CapturedTS: this.normalizeTimestamp(scan.CapturedTS),
+                ParsedPayload: this.parsePayloadJson(scan.PayloadJson),
+                FormattedTime: this.formatRelativeTime(scan.CapturedTS)
+            }));
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der letzten QR-Scans:', error);
+            throw error;
+        }
+    }
+
+    // ===== QR-SCAN STATISTIKEN =====
+    async getQRScanStats(sessionId = null) {
+        try {
+            const whereClause = sessionId ? 'WHERE SessionID = ?' : '';
+            const params = sessionId ? [sessionId] : [];
+
+            const result = await this.query(`
+                SELECT 
+                    COUNT(*) as TotalScans,
+                    COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'star_separated' THEN 1 END) as StarSeparated,
+                    COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'caret_separated' THEN 1 END) as CaretSeparated,
+                    COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'alphanumeric' THEN 1 END) as Alphanumeric,
+                    COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'barcode' THEN 1 END) as Barcodes,
+                    COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'url' THEN 1 END) as URLs,
+                    COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'text' THEN 1 END) as TextCodes,
+                    MIN(CapturedTS) as FirstScan,
+                    MAX(CapturedTS) as LastScan
+                FROM dbo.QrScans 
+                ${whereClause}
+            `, params);
+
+            const stats = result.recordset[0];
+            return {
+                ...stats,
+                FirstScan: stats.FirstScan ? this.normalizeTimestamp(stats.FirstScan) : null,
+                LastScan: stats.LastScan ? this.normalizeTimestamp(stats.LastScan) : null
+            };
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der QR-Scan-Statistiken:', error);
+            throw error;
+        }
+    }
+
+    // ===== QR-CODE FORMAT-ERKENNUNG =====
+    getQRCodeFormat(payloadJson) {
+        try {
+            const parsed = JSON.parse(payloadJson);
+
+            const formats = {
+                'star_separated': {
+                    icon: '⭐',
+                    name: 'Stern-Format',
+                    color: 'blue',
+                    description: 'Paket-/Auftragsdaten'
+                },
+                'caret_separated': {
+                    icon: '🔸',
+                    name: 'Caret-Format',
+                    color: 'blue',
+                    description: 'Paket-/Auftragsdaten'
+                },
+                'barcode': {
+                    icon: '🔢',
+                    name: 'Barcode',
+                    color: 'green',
+                    description: 'Numerischer Code'
+                },
+                'url': {
+                    icon: '🔗',
+                    name: 'URL',
+                    color: 'purple',
+                    description: 'Web-Link'
+                },
+                'alphanumeric': {
+                    icon: '🔤',
+                    name: 'Alpha-Code',
+                    color: 'orange',
+                    description: 'Buchstaben + Zahlen'
+                },
+                'text': {
+                    icon: '📝',
+                    name: 'Text',
+                    color: 'gray',
+                    description: 'Freitext'
+                }
+            };
+
+            return formats[parsed.type] || {
+                icon: '❓',
+                name: 'Unbekannt',
+                color: 'red',
+                description: 'Unbekanntes Format'
+            };
+        } catch (error) {
+            return {
+                icon: '❌',
+                name: 'Fehler',
+                color: 'red',
+                description: 'Parse-Fehler'
+            };
+        }
+    }
+
+    // ===== SUCHFUNKTION =====
+    async searchQRScans(searchTerm, sessionId = null, limit = 20) {
+        try {
+            const whereConditions = [
+                "RawPayload LIKE ?",
+                "JSON_VALUE(PayloadJson, '$.type') LIKE ?",
+                // Suche in strukturierten Daten
+                "JSON_QUERY(PayloadJson, '$.parts') LIKE ?",
+                "JSON_VALUE(PayloadJson, '$.code') LIKE ?"
+            ];
+
+            let whereClause = `WHERE (${whereConditions.join(' OR ')})`;
+            let params = [`%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`];
+
+            if (sessionId) {
+                whereClause += " AND SessionID = ?";
+                params.push(sessionId);
+            }
+
+            const result = await this.query(`
+                SELECT TOP ${limit}
+                    ID,
+                    SessionID, 
+                    RawPayload,
+                    PayloadJson,
+                    JSON_VALUE(PayloadJson, '$.type') as PayloadType,
+                    CapturedTS
+                FROM dbo.QrScans 
+                ${whereClause}
+                ORDER BY CapturedTS DESC
+            `, params);
+
+            return result.recordset.map(scan => ({
+                ...scan,
+                CapturedTS: this.normalizeTimestamp(scan.CapturedTS),
+                ParsedPayload: this.parsePayloadJson(scan.PayloadJson),
+                Format: this.getQRCodeFormat(scan.PayloadJson),
+                FormattedTime: this.formatRelativeTime(scan.CapturedTS)
+            }));
+        } catch (error) {
+            customConsole.error('Fehler bei QR-Code-Suche:', error);
+            throw error;
+        }
+    }
+
+    // ===== FORMATIERUNGSHILFEN =====
+    formatRelativeTime(timestamp) {
+        try {
+            const now = new Date();
+            const date = new Date(timestamp);
+            const diffMs = now.getTime() - date.getTime();
+
+            const diffSeconds = Math.floor(diffMs / 1000);
+            const diffMinutes = Math.floor(diffMs / (1000 * 60));
+            const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+            if (diffSeconds < 60) return `vor ${diffSeconds} Sekunde${diffSeconds !== 1 ? 'n' : ''}`;
+            if (diffMinutes < 60) return `vor ${diffMinutes} Minute${diffMinutes !== 1 ? 'n' : ''}`;
+            if (diffHours < 24) return `vor ${diffHours} Stunde${diffHours !== 1 ? 'n' : ''}`;
+            if (diffDays < 7) return `vor ${diffDays} Tag${diffDays !== 1 ? 'en' : ''}`;
+
+            return new Date(date).toLocaleDateString('de-DE');
+        } catch (error) {
+            return 'Unbekannt';
+        }
+    }
+
+    // ===== DUPLIKAT-PRÜFUNG MIT JSON-STRUKTUR =====
+    async checkForDuplicates(rawPayload, sessionId, minutesBack = 10) {
+        try {
+            const result = await this.query(`
+                SELECT TOP 1
+                    ID,
+                    SessionID,
+                    RawPayload,
+                    PayloadJson,
+                    CapturedTS,
+                    DATEDIFF(MINUTE, CapturedTS, SYSDATETIME()) as MinutesAgo
+                FROM dbo.QrScans
+                WHERE RawPayload = ? 
+                  AND CapturedTS > DATEADD(MINUTE, -?, SYSDATETIME())
+                  AND SessionID = ?
+                ORDER BY CapturedTS DESC
+            `, [rawPayload, minutesBack, sessionId]);
+
+            if (result.recordset.length > 0) {
+                const duplicate = result.recordset[0];
+                return {
+                    isDuplicate: true,
+                    previousScan: {
+                        ...duplicate,
+                        CapturedTS: this.normalizeTimestamp(duplicate.CapturedTS),
+                        ParsedPayload: this.parsePayloadJson(duplicate.PayloadJson)
+                    }
+                };
+            }
+
+            return { isDuplicate: false };
+        } catch (error) {
+            customConsole.error('Fehler bei Duplikat-Prüfung:', error);
+            return { isDuplicate: false };
         }
     }
 
@@ -619,7 +1042,7 @@ class DatabaseClient {
     async getSessionScans(sessionId, limit = 50) {
         try {
             const result = await this.query(`
-                SELECT TOP(?) ID, RawPayload, CapturedTS, Valid
+                SELECT TOP(?) ID, RawPayload, PayloadJson, CapturedTS, Valid
                 FROM dbo.QrScans
                 WHERE SessionID = ?
                 ORDER BY CapturedTS DESC
@@ -628,7 +1051,8 @@ class DatabaseClient {
             // Zeitstempel in allen Scan-Ergebnissen normalisieren
             return result.recordset.map(scan => ({
                 ...scan,
-                CapturedTS: this.normalizeTimestamp(scan.CapturedTS)
+                CapturedTS: this.normalizeTimestamp(scan.CapturedTS),
+                ParsedPayload: this.parsePayloadJson(scan.PayloadJson)
             })) || [];
         } catch (error) {
             customConsole.error('Fehler beim Abrufen der Session-Scans:', error);

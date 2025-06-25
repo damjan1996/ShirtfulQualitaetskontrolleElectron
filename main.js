@@ -266,14 +266,14 @@ class WareneingangMainApp {
             }
         });
 
-        ipcMain.handle('db-get-user-by-epc', async (event, tagId) => {
+        ipcMain.handle('db-get-user-by-id', async (event, userId) => {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
                     return null;
                 }
-                return await this.dbClient.getUserByEPC(tagId);
+                return await this.dbClient.getUserById(userId);
             } catch (error) {
-                console.error('Get User by EPC Fehler:', error);
+                console.error('Get User by ID Fehler:', error);
                 return null;
             }
         });
@@ -321,10 +321,40 @@ class WareneingangMainApp {
                     return false;
                 }
 
+                // Session-Informationen vor dem Beenden abrufen
+                let currentSessionUser = null;
+                if (this.currentSession && this.currentSession.sessionId === sessionId) {
+                    // User-Daten für das Logout-Event abrufen
+                    try {
+                        const user = await this.dbClient.getUserById(this.currentSession.userId);
+                        currentSessionUser = user;
+                    } catch (error) {
+                        console.warn('Benutzer für Logout-Event nicht gefunden:', error);
+                    }
+                }
+
                 const success = await this.dbClient.endSession(sessionId);
 
-                if (success && this.currentSession && this.currentSession.sessionId === sessionId) {
-                    this.currentSession = null;
+                if (success) {
+                    // Session zurücksetzen
+                    if (this.currentSession && this.currentSession.sessionId === sessionId) {
+                        const oldSession = this.currentSession;
+                        this.currentSession = null;
+
+                        // Rate Limit für Session zurücksetzen
+                        this.qrScanRateLimit.delete(oldSession.sessionId);
+
+                        // **WICHTIG: user-logout Event senden, genau wie beim RFID-Logout**
+                        if (currentSessionUser) {
+                            this.sendToRenderer('user-logout', {
+                                user: currentSessionUser,
+                                sessionId: oldSession.sessionId,
+                                timestamp: new Date().toISOString()
+                            });
+
+                            console.log(`👋 Benutzer abgemeldet (Button): ${currentSessionUser.BenutzerName}`);
+                        }
+                    }
                 }
 
                 return success;

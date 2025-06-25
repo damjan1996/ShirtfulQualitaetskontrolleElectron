@@ -5,7 +5,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ===== DATENBANK OPERATIONEN =====
     db: {
         query: (query, params) => ipcRenderer.invoke('db-query', query, params),
-        getUserByEPC: (tagId) => ipcRenderer.invoke('db-get-user-by-epc', tagId)
+        getUserByEPC: (tagId) => ipcRenderer.invoke('db-get-user-by-epc', tagId),
+        getUserById: (userId) => ipcRenderer.invoke('db-get-user-by-id', userId)  // ← Diese Zeile hinzufügen
     },
 
     // ===== SESSION MANAGEMENT =====

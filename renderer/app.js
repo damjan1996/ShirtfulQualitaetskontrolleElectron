@@ -212,8 +212,18 @@ class WareneingangApp {
         if (!this.currentUser) return;
 
         try {
-            await window.electronAPI.session.end(this.currentUser.sessionId);
-            this.showNotification('info', 'Abmeldung', 'Sie wurden erfolgreich abgemeldet');
+            const userToLogout = { ...this.currentUser }; // Kopie für spätere Verwendung
+
+            const success = await window.electronAPI.session.end(this.currentUser.sessionId);
+
+            if (success) {
+                // **WICHTIG: UI-Update direkt durchführen, nicht auf Event warten**
+                this.handleUserLogout(userToLogout);
+
+                this.showNotification('info', 'Abmeldung', 'Sie wurden erfolgreich abgemeldet');
+            } else {
+                this.showNotification('error', 'Fehler', 'Abmeldung fehlgeschlagen');
+            }
         } catch (error) {
             console.error('Abmelde-Fehler:', error);
             this.showNotification('error', 'Fehler', 'Abmeldung fehlgeschlagen');
