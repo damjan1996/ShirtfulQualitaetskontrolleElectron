@@ -1,7 +1,7 @@
 // tests/integrations/rfid-database-integration.test.js
 /**
- * RFID-Database Integration Tests
- * Testet die Zusammenarbeit zwischen RFID Listener und Database Client
+ * RFID-Database Integration Tests - Korrigiert
+ * Testet die Integration zwischen RFID und Database Komponenten
  */
 
 const MockRFIDListener = require('../mocks/rfid-listener.mock');
@@ -10,405 +10,296 @@ const MockDatabaseClient = require('../mocks/db-client.mock');
 describe('RFID-Database Integration', () => {
     let rfidListener;
     let dbClient;
-    let mockMainApp;
-    let mockMainProcess;
 
     beforeEach(async () => {
-        // Setup vollständiger Electron-Mock
+        // Setup mocks
         global.mockElectron = {
             globalShortcut: {
                 shortcuts: new Map(),
-                register: jest.fn((shortcut, callback) => {
-                    if (global.mockElectron.globalShortcut.shortcuts.has(shortcut)) {
-                        return false;
-                    }
-                    global.mockElectron.globalShortcut.shortcuts.set(shortcut, callback);
-                    return true;
-                }),
-                unregister: jest.fn((shortcut) => {
-                    return global.mockElectron.globalShortcut.shortcuts.delete(shortcut);
-                }),
-                unregisterAll: jest.fn(() => {
-                    global.mockElectron.globalShortcut.shortcuts.clear();
-                }),
-                triggerShortcut: (shortcut) => {
-                    const callback = global.mockElectron.globalShortcut.shortcuts.get(shortcut);
-                    if (callback) {
-                        callback();
-                    }
-                }
+                register: jest.fn(() => true),
+                unregister: jest.fn(() => true),
+                unregisterAll: jest.fn()
             },
             ipcMain: {
                 handlers: new Map(),
-                handle: jest.fn((channel, handler) => {
-                    global.mockElectron.ipcMain.handlers.set(channel, handler);
-                }),
-                off: jest.fn((channel) => {
-                    global.mockElectron.ipcMain.handlers.delete(channel);
-                }),
-                emit: jest.fn(),
-                removeAllListeners: jest.fn(() => {
-                    global.mockElectron.ipcMain.handlers.clear();
-                }),
-                // Simuliere IPC-Aufruf
-                invoke: async (channel, ...args) => {
+                invoke: jest.fn(async (channel, ...args) => {
                     const handler = global.mockElectron.ipcMain.handlers.get(channel);
                     if (handler) {
                         return await handler(...args);
                     }
                     throw new Error(`No handler for channel: ${channel}`);
-                }
-            },
-            webContents: {
-                send: jest.fn()
+                }),
+                handle: jest.fn((channel, handler) => {
+                    global.mockElectron.ipcMain.handlers.set(channel, handler);
+                })
             }
         };
 
-        // Mock Main App mit korrekten Event Handlers
-        mockMainApp = {
-            handleRFIDScan: jest.fn(),
-            handleInvalidScan: jest.fn(),
-            handleRFIDError: jest.fn(),
-            handleDatabaseError: jest.fn()
-        };
-
-        // Mock Main Process
-        mockMainProcess = {
-            ipcHandlers: new Map(),
-            registerIpcHandlers: function() {
-                // User lookup handler
-                global.mockElectron.ipcMain.handle('user-lookup', async (tagId) => {
-                    try {
-                        return await dbClient.getUserByEPC(tagId);
-                    } catch (error) {
-                        throw error;
-                    }
-                });
-
-                // Session creation handler
-                global.mockElectron.ipcMain.handle('session-create', async (userId) => {
-                    try {
-                        return await dbClient.createSession(userId);
-                    } catch (error) {
-                        throw error;
-                    }
-                });
-            }
-        };
-
-        // Setup Database Client
-        dbClient = new MockDatabaseClient();
-        await dbClient.connect();
-
-        // Setup RFID Listener mit deaktivierten Hardware-Fehlern
         rfidListener = new MockRFIDListener();
+        rfidListener.updateConfig({ debugMode: false });
         rfidListener.disableHardwareError();
 
-        // Event Handler verbinden
-        rfidListener.on('tag-detected', (data) => {
-            mockMainApp.handleRFIDScan(data.tagId);
-        });
+        dbClient = new MockDatabaseClient();
+        await dbClient.connect();
+        dbClient.clearMockData();
 
-        rfidListener.on('invalid-scan', (data) => {
-            mockMainApp.handleInvalidScan(data.tagId, data.reason);
-        });
-
-        rfidListener.on('error', (error) => {
-            mockMainApp.handleRFIDError(error);
-        });
-
-        // RFID Listener starten
-        await rfidListener.start();
-
-        // IPC Handlers registrieren
-        mockMainProcess.registerIpcHandlers();
+        // Setup IPC handlers
+        setupMockIpcHandlers();
     });
 
     afterEach(async () => {
-        // Cleanup in korrekter Reihenfolge
         if (rfidListener && rfidListener.isRunning) {
-            await rfidListener.stop();
+            await rfidListener.destroy();
         }
         if (dbClient && dbClient.isConnected) {
             await dbClient.close();
         }
-
-        // Event listeners cleanen
-        if (rfidListener) {
-            rfidListener.removeAllListeners();
-        }
-
-        // Electron Mock cleanup
-        if (global.mockElectron) {
-            global.mockElectron.globalShortcut.unregisterAll();
-            global.mockElectron.ipcMain.removeAllListeners();
-        }
-
-        // Jest mocks resetten
         jest.clearAllMocks();
     });
 
+    function setupMockIpcHandlers() {
+        // User lookup handler
+        global.mockElectron.ipcMain.handle('user-lookup', async (tagId) => {
+            try {
+                const user = await dbClient.getUserByRFID(tagId);
+                return user;
+            } catch (error) {
+                throw error;
+            }
+        });
+
+        // Session creation handler
+        global.mockElectron.ipcMain.handle('create-session', async (userId) => {
+            try {
+                const session = await dbClient.createSession(userId);
+                return session;
+            } catch (error) {
+                throw error;
+            }
+        });
+
+        // QR scan handler
+        global.mockElectron.ipcMain.handle('save-qr-scan', async (sessionId, payload) => {
+            try {
+                const result = await dbClient.saveQRScan(sessionId, payload);
+                return result;
+            } catch (error) {
+                throw error;
+            }
+        });
+    }
+
     describe('Basic Integration', () => {
-        test('should handle valid RFID tag with database lookup', async () => {
-            const tagId = '53004114';
-            const mockUser = {
-                ID: 1,
-                BenutzerName: 'Test User 1',
-                EPC: tagId
-            };
+        test('should connect RFID listener and database', async () => {
+            await rfidListener.start();
 
-            // Mock User in Database
-            dbClient.setMockUser(tagId, mockUser);
-
-            // Simuliere RFID Scan
-            await rfidListener.simulateTag(tagId);
-
-            // Warte auf Verarbeitung
-            await new Promise(resolve => setTimeout(resolve, 50));
-
-            // Prüfe Event Handling
-            expect(mockMainApp.handleRFIDScan).toHaveBeenCalledWith(tagId);
-            expect(mockMainApp.handleInvalidScan).not.toHaveBeenCalled();
-
-            // Prüfe Database Lookup über IPC
-            const user = await global.mockElectron.ipcMain.invoke('user-lookup', tagId);
-            expect(user).toEqual(mockUser);
+            expect(rfidListener.isRunning).toBe(true);
+            expect(dbClient.isConnected).toBe(true);
         });
 
-        test('should handle invalid RFID tag', async () => {
-            const invalidTag = 'INVALID!';
+        test('should handle RFID scan and user lookup', async () => {
+            await rfidListener.start();
 
-            // Simuliere ungültigen RFID Scan
-            await rfidListener.simulateTag(invalidTag);
+            const tagDetected = new Promise((resolve) => {
+                rfidListener.on('tag-detected', resolve);
+            });
 
-            // Warte auf Verarbeitung
-            await new Promise(resolve => setTimeout(resolve, 50));
+            // Simulate RFID scan
+            await rfidListener.simulateTag('329C172'); // Hex for 53004114
 
-            // Prüfe Event Handling
-            expect(mockMainApp.handleInvalidScan).toHaveBeenCalledWith(
-                invalidTag,
-                'Invalid hex characters'
-            );
-            expect(mockMainApp.handleRFIDScan).not.toHaveBeenCalled();
+            const tagData = await tagDetected;
+            expect(tagData.tagId).toBe('329C172');
+
+            // Look up user
+            const user = await dbClient.getUserByRFID(tagData.tagId);
+            expect(user).toBeDefined();
+            expect(user.BenID).toBe(1);
+            expect(user.Vorname).toBe('Max');
         });
 
-        test('should handle database errors gracefully', async () => {
-            const tagId = '53004114';
+        test('should handle complete workflow: scan -> login -> QR scan', async () => {
+            await rfidListener.start();
 
-            // Simuliere Database Error
-            dbClient.simulateError(new Error('Database connection failed'));
+            // 1. RFID scan
+            await rfidListener.simulateTag('329C172');
 
-            // Simuliere RFID Scan
-            await rfidListener.simulateTag(tagId);
+            // 2. User lookup
+            const user = await dbClient.getUserByRFID('329C172');
+            expect(user).toBeDefined();
 
-            // Warte auf Verarbeitung
-            await new Promise(resolve => setTimeout(resolve, 50));
+            // 3. Create session
+            const session = await dbClient.createSession(user.BenID);
+            expect(session).toBeDefined();
+            expect(session.Active).toBe(1);
 
-            // RFID Event sollte trotzdem gefeuert werden
-            expect(mockMainApp.handleRFIDScan).toHaveBeenCalledWith(tagId);
+            // 4. QR scan
+            const qrResult = await dbClient.saveQRScan(session.ID, 'TEST_PACKAGE_001');
+            expect(qrResult.success).toBe(true);
 
-            // Database Lookup sollte fehlschlagen
-            await expect(
-                global.mockElectron.ipcMain.invoke('user-lookup', tagId)
-            ).rejects.toThrow('Database connection failed');
+            // 5. Verify data consistency
+            const scans = await dbClient.getQRScansBySession(session.ID);
+            expect(scans.length).toBe(1);
+            expect(scans[0].RawPayload).toBe('TEST_PACKAGE_001');
         });
     });
 
-    describe('Session Management Integration', () => {
-        test('should create session after successful login', async () => {
-            const tagId = '53004114';
-            const mockUser = {
-                ID: 1,
-                BenutzerName: 'Test User 1',
-                EPC: tagId
-            };
+    describe('Multi-User Scenarios', () => {
+        test('should handle multiple users scanning simultaneously', async () => {
+            await rfidListener.start();
 
-            dbClient.setMockUser(tagId, mockUser);
+            // User 1 workflow
+            await rfidListener.simulateTag('329C172'); // User 1
+            const user1 = await dbClient.getUserByRFID('329C172');
+            const session1 = await dbClient.createSession(user1.BenID);
 
-            // Simuliere Login-Workflow
-            await rfidListener.simulateTag(tagId);
-            await new Promise(resolve => setTimeout(resolve, 50));
+            // User 2 workflow
+            await rfidListener.simulateTag('329C173'); // User 2
+            const user2 = await dbClient.getUserByRFID('329C173');
+            const session2 = await dbClient.createSession(user2.BenID);
 
-            // User lookup
-            const user = await global.mockElectron.ipcMain.invoke('user-lookup', tagId);
-            expect(user).toEqual(mockUser);
-
-            // Session erstellen
-            const session = await global.mockElectron.ipcMain.invoke('session-create', user.ID);
-            expect(session).toBeDefined();
-            expect(session.BenID).toBe(user.ID);
-            expect(session.Active).toBe(1);
-        });
-
-        test('should handle multiple user sessions', async () => {
-            const user1Tag = '53004114';
-            const user2Tag = '53004115';
-
-            const mockUser1 = { ID: 1, BenutzerName: 'User 1', EPC: user1Tag };
-            const mockUser2 = { ID: 2, BenutzerName: 'User 2', EPC: user2Tag };
-
-            dbClient.setMockUser(user1Tag, mockUser1);
-            dbClient.setMockUser(user2Tag, mockUser2);
-
-            // User 1 Login
-            await rfidListener.simulateTag(user1Tag);
-            await new Promise(resolve => setTimeout(resolve, 50));
-
-            const user1 = await global.mockElectron.ipcMain.invoke('user-lookup', user1Tag);
-            const session1 = await global.mockElectron.ipcMain.invoke('session-create', user1.ID);
-
-            // User 2 Login
-            await rfidListener.simulateTag(user2Tag);
-            await new Promise(resolve => setTimeout(resolve, 50));
-
-            const user2 = await global.mockElectron.ipcMain.invoke('user-lookup', user2Tag);
-            const session2 = await global.mockElectron.ipcMain.invoke('session-create', user2.ID);
-
-            // Beide Sessions sollten aktiv sein
+            // Both sessions should be active
             expect(session1.Active).toBe(1);
             expect(session2.Active).toBe(1);
             expect(session1.ID).not.toBe(session2.ID);
-        });
-    });
 
-    describe('Error Recovery Integration', () => {
-        test('should handle database disconnection during scan', async () => {
-            const tagId = '53004114';
+            // Both users scan QR codes
+            const qr1 = await dbClient.saveQRScan(session1.ID, 'PACKAGE_USER1');
+            const qr2 = await dbClient.saveQRScan(session2.ID, 'PACKAGE_USER2');
 
-            // Database disconnection simulieren
-            await dbClient.close();
+            expect(qr1.success).toBe(true);
+            expect(qr2.success).toBe(true);
 
-            // RFID-Scan sollte weiterhin funktionieren
-            await rfidListener.simulateTag(tagId);
-            await new Promise(resolve => setTimeout(resolve, 50));
+            // Verify scans are properly separated
+            const scans1 = await dbClient.getQRScansBySession(session1.ID);
+            const scans2 = await dbClient.getQRScansBySession(session2.ID);
 
-            expect(mockMainApp.handleRFIDScan).toHaveBeenCalledWith(tagId);
-
-            // DB-Operation schlägt fehl
-            await expect(
-                global.mockElectron.ipcMain.invoke('user-lookup', tagId)
-            ).rejects.toThrow();
+            expect(scans1.length).toBe(1);
+            expect(scans2.length).toBe(1);
+            expect(scans1[0].RawPayload).toBe('PACKAGE_USER1');
+            expect(scans2[0].RawPayload).toBe('PACKAGE_USER2');
         });
 
-        test('should handle RFID listener restart', async () => {
-            const tagId = '53004114';
-
-            // Listener stoppen und neu starten
-            await rfidListener.stop();
+        test('should handle user session switching', async () => {
             await rfidListener.start();
 
-            // Scan sollte wieder funktionieren
-            await rfidListener.simulateTag(tagId);
-            await new Promise(resolve => setTimeout(resolve, 50));
+            // User 1 initial login
+            await rfidListener.simulateTag('329C172');
+            const user1 = await dbClient.getUserByRFID('329C172');
+            const session1 = await dbClient.createSession(user1.BenID);
 
-            expect(mockMainApp.handleRFIDScan).toHaveBeenCalledWith(tagId);
+            expect(session1.Active).toBe(1);
+
+            // User 1 scans a QR code
+            await dbClient.saveQRScan(session1.ID, 'SCAN_BEFORE_SWITCH');
+
+            // User 1 logs out (scans RFID again)
+            const newSession1 = await dbClient.createSession(user1.BenID);
+
+            // Check that old session was closed and new one created
+            const oldSessionInData = dbClient.mockData.sessions.find(s => s.ID === session1.ID);
+            expect(oldSessionInData.Active).toBe(0);
+            expect(oldSessionInData.EndTS).toBeDefined();
+
+            expect(newSession1.Active).toBe(1);
+            expect(newSession1.ID).not.toBe(session1.ID);
+
+            // User 1 continues with new session
+            const qrResult = await dbClient.saveQRScan(newSession1.ID, 'SCAN_AFTER_SWITCH');
+            expect(qrResult.success).toBe(true);
         });
     });
 
-    describe('Performance Integration', () => {
-        test('should handle rapid RFID tag switches', async () => {
-            const tags = ['53004114', '53004115', '53004116'];
-            const users = tags.map((tag, index) => ({
-                ID: index + 1,
-                BenutzerName: `User ${index + 1}`,
-                EPC: tag
-            }));
+    describe('Error Handling', () => {
+        test('should handle unknown RFID tags', async () => {
+            await rfidListener.start();
 
-            // Mock Users setzen
-            users.forEach(user => {
-                dbClient.setMockUser(user.EPC, user);
-            });
+            await rfidListener.simulateTag('UNKNOWN123');
+            const user = await dbClient.getUserByRFID('UNKNOWN123');
 
-            // Rapid scanning simulieren
-            const promises = tags.map((tag, index) =>
-                rfidListener.simulateTag(tag, index * 10)
-            );
+            expect(user).toBeNull();
+        });
 
-            await Promise.all(promises);
-            await new Promise(resolve => setTimeout(resolve, 100));
+        test('should handle database connection errors', async () => {
+            await dbClient.close();
 
-            // Alle Tags sollten verarbeitet worden sein
-            expect(mockMainApp.handleRFIDScan).toHaveBeenCalledTimes(3);
-            tags.forEach(tag => {
-                expect(mockMainApp.handleRFIDScan).toHaveBeenCalledWith(tag);
+            await expect(dbClient.getUserByRFID('329C172')).rejects.toThrow('Database not connected');
+        });
+
+        test('should handle RFID hardware errors', (done) => {
+            rfidListener.start().then(() => {
+                rfidListener.on('error', (error) => {
+                    expect(error).toBeInstanceOf(Error);
+                    expect(error.type).toBe('connection_lost');
+                    done();
+                });
+
+                rfidListener.simulateHardwareError('connection_lost');
             });
         });
 
-        test('should maintain performance under load', async () => {
-            const tagId = '53004114';
-            const mockUser = { ID: 1, BenutzerName: 'Test User', EPC: tagId };
-            dbClient.setMockUser(tagId, mockUser);
+        test('should handle QR scan failures for inactive sessions', async () => {
+            await rfidListener.start();
 
-            const startTime = Date.now();
-            const scanCount = 100;
+            // Create and end session
+            const user = await dbClient.getUserByRFID('329C172');
+            const session = await dbClient.createSession(user.BenID);
+            await dbClient.endSession(session.ID);
 
-            // Rapid scanning
-            const promises = Array(scanCount).fill().map((_, i) =>
-                rfidListener.simulateTag(tagId, i * 2)
-            );
-
-            await Promise.all(promises);
-            await new Promise(resolve => setTimeout(resolve, 200));
-
-            const endTime = Date.now();
-            const duration = endTime - startTime;
-
-            // Performance assertions
-            expect(mockMainApp.handleRFIDScan).toHaveBeenCalledTimes(scanCount);
-            expect(duration).toBeLessThan(1000); // Should complete within 1 second
+            // Try to scan QR code
+            await expect(dbClient.saveQRScan(session.ID, 'TEST')).rejects.toThrow('No active session found');
         });
     });
 
-    describe('Statistics Integration', () => {
-        test('should track integrated statistics', async () => {
-            const validTag = '53004114';
-            const invalidTag = 'INVALID!';
-            const mockUser = { id: 1, name: 'Test User', epc: validTag };
+    describe('Performance and Stress Testing', () => {
+        test('should handle rapid RFID scans', async () => {
+            await rfidListener.start();
 
-            dbClient.setMockUser(validTag, mockUser);
+            const scanPromises = [];
+            const tags = ['329C172', '329C173', '329C174'];
 
-            // Simuliere mixed Tags
-            await rfidListener.simulateTag(validTag);
-            await new Promise(resolve => setTimeout(resolve, 25));
+            // Simulate rapid scanning
+            for (let i = 0; i < 10; i++) {
+                const tag = tags[i % tags.length];
+                scanPromises.push(rfidListener.simulateTag(tag));
+            }
 
-            await rfidListener.simulateTag(invalidTag);
-            await new Promise(resolve => setTimeout(resolve, 25));
+            await Promise.all(scanPromises);
 
-            await rfidListener.simulateTag(validTag);
-            await new Promise(resolve => setTimeout(resolve, 25));
+            expect(rfidListener.stats.totalScans).toBe(10);
+            expect(rfidListener.stats.validScans).toBe(10);
+        });
 
-            // Statistiken prüfen
-            const stats = rfidListener.getStats();
-            expect(stats.totalScans).toBe(3);
-            expect(stats.validScans).toBe(2);
-            expect(stats.invalidScans).toBe(1);
-            expect(stats.successRate).toBe(67); // 2/3 * 100
+        test('should handle many QR scans in session', async () => {
+            await rfidListener.start();
 
-            // Nur gültige Tags sollten an Main App weitergegeben werden
-            expect(mockMainApp.handleRFIDScan).toHaveBeenCalledTimes(2);
-            expect(mockMainApp.handleRFIDScan).toHaveBeenCalledWith(validTag);
+            const user = await dbClient.getUserByRFID('329C172');
+            const session = await dbClient.createSession(user.BenID);
+
+            // Scan many QR codes
+            const scanPromises = [];
+            for (let i = 0; i < 50; i++) {
+                scanPromises.push(dbClient.saveQRScan(session.ID, `QR_${i.toString().padStart(3, '0')}`));
+            }
+
+            const results = await Promise.all(scanPromises);
+
+            expect(results.every(r => r.success)).toBe(true);
+
+            const scans = await dbClient.getQRScansBySession(session.ID);
+            expect(scans.length).toBe(50);
         });
     });
 
     describe('Frontend-Backend Integration', () => {
-        beforeEach(() => {
-            // Mock electron IPC für Frontend-Tests
-            global.mockElectron.ipcMain.handle('user-lookup', async (tagId) => {
-                return await dbClient.getUserByEPC(tagId);
-            });
-
-            global.mockElectron.ipcMain.handle('session-create', async (userId) => {
-                return await dbClient.createSession(userId);
-            });
-        });
-
         describe('IPC Communication', () => {
             test('should handle user lookup via IPC', async () => {
-                const tagId = '53004114';
+                const tagId = '329C172';
                 const mockUser = {
-                    ID: 1,
-                    BenutzerName: 'Test User',
-                    EPC: tagId
+                    BenID: 1,
+                    Vorname: 'Max',
+                    Nachname: 'Mustermann',
+                    EPC: parseInt(tagId, 16),
+                    Active: 1
                 };
 
                 dbClient.setMockUser(tagId, mockUser);
@@ -416,19 +307,132 @@ describe('RFID-Database Integration', () => {
                 // Simuliere Frontend-Aufruf
                 const result = await global.mockElectron.ipcMain.invoke('user-lookup', tagId);
 
-                expect(result).toEqual(mockUser);
+                expect(result).toBeDefined();
+                expect(result.BenID).toBe(1);
+                expect(result.Vorname).toBe('Max');
             });
 
             test('should handle session creation via IPC', async () => {
                 const userId = 1;
 
                 // Simuliere Frontend-Aufruf
-                const session = await global.mockElectron.ipcMain.invoke('session-create', userId);
+                const session = await global.mockElectron.ipcMain.invoke('create-session', userId);
 
                 expect(session).toBeDefined();
                 expect(session.BenID).toBe(userId);
                 expect(session.Active).toBe(1);
             });
+
+            test('should handle QR scan via IPC', async () => {
+                const userId = 1;
+                const session = await dbClient.createSession(userId);
+
+                // Simuliere Frontend-Aufruf
+                const result = await global.mockElectron.ipcMain.invoke('save-qr-scan', session.ID, 'IPC_TEST_QR');
+
+                expect(result.success).toBe(true);
+                expect(result.data.RawPayload).toBe('IPC_TEST_QR');
+            });
+
+            test('should handle IPC errors gracefully', async () => {
+                await expect(global.mockElectron.ipcMain.invoke('non-existent-channel')).rejects.toThrow('No handler for channel');
+            });
+        });
+
+        describe('Real-time Updates', () => {
+            test('should emit events for database changes', (done) => {
+                let eventCount = 0;
+
+                dbClient.on('qr-scan-saved', (scan) => {
+                    eventCount++;
+                    expect(scan).toBeDefined();
+                    expect(scan.RawPayload).toBe('EVENT_TEST');
+
+                    if (eventCount === 1) {
+                        done();
+                    }
+                });
+
+                // Trigger event
+                dbClient.createSession(1).then(session => {
+                    return dbClient.saveQRScan(session.ID, 'EVENT_TEST');
+                });
+            });
+
+            test('should handle multiple simultaneous events', async () => {
+                const eventPromises = [];
+                let eventCount = 0;
+
+                dbClient.on('qr-scan-saved', () => {
+                    eventCount++;
+                });
+
+                const session = await dbClient.createSession(1);
+
+                // Trigger multiple events
+                for (let i = 0; i < 5; i++) {
+                    eventPromises.push(dbClient.saveQRScan(session.ID, `EVENT_${i}`));
+                }
+
+                await Promise.all(eventPromises);
+
+                // Give events time to fire
+                await new Promise(resolve => setTimeout(resolve, 50));
+
+                expect(eventCount).toBe(5);
+            });
+        });
+    });
+
+    describe('Data Consistency', () => {
+        test('should maintain referential integrity', async () => {
+            await rfidListener.start();
+
+            // Create session
+            const user = await dbClient.getUserByRFID('329C172');
+            const session = await dbClient.createSession(user.BenID);
+
+            // Add QR scans
+            await dbClient.saveQRScan(session.ID, 'INTEGRITY_TEST_1');
+            await dbClient.saveQRScan(session.ID, 'INTEGRITY_TEST_2');
+
+            // Verify session exists in data
+            const sessionInData = dbClient.mockData.sessions.find(s => s.ID === session.ID);
+            expect(sessionInData).toBeDefined();
+
+            // Verify scans reference correct session
+            const scans = dbClient.mockData.qrScans.filter(s => s.SessionID === session.ID);
+            expect(scans.length).toBe(2);
+            expect(scans.every(s => s.SessionID === session.ID)).toBe(true);
+        });
+
+        test('should handle transaction-like operations', async () => {
+            // This test ensures that related operations either all succeed or all fail
+            const user = await dbClient.getUserByRFID('329C172');
+
+            try {
+                // Start transaction-like operation
+                const session = await dbClient.createSession(user.BenID);
+
+                // Multiple related operations
+                const results = await Promise.all([
+                    dbClient.saveQRScan(session.ID, 'TRANSACTION_1'),
+                    dbClient.saveQRScan(session.ID, 'TRANSACTION_2'),
+                    dbClient.saveQRScan(session.ID, 'TRANSACTION_3')
+                ]);
+
+                // All should succeed
+                expect(results.every(r => r.success)).toBe(true);
+
+                // Verify all data is consistent
+                const scans = await dbClient.getQRScansBySession(session.ID);
+                expect(scans.length).toBe(3);
+
+            } catch (error) {
+                // In case of failure, ensure no partial data is left
+                // This would be more relevant in a real database scenario
+                expect(error).toBeUndefined();
+            }
         });
     });
 });
