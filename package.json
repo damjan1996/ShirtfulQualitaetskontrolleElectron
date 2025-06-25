@@ -1,103 +1,85 @@
 {
   "name": "wareneingang-rfid-qr",
   "version": "1.0.1",
-  "description": "RFID Wareneingang System - Vereinfachte Desktop-Anwendung für Shirtful",
+  "description": "RFID Login & QR Wareneingang System für Shirtful",
   "main": "main.js",
-  "author": {
-    "name": "Shirtful GmbH",
-    "email": "support@shirtful.com",
-    "url": "https://www.shirtful.com"
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --debug",
+    "test": "jest",
+    "test:unit": "jest tests/unit",
+    "test:integration": "jest tests/integrations",
+    "test:mocks": "jest tests/mocks",
+    "test:e2e": "jest tests/e2e",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:verbose": "jest --verbose",
+    "test:silent": "jest --silent",
+    "test:ci": "jest --ci --coverage --maxWorkers=2",
+    "test-quick": "node scripts/quick-test.js",
+    "test:debug": "node --inspect-brk ./node_modules/.bin/jest --runInBand",
+    "posttest": "npm run test:cleanup",
+    "test:cleanup": "node scripts/test-cleanup.js",
+    "lint": "eslint . --ext .js",
+    "lint:fix": "eslint . --ext .js --fix",
+    "format": "prettier --write \"**/*.{js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,json,md}\"",
+    "clean": "rimraf dist build coverage .cache",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "postinstall": "electron-builder install-app-deps",
+    "setup": "node scripts/setup.js",
+    "db:init": "node scripts/init-db.js",
+    "db:migrate": "node scripts/migrate-db.js",
+    "db:seed": "node scripts/seed-db.js",
+    "validate": "node scripts/validate-setup.js"
   },
+  "keywords": [
+    "electron",
+    "rfid",
+    "qr-code",
+    "warehouse",
+    "scanner",
+    "mssql"
+  ],
+  "author": "Shirtful Development Team",
   "license": "UNLICENSED",
   "private": true,
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "electron": "^28.1.0",
+    "mssql": "^10.0.2",
+    "node-hid": "^2.1.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.7",
+    "@babel/preset-env": "^7.23.7",
+    "babel-jest": "^29.7.0",
+    "electron-builder": "^24.9.1",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-jest": "^27.6.3",
+    "jest": "^29.7.0",
+    "jest-junit": "^16.0.0",
+    "jest-watch-typeahead": "^2.2.2",
+    "jsdom": "^23.2.0",
+    "mock-fs": "^5.2.0",
+    "prettier": "^3.2.4",
+    "rimraf": "^5.0.5"
+  },
   "engines": {
     "node": ">=16.0.0",
     "npm": ">=8.0.0"
   },
-  "scripts": {
-    "start": "cross-env NODE_ENV=production FORCE_COLOR=1 electron .",
-    "dev": "cross-env NODE_ENV=development FORCE_COLOR=1 electron .",
-    "debug": "cross-env NODE_ENV=development DEBUG=true FORCE_COLOR=1 electron . --inspect=9229",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "test:ci": "jest --ci --coverage --watchAll=false",
-    "test:unit": "jest tests/unit",
-    "test:integration": "jest tests/integrations",
-    "test:e2e": "jest tests/e2e",
-    "test:frontend": "jest tests/frontend",
-    "test:mocks": "jest tests/mocks",
-    "test:verbose": "jest --verbose",
-    "test:silent": "jest --silent",
-    "test:debug": "node --inspect-brk node_modules/.bin/jest --runInBand",
-    "test:parallel": "jest --maxWorkers=4",
-    "test:sequential": "jest --runInBand",
-    "test:quick": "jest --testPathPattern=\"(unit|mocks)\" --passWithNoTests",
-    "test:smoke": "jest --testNamePattern=\"should\" --passWithNoTests",
-    "test:performance": "jest --testNamePattern=\"performance|stress|load\"",
-    "test:clear-cache": "jest --clearCache",
-    "test-quick": "node scripts/quick-test.js",
-    "test-qr": "node scripts/test-qr-duplicates.js",
-    "setup": "node setup.js",
-    "setup-db": "node scripts/create-database.js",
-    "setup-users": "node scripts/create-test-users.js",
-    "test-db": "node scripts/test-db-connection.js",
-    "test-db-quick": "node scripts/quick-db-test.js",
-    "clean": "rimraf dist node_modules/.cache coverage",
-    "clean:tests": "rimraf coverage .nyc_output test-results",
-    "rebuild-safe": "electron-rebuild --force --only node-hid || echo 'Native module rebuild failed - app will work without RFID hardware'",
-    "install-rebuild": "npm install && npm run rebuild-safe",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:win64": "electron-builder --win --x64",
-    "build:win32": "electron-builder --win --ia32",
-    "dist": "electron-builder --publish=never",
-    "postinstall": "electron-builder install-app-deps",
-    "lint": "eslint . --ext .js --ignore-path .gitignore",
-    "lint:fix": "eslint . --ext .js --ignore-path .gitignore --fix",
-    "format": "prettier --write \"**/*.{js,json,md}\"",
-    "format:check": "prettier --check \"**/*.{js,json,md}\""
-  },
-  "dependencies": {
-    "dotenv": "^16.3.1",
-    "electron": "^27.0.0",
-    "mssql": "^10.0.1",
-    "node-hid": "^2.1.2"
-  },
-  "devDependencies": {
-    "@babel/core": "^7.23.0",
-    "@babel/plugin-proposal-class-properties": "^7.18.6",
-    "@babel/plugin-proposal-nullish-coalescing-operator": "^7.18.6",
-    "@babel/plugin-proposal-optional-chaining": "^7.21.0",
-    "@babel/plugin-transform-async-to-generator": "^7.22.5",
-    "@babel/preset-env": "^7.23.0",
-    "babel-jest": "^29.7.0",
-    "babel-plugin-transform-es2015-modules-commonjs": "^6.26.2",
-    "babel-plugin-transform-remove-console": "^6.9.4",
-    "core-js": "^3.33.0",
-    "cross-env": "^7.0.3",
-    "electron-builder": "^24.6.4",
-    "electron-rebuild": "^3.2.9",
-    "eslint": "^8.52.0",
-    "eslint-config-prettier": "^9.0.0",
-    "eslint-plugin-jest": "^27.6.0",
-    "eslint-plugin-node": "^11.1.0",
-    "jest": "^29.7.0",
-    "jest-electron": "^0.1.12",
-    "jest-junit": "^16.0.0",
-    "prettier": "^3.0.3",
-    "rimraf": "^5.0.5"
-  },
-  "optionalDependencies": {
-    "bufferutil": "^4.0.7",
-    "utf-8-validate": "^6.0.3"
-  },
   "build": {
-    "appId": "com.shirtful.wareneingang-rfid-qr",
+    "appId": "com.shirtful.wareneingang",
     "productName": "Wareneingang RFID QR",
     "directories": {
-      "output": "dist",
-      "buildResources": "build"
+      "output": "dist"
     },
     "files": [
       "main.js",
@@ -106,162 +88,39 @@
       "rfid/**/*",
       "db/**/*",
       "node_modules/**/*",
-      "package.json",
-      ".env.example"
-    ],
-    "extraFiles": [
-      {
-        "from": "scripts",
-        "to": "scripts",
-        "filter": [
-          "**/*.js",
-          "!test-*.js"
-        ]
-      }
+      "!node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!node_modules/*.d.ts",
+      "!node_modules/.bin",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!.editorconfig",
+      "!**/._*",
+      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+      "!**/{appveyor.yml,.travis.yml,circle.yml}",
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
     ],
     "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64",
-            "ia32"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "build/icon.ico",
-      "requestedExecutionLevel": "asInvoker",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "target": "nsis",
+      "icon": "assets/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Wareneingang RFID",
-      "include": "build/installer.nsh",
-      "artifactName": "${productName}-Setup-${version}.${ext}"
-    },
-    "portable": {
-      "artifactName": "${productName}-${version}-Portable.${ext}"
+      "createStartMenuShortcut": true
     },
     "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "icon": "build/icon.icns",
       "category": "public.app-category.business",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false
+      "icon": "assets/icon.icns"
     },
     "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "deb",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "build/icon.png",
-      "category": "Office"
-    },
-    "npmRebuild": true,
-    "nodeGypRebuild": false,
-    "buildDependenciesFromSource": false
-  },
-  "babel": {
-    "presets": [
-      "@babel/preset-env"
-    ]
-  },
-  "prettier": {
-    "semi": true,
-    "singleQuote": true,
-    "tabWidth": 4,
-    "trailingComma": "none",
-    "printWidth": 100,
-    "bracketSpacing": true,
-    "arrowParens": "avoid"
-  },
-  "eslintConfig": {
-    "extends": [
-      "eslint:recommended",
-      "plugin:jest/recommended",
-      "plugin:node/recommended",
-      "prettier"
-    ],
-    "env": {
-      "node": true,
-      "jest": true,
-      "es2022": true
-    },
-    "parserOptions": {
-      "ecmaVersion": 2022,
-      "sourceType": "module"
-    },
-    "rules": {
-      "no-console": "off",
-      "no-unused-vars": [
-        "error",
-        {
-          "argsIgnorePattern": "^_"
-        }
-      ],
-      "jest/no-disabled-tests": "warn",
-      "jest/no-focused-tests": "error",
-      "jest/no-identical-title": "error",
-      "jest/prefer-to-have-length": "warn",
-      "jest/valid-expect": "error"
-    },
-    "overrides": [
-      {
-        "files": [
-          "tests/**/*.js"
-        ],
-        "rules": {
-          "node/no-unpublished-require": "off",
-          "node/no-missing-require": "off"
-        }
-      }
-    ]
-  },
-  "keywords": [
-    "rfid",
-    "qr-code",
-    "wareneingang",
-    "zeiterfassung",
-    "electron",
-    "desktop-app",
-    "inventory",
-    "warehouse",
-    "scanning"
-  ],
-  "homepage": "https://www.shirtful.com",
-  "repository": {
-    "type": "git",
-    "url": "git+ssh://git@github.com/shirtful/wareneingang-rfid-qr.git"
-  },
-  "bugs": {
-    "url": "https://github.com/shirtful/wareneingang-rfid-qr/issues",
-    "email": "support@shirtful.com"
+      "target": "AppImage",
+      "category": "Office",
+      "icon": "assets/icon.png"
+    }
   }
 }

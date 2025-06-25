@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+coverage/
+.nyc_output/
+
+# Test artifacts
+test-results/
+test-reports/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Misc
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Vendor files
+vendor/
+*.min.js
+
+# Generated files
+*.generated.js
+
+# Temporary files
+temp/
+tmp/
+.cache/
+
+# Config files (optional - uncomment if needed)
+# jest.config.js
+# .eslintrc.js
+# babel.config.js

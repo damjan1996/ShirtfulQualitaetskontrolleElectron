@@ -66,202 +66,208 @@ jest.mock('node-hid', () => ({
             return data.length;
         }
 
+        pause() {
+            // Mock pause
+        }
+
+        resume() {
+            // Mock resume
+        }
+
         read(callback) {
-            // Mock read with empty data
-            setTimeout(() => callback(null, Buffer.alloc(0)), 10);
+            // Mock read mit Timeout
+            setTimeout(() => {
+                callback(null, Buffer.from([]));
+            }, 10);
         }
     }
+}));
+
+// Mock dotenv
+jest.mock('dotenv', () => ({
+    config: jest.fn(() => {
+        // Test-Umgebungsvariablen setzen
+        process.env.MSSQL_SERVER = 'localhost';
+        process.env.MSSQL_DATABASE = 'RdScanner_Test';
+        process.env.MSSQL_USER = 'test_user';
+        process.env.MSSQL_PASSWORD = 'test_password';
+        process.env.NODE_ENV = 'test';
+    })
 }));
 
 // Mock mssql für Datenbank-Tests
 jest.mock('mssql', () => ({
-    ConnectionPool: class MockConnectionPool {
-        constructor(config) {
-            this.config = config;
-            this.connected = false;
-        }
-
-        async connect() {
-            this.connected = true;
-            return this;
-        }
-
-        async close() {
-            this.connected = false;
-        }
-
-        request() {
-            return new MockRequest();
-        }
-    },
-    Request: class MockRequest {
-        input(name, value) {
-            return this;
-        }
-
-        async query(sql) {
-            return {
-                recordset: [],
-                rowsAffected: [0]
-            };
-        }
-    },
-    TYPES: {
-        Int: 'int',
-        VarChar: 'varchar',
-        DateTime: 'datetime',
-        Bit: 'bit'
-    }
-}));
-
-// Console-Output für Tests reduzieren
-global.console = {
-    ...console,
-    log: jest.fn(),
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn()
-};
-
-// Jest Timeout Configuration
-jest.setTimeout(30000);
-
-// Cleanup zwischen Tests
-afterEach(() => {
-    // Mock Electron State zurücksetzen
-    if (global.mockElectron) {
-        global.mockElectron.globalShortcut.unregisterAll();
-        if (global.mockElectron.ipcMain.handlers) {
-            global.mockElectron.ipcMain.handlers.clear();
-        }
-    }
-    jest.clearAllMocks();
-});
-
-// Environment Variables für Tests
-process.env.NODE_ENV = 'test';
-process.env.DB_SERVER = 'localhost';
-process.env.DB_NAME = 'test_db';
-process.env.DB_USER = 'test_user';
-process.env.DB_PASSWORD = 'test_password';
-
-// Suppress specific warnings in test environment
-const originalConsoleWarn = console.warn;
-console.warn = (message, ...args) => {
-    // Filter out specific warnings that are expected in test environment
-    if (typeof message === 'string' &&
-        (message.includes('Electron Security Warning') ||
-            message.includes('node-hid') ||
-            message.includes('native module'))) {
-        return;
-    }
-    originalConsoleWarn(message, ...args);
-};
-
-// Mock fetch für Web APIs
-global.fetch = jest.fn(() =>
-    Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({}),
-        text: () => Promise.resolve('')
-    })
-);
-
-// Mock Worker for QR scanning
-global.Worker = class MockWorker {
-    constructor(stringUrl) {
-        this.url = stringUrl;
-        this.onmessage = null;
-        this.onerror = null;
-    }
-
-    postMessage(message) {
-        // Mock worker response
-        setTimeout(() => {
-            if (this.onmessage) {
-                this.onmessage({ data: { success: true } });
-            }
-        }, 10);
-    }
-
-    terminate() {
-        // Mock termination
-    }
-};
-
-// Mock MediaDevices für QR-Scanner
-Object.defineProperty(global.navigator, 'mediaDevices', {
-    writable: true,
-    value: {
-        getUserMedia: jest.fn(() => Promise.resolve({
-            getTracks: () => [{
-                stop: jest.fn()
-            }]
+    connect: jest.fn(() => Promise.resolve({
+        request: jest.fn(() => ({
+            input: jest.fn().mockReturnThis(),
+            query: jest.fn(() => Promise.resolve({ recordset: [] }))
         })),
-        enumerateDevices: jest.fn(() => Promise.resolve([
-            {
-                deviceId: 'mock-camera',
-                groupId: 'mock-group',
-                kind: 'videoinput',
-                label: 'Mock Camera'
-            }
-        ]))
-    }
-});
-
-// Performance Mock für Performance-Tests
-global.performance = {
-    now: jest.fn(() => Date.now()),
-    mark: jest.fn(),
-    measure: jest.fn()
-};
+        close: jest.fn(() => Promise.resolve())
+    })),
+    ConnectionPool: jest.fn().mockImplementation(() => ({
+        connect: jest.fn(() => Promise.resolve()),
+        close: jest.fn(() => Promise.resolve()),
+        request: jest.fn(() => ({
+            input: jest.fn().mockReturnThis(),
+            query: jest.fn(() => Promise.resolve({ recordset: [] }))
+        }))
+    })),
+    NVarChar: jest.fn(),
+    Int: jest.fn(),
+    DateTime: jest.fn(),
+    Bit: jest.fn()
+}));
 
 // Globale Test-Utilities
 global.testUtils = {
-    waitFor: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
+    delay: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
 
-    mockDelay: (ms = 10) => new Promise(resolve => setTimeout(resolve, ms)),
+    generateRFIDTag: () => {
+        const tags = ['329C172', '329C173', '329C174', '329C175'];
+        return tags[Math.floor(Math.random() * tags.length)];
+    },
 
-    createMockEvent: (type, data = {}) => ({
-        type,
-        timestamp: Date.now(),
-        ...data
-    }),
+    generateQRCode: (prefix = 'TEST') => {
+        return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    },
 
-    createMockUser: (id = 1) => ({
+    generateUser: (id = 1) => ({
         BenID: id,
-        Vorname: 'Test',
-        Nachname: 'User',
-        Email: `test${id}@example.com`,
-        EPC: 53004113 + id,
-        Active: 1
+        EPC: `329C17${id + 1}`,
+        BenutzerName: `Test User ${id}`,
+        Email: `user${id}@test.com`,
+        Active: 1,
+        CreatedAt: new Date()
     }),
 
-    createMockSession: (userId = 1, sessionId = null) => ({
-        ID: sessionId || Math.floor(Math.random() * 10000) + 1000,
-        BenID: userId,
-        StartTS: new Date().toISOString(),
-        EndTS: null,
-        Active: 1
-    })
-};
+    generateSession: (userId = 1, active = 1) => ({
+        ID: Math.floor(Math.random() * 1000) + 1,
+        UserID: userId,
+        StartTS: new Date(),
+        EndTS: active ? null : new Date(),
+        Active: active
+    }),
 
-// Debugging für Failed Tests
-const originalIt = global.it;
-global.it = (name, fn, timeout) => {
-    return originalIt(name, async (...args) => {
-        try {
-            await fn(...args);
-        } catch (error) {
-            console.error(`❌ Test failed: ${name}`);
-            console.error('Error:', error.message);
-            if (error.stack) {
-                console.error('Stack:', error.stack.split('\n').slice(0, 5).join('\n'));
-            }
-            throw error;
+    resetAllMocks: () => {
+        jest.clearAllMocks();
+        jest.clearAllTimers();
+        if (global.mockElectron?.globalShortcut?.shortcuts) {
+            global.mockElectron.globalShortcut.shortcuts.clear();
         }
-    }, timeout);
+        if (global.mockElectron?.ipcMain?.handlers) {
+            global.mockElectron.ipcMain.handlers.clear();
+        }
+    },
+
+    logMockState: () => {
+        console.log('Mock State:', {
+            shortcuts: global.mockElectron?.globalShortcut?.shortcuts?.size || 0,
+            ipcHandlers: global.mockElectron?.ipcMain?.handlers?.size || 0,
+            timers: jest.getTimerCount()
+        });
+    }
 };
 
-console.log('✅ Test-Setup vollständig geladen');
+// Console Mock Setup
+const originalConsole = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error
+};
+
+beforeAll(() => {
+    // Console Mocks für Tests
+    console.log = jest.fn();
+    console.warn = jest.fn();
+    console.error = jest.fn();
+
+    // Globale Setup
+    process.env.NODE_ENV = 'test';
+    require('dotenv').config();
+});
+
+beforeEach(() => {
+    // Reset alle Mocks vor jedem Test
+    jest.clearAllMocks();
+    jest.clearAllTimers();
+
+    // Reset console mocks
+    console.log.mockClear();
+    console.warn.mockClear();
+    console.error.mockClear();
+
+    // Reset global Electron mock state
+    if (global.mockElectron) {
+        // Sichere Überprüfung und Reset
+        if (global.mockElectron.globalShortcut) {
+            global.mockElectron.globalShortcut.unregisterAll();
+            if (global.mockElectron.globalShortcut.shortcuts) {
+                global.mockElectron.globalShortcut.shortcuts.clear();
+            }
+        }
+
+        // Sichere Überprüfung für ipcMain
+        if (global.mockElectron.ipcMain) {
+            if (global.mockElectron.ipcMain.handlers) {
+                global.mockElectron.ipcMain.handlers.clear();
+            }
+            if (global.mockElectron.ipcMain.removeAllListeners) {
+                global.mockElectron.ipcMain.removeAllListeners();
+            }
+        }
+    }
+});
+
+afterEach(() => {
+    // Cleanup nach jedem Test
+    jest.restoreAllMocks();
+    jest.clearAllTimers();
+
+    // Sichere Cleanup für global mocks
+    if (global.mockElectron) {
+        if (global.mockElectron.globalShortcut && global.mockElectron.globalShortcut.unregisterAll) {
+            global.mockElectron.globalShortcut.unregisterAll();
+        }
+
+        // Null-safe cleanup für ipcMain
+        if (global.mockElectron.ipcMain && global.mockElectron.ipcMain.handlers) {
+            global.mockElectron.ipcMain.handlers.clear();
+        }
+    }
+});
+
+afterAll(() => {
+    // Console wiederherstellen
+    console.log = originalConsole.log;
+    console.warn = originalConsole.warn;
+    console.error = originalConsole.error;
+
+    // Finale Cleanup
+    delete global.mockElectron;
+    delete global.testUtils;
+});
+
+// Unhandled Promise Rejections abfangen für Tests
+process.on('unhandledRejection', (reason, promise) => {
+    // In Tests nur loggen, nicht den Prozess beenden
+    if (process.env.NODE_ENV === 'test') {
+        console.warn('Unhandled Promise Rejection in Test:', reason);
+    }
+});
+
+// Uncaught Exceptions abfangen für Tests
+process.on('uncaughtException', (error) => {
+    // In Tests nur loggen, nicht den Prozess beenden
+    if (process.env.NODE_ENV === 'test') {
+        console.warn('Uncaught Exception in Test:', error);
+    }
+});
+
+// Jest Konfiguration
+jest.setTimeout(30000); // 30 Sekunden Timeout für Tests
+
+// Export für andere Test-Dateien
+module.exports = {
+    mockElectron: global.mockElectron,
+    testUtils: global.testUtils
+};

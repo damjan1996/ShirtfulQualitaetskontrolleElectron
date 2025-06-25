@@ -1,78 +1,110 @@
 // jest.config.js
-/**
- * Jest Configuration - Ohne Babel für Node.js Tests
- * Einfache Konfiguration für JavaScript ohne Transformation
- */
-
 module.exports = {
+    // Test-Umgebung
     testEnvironment: 'node',
-    setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
+
+    // Root-Verzeichnis
+    rootDir: '.',
+
+    // Test-Dateien Pattern
     testMatch: [
-        '<rootDir>/tests/**/*.test.js',
-        '<rootDir>/tests/**/*.spec.js'
+        '**/tests/**/*.test.js',
+        '**/__tests__/**/*.test.js'
     ],
+
+    // Ignorierte Pfade
     testPathIgnorePatterns: [
         '/node_modules/',
         '/dist/',
         '/build/',
         '/.git/'
     ],
-    moduleDirectories: ['node_modules', '<rootDir>'],
-    moduleNameMapper: {
-        '^@/(.*)$': '<rootDir>/$1',
-        '^@tests/(.*)$': '<rootDir>/tests/$1'
-    },
 
-    // WICHTIG: Babel-Transformation deaktivieren
-    transform: {},
+    // Module Pfade
+    moduleDirectories: ['node_modules', 'src'],
 
-    // Coverage (optional)
-    collectCoverage: false,
+    // Setup-Dateien
+    setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
+
+    // Coverage Konfiguration
+    collectCoverage: false, // Nur bei Bedarf aktivieren
     collectCoverageFrom: [
-        'db/**/*.js',
-        'rfid/**/*.js',
-        'main.js',
-        'preload.js',
+        '**/*.js',
         '!**/node_modules/**',
         '!**/tests/**',
-        '!**/coverage/**'
+        '!**/coverage/**',
+        '!**/dist/**',
+        '!jest.config.js',
+        '!.eslintrc.js'
     ],
+
     coverageDirectory: 'coverage',
-    coverageReporters: ['text', 'lcov'],
 
-    // Timeouts und Performance
-    testTimeout: 30000,
-    maxWorkers: '50%',
+    coverageReporters: [
+        'text',
+        'lcov',
+        'html',
+        'json'
+    ],
 
-    // Output
-    verbose: false,
-    silent: false,
+    // Coverage Schwellenwerte
+    coverageThreshold: {
+        global: {
+            branches: 70,
+            functions: 70,
+            lines: 70,
+            statements: 70
+        }
+    },
 
-    // Error handling
-    errorOnDeprecated: false,
-    bail: 0,
+    // Modul-Aliase
+    moduleNameMapper: {
+        '^@/(.*)$': '<rootDir>/$1',
+        '^@tests/(.*)$': '<rootDir>/tests/$1',
+        '^electron$': '<rootDir>/tests/mocks/electron.mock.js'
+    },
 
-    // Mock configuration
-    clearMocks: true,
-    resetMocks: false,
-    restoreMocks: true,
+    // Transform-Optionen
+    transform: {
+        '^.+\\.js$': ['babel-jest', {
+            presets: [
+                ['@babel/preset-env', {
+                    targets: {
+                        node: 'current'
+                    }
+                }]
+            ]
+        }]
+    },
 
-    // Globals
+    // Globale Variablen
     globals: {
         'process.env.NODE_ENV': 'test'
     },
 
-    // Reports
-    reporters: ['default'],
+    // Weitere Optionen
+    verbose: true,
+    bail: false,
+    clearMocks: true,
+    restoreMocks: true,
+    resetMocks: true,
+    resetModules: false,
 
-    // Clean up
-    detectOpenHandles: false,
+    // Timeouts
+    testTimeout: 30000,
+
+    // Fehlerbehandlung
+    errorOnDeprecated: false,
+
+    // Force Exit nach Tests
     forceExit: true,
 
-    // Ignore patterns
-    modulePathIgnorePatterns: [
-        '<rootDir>/dist/',
-        '<rootDir>/build/',
-        '<rootDir>/node_modules/.cache/'
-    ]
+    // Open Handles Detection
+    detectOpenHandles: false,
+
+    // Maximale Worker
+    maxWorkers: process.env.CI ? 2 : '50%',
+
+    // Silent Mode im CI
+    silent: process.env.CI === 'true'
 };

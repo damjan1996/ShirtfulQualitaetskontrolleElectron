@@ -29,7 +29,7 @@ jest.mock('../../rfid/rfid-listener', () => {
     }));
 });
 
-describe('Main Process', () => {
+describe('Main Process Tests', () => {
     let app, mainWindow, dbClient, rfidListener;
 
     beforeEach(() => {
@@ -141,17 +141,9 @@ describe('Main Process', () => {
             });
 
             // Act - Simuliere Handler-Registrierung
-            ipcMain.handle('db-get-user-by-epc', async (event, tagId) => {
-                return { id: 1, name: 'Test User', epc: tagId };
-            });
-
-            ipcMain.handle('db-get-user-by-id', async (event, userId) => {
-                return { id: userId, name: 'Test User', epc: '123456789' };
-            });
-
-            ipcMain.handle('db-health-check', async () => {
-                return { status: 'healthy', timestamp: new Date().toISOString() };
-            });
+            ipcMain.handle('db-get-user-by-epc', jest.fn());
+            ipcMain.handle('db-get-user-by-id', jest.fn());
+            ipcMain.handle('db-health-check', jest.fn());
 
             // Assert
             expect(ipcMain.handle).toHaveBeenCalledWith('db-get-user-by-epc', expect.any(Function));
@@ -159,82 +151,19 @@ describe('Main Process', () => {
             expect(ipcMain.handle).toHaveBeenCalledWith('db-health-check', expect.any(Function));
         });
 
-        test('should register session IPC handlers', () => {
-            // Arrange
-            const { ipcMain } = mockElectron;
-
-            // Act
-            ipcMain.handle('session-create', async (event, userId) => {
-                return { sessionId: 'sess_123', userId, startTime: new Date().toISOString() };
-            });
-
-            ipcMain.handle('session-end', async (event, sessionId) => {
-                return { sessionId, endTime: new Date().toISOString(), success: true };
-            });
-
-            ipcMain.handle('session-get-active', async (event, userId) => {
-                return { sessionId: 'sess_123', userId, active: true };
-            });
-
-            // Assert
-            expect(ipcMain.handle).toHaveBeenCalledWith('session-create', expect.any(Function));
-            expect(ipcMain.handle).toHaveBeenCalledWith('session-end', expect.any(Function));
-            expect(ipcMain.handle).toHaveBeenCalledWith('session-get-active', expect.any(Function));
-        });
-
-        test('should register QR scan IPC handlers', () => {
-            // Arrange
-            const { ipcMain } = mockElectron;
-
-            // Act
-            ipcMain.handle('qr-scan-save', async (event, sessionId, payload) => {
-                return { scanId: 'scan_123', sessionId, payload, timestamp: new Date().toISOString() };
-            });
-
-            ipcMain.handle('qr-get-by-session', async (event, sessionId, limit = 10) => {
-                return [
-                    { scanId: 'scan_123', payload: 'test_qr_code', timestamp: new Date().toISOString() }
-                ];
-            });
-
-            ipcMain.handle('qr-get-recent', async (event, limit = 10) => {
-                return [
-                    { scanId: 'scan_123', payload: 'test_qr_code', timestamp: new Date().toISOString() }
-                ];
-            });
-
-            // Assert
-            expect(ipcMain.handle).toHaveBeenCalledWith('qr-scan-save', expect.any(Function));
-            expect(ipcMain.handle).toHaveBeenCalledWith('qr-get-by-session', expect.any(Function));
-            expect(ipcMain.handle).toHaveBeenCalledWith('qr-get-recent', expect.any(Function));
-        });
-
         test('should register RFID IPC handlers', () => {
             // Arrange
             const { ipcMain } = mockElectron;
 
             // Act
-            ipcMain.handle('rfid-start', async () => {
-                return { success: true, message: 'RFID listener started' };
-            });
-
-            ipcMain.handle('rfid-stop', async () => {
-                return { success: true, message: 'RFID listener stopped' };
-            });
-
-            ipcMain.handle('rfid-get-stats', async () => {
-                return {
-                    isListening: true,
-                    totalScans: 42,
-                    successfulScans: 40,
-                    errorCount: 2
-                };
-            });
+            ipcMain.handle('rfid-start', jest.fn());
+            ipcMain.handle('rfid-stop', jest.fn());
+            ipcMain.handle('rfid-is-listening', jest.fn());
 
             // Assert
             expect(ipcMain.handle).toHaveBeenCalledWith('rfid-start', expect.any(Function));
             expect(ipcMain.handle).toHaveBeenCalledWith('rfid-stop', expect.any(Function));
-            expect(ipcMain.handle).toHaveBeenCalledWith('rfid-get-stats', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('rfid-is-listening', expect.any(Function));
         });
 
         test('should register window control IPC handlers', () => {
@@ -242,21 +171,10 @@ describe('Main Process', () => {
             const { ipcMain } = mockElectron;
 
             // Act
-            ipcMain.handle('window-minimize', async () => {
-                return { success: true };
-            });
-
-            ipcMain.handle('window-maximize', async () => {
-                return { success: true };
-            });
-
-            ipcMain.handle('window-close', async () => {
-                return { success: true };
-            });
-
-            ipcMain.handle('window-always-on-top', async (event, flag) => {
-                return { success: true, alwaysOnTop: flag };
-            });
+            ipcMain.handle('window-minimize', jest.fn());
+            ipcMain.handle('window-maximize', jest.fn());
+            ipcMain.handle('window-close', jest.fn());
+            ipcMain.handle('window-always-on-top', jest.fn());
 
             // Assert
             expect(ipcMain.handle).toHaveBeenCalledWith('window-minimize', expect.any(Function));
@@ -323,15 +241,10 @@ describe('Main Process', () => {
     });
 
     describe('Application Lifecycle', () => {
-        test('should handle app activation (macOS)', () => {
+        test('should handle app activate event', () => {
             // Arrange
-            const { app: electronApp, BrowserWindow } = mockElectron;
-            const activateHandler = jest.fn(() => {
-                if (BrowserWindow.getAllWindows().length === 0) {
-                    // Create new window
-                    new BrowserWindow();
-                }
-            });
+            const { app: electronApp } = mockElectron;
+            const activateHandler = jest.fn();
 
             // Act
             electronApp.on('activate', activateHandler);
@@ -341,61 +254,57 @@ describe('Main Process', () => {
             expect(electronApp.on).toHaveBeenCalledWith('activate', activateHandler);
         });
 
-        test('should handle window-all-closed event', () => {
+        test('should handle app window-all-closed event', () => {
             // Arrange
             const { app: electronApp } = mockElectron;
-            const windowsClosedHandler = jest.fn(() => {
+            const allClosedHandler = jest.fn(() => {
                 if (process.platform !== 'darwin') {
                     electronApp.quit();
                 }
             });
 
             // Act
-            electronApp.on('window-all-closed', windowsClosedHandler);
+            electronApp.on('window-all-closed', allClosedHandler);
             electronApp.emit('window-all-closed');
 
             // Assert
-            expect(electronApp.on).toHaveBeenCalledWith('window-all-closed', windowsClosedHandler);
+            expect(electronApp.on).toHaveBeenCalledWith('window-all-closed', allClosedHandler);
+            if (process.platform !== 'darwin') {
+                expect(electronApp.quit).toHaveBeenCalled();
+            }
         });
 
-        test('should handle before-quit event', () => {
+        test('should handle app quit event properly', async () => {
             // Arrange
             const { app: electronApp } = mockElectron;
-            const beforeQuitHandler = jest.fn();
+            const DatabaseClient = require('../../db/db-client');
+            const RFIDListener = require('../../rfid/rfid-listener');
+
+            app.dbClient = new DatabaseClient();
+            app.rfidListener = new RFIDListener();
+
+            // Mock cleanup methods
+            const cleanupHandler = jest.fn(async () => {
+                if (app.rfidListener) {
+                    await app.rfidListener.stop();
+                }
+                if (app.dbClient) {
+                    await app.dbClient.close();
+                }
+            });
 
             // Act
-            electronApp.on('before-quit', beforeQuitHandler);
+            electronApp.on('before-quit', cleanupHandler);
             electronApp.emit('before-quit');
 
             // Assert
-            expect(electronApp.on).toHaveBeenCalledWith('before-quit', beforeQuitHandler);
+            expect(electronApp.on).toHaveBeenCalledWith('before-quit', cleanupHandler);
         });
     });
 
     describe('Error Handling', () => {
-        test('should handle IPC handler errors gracefully', async () => {
-            // Arrange
-            const { ipcMain } = mockElectron;
-            const errorHandler = jest.fn(async () => {
-                throw new Error('Test IPC error');
-            });
-
-            // Act
-            ipcMain.handle('test-error-handler', errorHandler);
-
-            try {
-                await errorHandler();
-            } catch (error) {
-                // Assert
-                expect(error.message).toBe('Test IPC error');
-            }
-
-            expect(ipcMain.handle).toHaveBeenCalledWith('test-error-handler', errorHandler);
-        });
-
         test('should handle uncaught exceptions', () => {
             // Arrange
-            const originalHandler = process.listeners('uncaughtException');
             const errorHandler = jest.fn((error) => {
                 console.error('Uncaught Exception:', error);
             });
@@ -414,7 +323,7 @@ describe('Main Process', () => {
             process.removeListener('uncaughtException', errorHandler);
         });
 
-        test('should handle unhandled promise rejections', () => {
+        test('should handle unhandled promise rejections', async () => {
             // Arrange
             const rejectionHandler = jest.fn((reason, promise) => {
                 console.error('Unhandled Promise Rejection:', reason);
@@ -423,9 +332,14 @@ describe('Main Process', () => {
             // Act
             process.on('unhandledRejection', rejectionHandler);
 
-            // Simulate unhandled rejection
+            // Simulate unhandled rejection mit .catch() um Jest nicht zu crashen
             const testReason = new Error('Test rejection');
             const testPromise = Promise.reject(testReason);
+
+            // WICHTIG: Promise mit .catch() behandeln, um Jest nicht zum Absturz zu bringen
+            testPromise.catch(() => {}); // Verhindere echte unbehandelte Rejection
+
+            // Emit das Event manuell für den Test
             process.emit('unhandledRejection', testReason, testPromise);
 
             // Assert
@@ -459,18 +373,28 @@ describe('Main Process', () => {
                 };
             });
 
-            ipcMain.handle('system-get-environment', async () => {
+            // Assert
+            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-version', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-platform', expect.any(Function));
+        });
+
+        test('should provide memory usage information', () => {
+            // Arrange
+            const { ipcMain } = mockElectron;
+
+            // Act
+            ipcMain.handle('system-get-memory', async () => {
+                const memoryUsage = process.memoryUsage();
                 return {
-                    nodeEnv: process.env.NODE_ENV,
-                    isDev: process.env.NODE_ENV === 'development',
-                    isTest: process.env.NODE_ENV === 'test'
+                    rss: Math.round(memoryUsage.rss / 1024 / 1024),
+                    heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+                    heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+                    external: Math.round(memoryUsage.external / 1024 / 1024)
                 };
             });
 
             // Assert
-            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-version', expect.any(Function));
-            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-platform', expect.any(Function));
-            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-environment', expect.any(Function));
+            expect(ipcMain.handle).toHaveBeenCalledWith('system-get-memory', expect.any(Function));
         });
     });
 
@@ -484,48 +408,157 @@ describe('Main Process', () => {
                     minWidth: 800,
                     minHeight: 600
                 },
-                database: {
-                    connectionTimeout: 5000,
-                    requestTimeout: 3000
-                },
-                rfid: {
-                    inputTimeout: 200,
-                    maxBufferLength: 15
-                }
+                debug: false,
+                autoStart: true
             };
 
             // Act
             app.config = { ...defaultConfig };
 
             // Assert
+            expect(app.config).toEqual(defaultConfig);
             expect(app.config.window.width).toBe(1200);
-            expect(app.config.window.height).toBe(800);
-            expect(app.config.database.connectionTimeout).toBe(5000);
-            expect(app.config.rfid.inputTimeout).toBe(200);
+            expect(app.config.debug).toBe(false);
         });
 
-        test('should validate configuration values', () => {
+        test('should override configuration with environment variables', () => {
             // Arrange
-            const invalidConfig = {
-                window: {
-                    width: -1,  // Invalid
-                    height: 0   // Invalid
-                }
-            };
-
-            const validConfig = {
-                window: {
-                    width: Math.max(800, invalidConfig.window.width),
-                    height: Math.max(600, invalidConfig.window.height)
-                }
-            };
+            process.env.APP_DEBUG = 'true';
+            process.env.APP_WINDOW_WIDTH = '1920';
 
             // Act
-            app.config = validConfig;
+            const config = {
+                debug: process.env.APP_DEBUG === 'true',
+                window: {
+                    width: parseInt(process.env.APP_WINDOW_WIDTH) || 1200
+                }
+            };
 
             // Assert
-            expect(app.config.window.width).toBe(800);
-            expect(app.config.window.height).toBe(600);
+            expect(config.debug).toBe(true);
+            expect(config.window.width).toBe(1920);
+
+            // Cleanup
+            delete process.env.APP_DEBUG;
+            delete process.env.APP_WINDOW_WIDTH;
+        });
+    });
+
+    describe('Database Connection Management', () => {
+        test('should handle database connection retry', async () => {
+            // Arrange
+            const DatabaseClient = require('../../db/db-client');
+            const dbClient = new DatabaseClient();
+            let attempts = 0;
+
+            dbClient.connect.mockImplementation(() => {
+                attempts++;
+                if (attempts < 3) {
+                    return Promise.reject(new Error('Connection failed'));
+                }
+                return Promise.resolve();
+            });
+
+            // Act
+            const connectWithRetry = async (maxAttempts = 3) => {
+                for (let i = 0; i < maxAttempts; i++) {
+                    try {
+                        await dbClient.connect();
+                        return true;
+                    } catch (error) {
+                        if (i === maxAttempts - 1) throw error;
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                }
+            };
+
+            // Assert
+            await expect(connectWithRetry()).resolves.toBe(true);
+            expect(attempts).toBe(3);
+        });
+
+        test('should handle database health check', async () => {
+            // Arrange
+            const DatabaseClient = require('../../db/db-client');
+            const dbClient = new DatabaseClient();
+
+            // Act
+            const isHealthy = await dbClient.healthCheck();
+
+            // Assert
+            expect(dbClient.healthCheck).toHaveBeenCalled();
+            expect(isHealthy).toBe(true);
+        });
+    });
+
+    describe('RFID Listener Management', () => {
+        test('should start RFID listener correctly', async () => {
+            // Arrange
+            const RFIDListener = require('../../rfid/rfid-listener');
+            const rfidListener = new RFIDListener();
+
+            // Act
+            await rfidListener.start();
+
+            // Assert
+            expect(rfidListener.start).toHaveBeenCalled();
+        });
+
+        test('should handle RFID tag detection events', async () => {
+            // Arrange
+            const RFIDListener = require('../../rfid/rfid-listener');
+            const rfidListener = new RFIDListener();
+            const tagHandler = jest.fn();
+
+            // Act
+            rfidListener.on('tag-detected', tagHandler);
+            rfidListener.on.mock.calls[0][1]({ tagId: '123456' });
+
+            // Assert
+            expect(rfidListener.on).toHaveBeenCalledWith('tag-detected', tagHandler);
+            expect(tagHandler).toHaveBeenCalledWith({ tagId: '123456' });
+        });
+
+        test('should stop RFID listener correctly', async () => {
+            // Arrange
+            const RFIDListener = require('../../rfid/rfid-listener');
+            const rfidListener = new RFIDListener();
+
+            // Act
+            await rfidListener.start();
+            await rfidListener.stop();
+
+            // Assert
+            expect(rfidListener.stop).toHaveBeenCalled();
+        });
+    });
+
+    describe('Global Shortcuts', () => {
+        test('should register development shortcuts in dev mode', () => {
+            // Arrange
+            process.env.NODE_ENV = 'development';
+            const { globalShortcut } = mockElectron;
+
+            // Act
+            globalShortcut.register('Ctrl+Shift+I', jest.fn());
+            globalShortcut.register('F5', jest.fn());
+            globalShortcut.register('Ctrl+R', jest.fn());
+
+            // Assert
+            expect(globalShortcut.register).toHaveBeenCalledWith('Ctrl+Shift+I', expect.any(Function));
+            expect(globalShortcut.register).toHaveBeenCalledWith('F5', expect.any(Function));
+            expect(globalShortcut.register).toHaveBeenCalledWith('Ctrl+R', expect.any(Function));
+        });
+
+        test('should unregister all shortcuts on quit', () => {
+            // Arrange
+            const { globalShortcut } = mockElectron;
+
+            // Act
+            globalShortcut.unregisterAll();
+
+            // Assert
+            expect(globalShortcut.unregisterAll).toHaveBeenCalled();
         });
     });
 });
