@@ -9,6 +9,18 @@ const { mockElectron } = require('./mocks/electron.mock');
 // Mock Electron vollständig
 jest.mock('electron', () => mockElectron);
 
+// Speichere originale Console-Methoden
+const originalConsole = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error
+};
+
+// Mock console für saubere Test-Ausgabe
+console.log = jest.fn();
+console.warn = jest.fn();
+console.error = jest.fn();
+
 // Globale Electron Mock Setup
 global.mockElectron = {
     app: mockElectron.app,
@@ -112,86 +124,82 @@ jest.mock('mssql', () => ({
             query: jest.fn(() => Promise.resolve({ recordset: [] }))
         }))
     })),
-    NVarChar: jest.fn(),
-    Int: jest.fn(),
-    DateTime: jest.fn(),
-    Bit: jest.fn()
+    Request: jest.fn().mockImplementation(() => ({
+        input: jest.fn().mockReturnThis(),
+        query: jest.fn(() => Promise.resolve({ recordset: [] }))
+    })),
+    TYPES: {
+        Int: 'Int',
+        BigInt: 'BigInt',
+        VarChar: 'VarChar',
+        NVarChar: 'NVarChar',
+        DateTime: 'DateTime',
+        Bit: 'Bit'
+    }
 }));
 
-// Globale Test-Utilities
+// Global Test Utilities
 global.testUtils = {
     delay: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
 
     generateRFIDTag: () => {
-        const tags = ['329C172', '329C173', '329C174', '329C175'];
-        return tags[Math.floor(Math.random() * tags.length)];
+        const validTags = ['53004114', '53004115', '53004116', '53004117'];
+        return validTags[Math.floor(Math.random() * validTags.length)];
     },
 
-    generateQRCode: (prefix = 'TEST') => {
-        return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    },
-
-    generateUser: (id = 1) => ({
-        BenID: id,
-        EPC: `329C17${id + 1}`,
-        BenutzerName: `Test User ${id}`,
-        Email: `user${id}@test.com`,
+    generateUser: (overrides = {}) => ({
+        BenID: Math.floor(Math.random() * 1000) + 1,
+        Vorname: 'Test',
+        Nachname: 'User',
+        Email: 'test@example.com',
+        EPC: 53004114,
         Active: 1,
-        CreatedAt: new Date()
+        ...overrides
     }),
 
-    generateSession: (userId = 1, active = 1) => ({
+    generateSession: (overrides = {}) => ({
         ID: Math.floor(Math.random() * 1000) + 1,
-        UserID: userId,
+        BenID: 1,
         StartTS: new Date(),
-        EndTS: active ? null : new Date(),
-        Active: active
+        EndTS: null,
+        Active: 1,
+        ...overrides
+    }),
+
+    generateQRScan: (overrides = {}) => ({
+        ID: Math.floor(Math.random() * 1000) + 1,
+        SessionID: 1,
+        RawPayload: `TEST_QR_${Date.now()}`,
+        CapturedTS: new Date(),
+        Valid: 1,
+        ...overrides
     }),
 
     resetAllMocks: () => {
         jest.clearAllMocks();
-        jest.clearAllTimers();
-        if (global.mockElectron?.globalShortcut?.shortcuts) {
-            global.mockElectron.globalShortcut.shortcuts.clear();
-        }
-        if (global.mockElectron?.ipcMain?.handlers) {
+        if (global.mockElectron) {
             global.mockElectron.ipcMain.handlers.clear();
+            global.mockElectron.globalShortcut.shortcuts.clear();
         }
     },
 
     logMockState: () => {
-        console.log('Mock State:', {
-            shortcuts: global.mockElectron?.globalShortcut?.shortcuts?.size || 0,
-            ipcHandlers: global.mockElectron?.ipcMain?.handlers?.size || 0,
-            timers: jest.getTimerCount()
-        });
+        if (process.env.DEBUG_TESTS) {
+            originalConsole.log('Mock State:', {
+                ipcHandlers: global.mockElectron?.ipcMain?.handlers?.size || 0,
+                shortcuts: global.mockElectron?.globalShortcut?.shortcuts?.size || 0
+            });
+        }
     }
 };
 
-// Console Mock Setup
-const originalConsole = {
-    log: console.log,
-    warn: console.warn,
-    error: console.error
-};
-
-beforeAll(() => {
-    // Console Mocks für Tests
-    console.log = jest.fn();
-    console.warn = jest.fn();
-    console.error = jest.fn();
-
-    // Globale Setup
-    process.env.NODE_ENV = 'test';
-    require('dotenv').config();
-});
-
+// Setup vor jedem Test
 beforeEach(() => {
-    // Reset alle Mocks vor jedem Test
-    jest.clearAllMocks();
-    jest.clearAllTimers();
+    // Reset process.env
+    process.env.NODE_ENV = 'test';
 
-    // Reset console mocks
+    // Clear all mocks
+    jest.clearAllMocks();
     console.log.mockClear();
     console.warn.mockClear();
     console.error.mockClear();

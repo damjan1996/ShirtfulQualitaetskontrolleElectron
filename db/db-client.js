@@ -277,41 +277,255 @@ class DatabaseClient {
         }
     }
 
-    // ===== SESSION MANAGEMENT =====
-    async createSession(userId) {
-        try {
-            console.log(`[INFO] Erstelle neue Session für Benutzer ID: ${userId}`);
+    // ===== SESSION MANAGEMENT MIT SESSIONTYPE-UNTERSTÜTZUNG =====
 
-            // Erst alle bestehenden aktiven Sessions des Benutzers beenden
+    /**
+     * Erweiterte createSession Methode mit SessionType-Unterstützung
+     * @param {number} userId - Benutzer-ID
+     * @param {number|string} sessionType - SessionType ID oder Name (default: 'Wareneingang')
+     * @returns {Object|null} - Neue Session oder null bei Fehler
+     */
+    async createSession(userId, sessionType = 'Wareneingang') {
+        try {
+            customConsole.info(`Session wird erstellt für User ${userId}, SessionType: ${sessionType}`);
+
+            // Bestehende aktive Sessions für diesen User beenden
             await this.query(`
                 UPDATE dbo.Sessions
                 SET EndTS = SYSDATETIME(), Active = 0
                 WHERE UserID = ? AND Active = 1
             `, [userId]);
 
-            // Neue Session erstellen mit korrekter Zeitstempel-Behandlung
+            // SessionType ID ermitteln
+            let sessionTypeId;
+
+            if (typeof sessionType === 'number') {
+                // SessionType ist bereits eine ID
+                sessionTypeId = sessionType;
+            } else {
+                // SessionType Name zu ID konvertieren
+                const typeResult = await this.query(`
+                    SELECT ID FROM dbo.SessionTypes
+                    WHERE TypeName = ? AND IsActive = 1
+                `, [sessionType]);
+
+                if (typeResult.recordset.length === 0) {
+                    throw new Error(`SessionType '${sessionType}' nicht gefunden`);
+                }
+
+                sessionTypeId = typeResult.recordset[0].ID;
+            }
+
+            // Neue Session erstellen mit SessionType
             const result = await this.query(`
-                INSERT INTO dbo.Sessions (UserID, StartTS, Active)
-                    OUTPUT INSERTED.ID, INSERTED.StartTS
-                VALUES (?, SYSDATETIME(), 1)
-            `, [userId]);
+                INSERT INTO dbo.Sessions (UserID, StartTS, Active, SessionTypeID)
+                    OUTPUT INSERTED.ID, INSERTED.StartTS, INSERTED.SessionTypeID
+                VALUES (?, SYSDATETIME(), 1, ?)
+            `, [userId, sessionTypeId]);
 
             if (result.recordset.length > 0) {
                 const session = result.recordset[0];
 
-                // Zeitstempel normalisieren für konsistente Verarbeitung
-                const normalizedSession = {
-                    ...session,
-                    StartTS: this.normalizeTimestamp(session.StartTS)
-                };
+                // SessionType-Info für Rückgabe laden
+                const sessionWithType = await this.getSessionWithType(session.ID);
 
-                customConsole.success(`Session erstellt: ID ${normalizedSession.ID}, Start: ${normalizedSession.StartTS}`);
-                return normalizedSession;
+                customConsole.success(`Session erstellt: ID ${session.ID}, Type: ${sessionWithType.SessionTypeName}, Start: ${session.StartTS}`);
+                return sessionWithType;
             }
             return null;
         } catch (error) {
             customConsole.error('Fehler beim Erstellen der Session:', error);
             return null;
+        }
+    }
+
+    /**
+     * Session mit SessionType-Informationen abrufen
+     * @param {number} sessionId - Session ID
+     * @returns {Object|null} - Session mit SessionType-Details
+     */
+    async getSessionWithType(sessionId) {
+        try {
+            const result = await this.query(`
+                SELECT
+                    s.ID,
+                    s.UserID,
+                    s.StartTS,
+                    s.EndTS,
+                    s.Active,
+                    s.SessionTypeID,
+                    st.TypeName as SessionTypeName,
+                    st.Description as SessionTypeDescription,
+                    DATEDIFF(SECOND, s.StartTS, ISNULL(s.EndTS, SYSDATETIME())) as DurationSeconds
+                FROM dbo.Sessions s
+                         LEFT JOIN dbo.SessionTypes st ON s.SessionTypeID = st.ID
+                WHERE s.ID = ?
+            `, [sessionId]);
+
+            if (result.recordset.length > 0) {
+                const session = result.recordset[0];
+                return {
+                    ...session,
+                    StartTS: this.normalizeTimestamp(session.StartTS),
+                    EndTS: session.EndTS ? this.normalizeTimestamp(session.EndTS) : null
+                };
+            }
+            return null;
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der Session:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Alle aktiven Sessions mit SessionType-Informationen abrufen
+     * @returns {Array} - Array von aktiven Sessions mit SessionType-Details
+     */
+    async getActiveSessionsWithType() {
+        try {
+            const result = await this.query(`
+                SELECT
+                    s.ID,
+                    s.UserID,
+                    s.StartTS,
+                    s.SessionTypeID,
+                    st.TypeName as SessionTypeName,
+                    st.Description as SessionTypeDescription,
+                    sb.Vorname,
+                    sb.Nachname,
+                    sb.Benutzer,
+                    sb.BenutzerName,
+                    DATEDIFF(SECOND, s.StartTS, SYSDATETIME()) as DurationSeconds
+                FROM dbo.Sessions s
+                         LEFT JOIN dbo.SessionTypes st ON s.SessionTypeID = st.ID
+                         LEFT JOIN dbo.ScannBenutzer sb ON s.UserID = sb.ID
+                WHERE s.Active = 1
+                ORDER BY s.StartTS ASC
+            `);
+
+            return result.recordset.map(session => ({
+                ...session,
+                StartTS: this.normalizeTimestamp(session.StartTS),
+                FullName: `${session.Vorname || ''} ${session.Nachname || ''}`.trim()
+            }));
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen aktiver Sessions:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Alle verfügbaren SessionTypes abrufen
+     * @returns {Array} - Array von verfügbaren SessionTypes
+     */
+    async getSessionTypes() {
+        try {
+            const result = await this.query(`
+                SELECT ID, TypeName, Description
+                FROM dbo.SessionTypes
+                WHERE IsActive = 1
+                ORDER BY TypeName
+            `);
+
+            return result.recordset;
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der SessionTypes:', error);
+            return [];
+        }
+    }
+
+    /**
+     * SessionType-Statistiken abrufen
+     * @param {Date} startDate - Startdatum für Statistik (optional)
+     * @param {Date} endDate - Enddatum für Statistik (optional)
+     * @returns {Array} - Statistiken pro SessionType
+     */
+    async getSessionTypeStats(startDate = null, endDate = null) {
+        try {
+            let whereClause = '';
+            let params = [];
+
+            if (startDate && endDate) {
+                whereClause = 'WHERE s.StartTS >= ? AND s.StartTS <= ?';
+                params = [startDate, endDate];
+            }
+
+            const result = await this.query(`
+                SELECT
+                    st.TypeName,
+                    st.Description,
+                    COUNT(s.ID) as TotalSessions,
+                    COUNT(CASE WHEN s.Active = 1 THEN 1 END) as ActiveSessions,
+                    AVG(CASE WHEN s.EndTS IS NOT NULL
+                                 THEN DATEDIFF(SECOND, s.StartTS, s.EndTS)
+                             ELSE NULL END) as AvgDurationSeconds,
+                    SUM(CASE WHEN s.EndTS IS NOT NULL
+                                 THEN DATEDIFF(SECOND, s.StartTS, s.EndTS)
+                             ELSE 0 END) as TotalDurationSeconds
+                FROM dbo.SessionTypes st
+                         LEFT JOIN dbo.Sessions s ON st.ID = s.SessionTypeID ${whereClause}
+                GROUP BY st.ID, st.TypeName, st.Description
+                ORDER BY TotalSessions DESC
+            `, params);
+
+            return result.recordset.map(stat => ({
+                ...stat,
+                AvgDurationMinutes: stat.AvgDurationSeconds ? Math.round(stat.AvgDurationSeconds / 60) : 0,
+                TotalDurationHours: Math.round(stat.TotalDurationSeconds / 3600 * 100) / 100
+            }));
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der SessionType-Statistiken:', error);
+            return [];
+        }
+    }
+
+    /**
+     * QR-Scans mit SessionType-Kontext abrufen
+     * @param {number} sessionId - Session ID (optional)
+     * @param {string} sessionTypeName - SessionType Name (optional)
+     * @returns {Array} - QR-Scans mit SessionType-Informationen
+     */
+    async getQrScansWithSessionType(sessionId = null, sessionTypeName = null) {
+        try {
+            let whereClause = '';
+            let params = [];
+
+            if (sessionId) {
+                whereClause = 'WHERE qr.SessionID = ?';
+                params = [sessionId];
+            } else if (sessionTypeName) {
+                whereClause = 'WHERE st.TypeName = ?';
+                params = [sessionTypeName];
+            }
+
+            const result = await this.query(`
+                SELECT
+                    qr.ID,
+                    qr.SessionID,
+                    qr.RawPayload,
+                    qr.PayloadJson,
+                    qr.CapturedTS,
+                    s.UserID,
+                    st.TypeName as SessionTypeName,
+                    sb.Vorname,
+                    sb.Nachname,
+                    sb.Benutzer
+                FROM dbo.QrScans qr
+                         INNER JOIN dbo.Sessions s ON qr.SessionID = s.ID
+                         LEFT JOIN dbo.SessionTypes st ON s.SessionTypeID = st.ID
+                         LEFT JOIN dbo.ScannBenutzer sb ON s.UserID = sb.ID
+                    ${whereClause}
+                ORDER BY qr.CapturedTS DESC
+            `, params);
+
+            return result.recordset.map(scan => ({
+                ...scan,
+                CapturedTS: this.normalizeTimestamp(scan.CapturedTS),
+                UserFullName: `${scan.Vorname || ''} ${scan.Nachname || ''}`.trim()
+            }));
+        } catch (error) {
+            customConsole.error('Fehler beim Abrufen der QR-Scans:', error);
+            return [];
         }
     }
 
@@ -367,7 +581,7 @@ class DatabaseClient {
     async getSessionDuration(sessionId) {
         try {
             const result = await this.query(`
-                SELECT 
+                SELECT
                     ID,
                     StartTS,
                     EndTS,
@@ -703,7 +917,7 @@ class DatabaseClient {
     async getQRScansBySession(sessionId, limit = 50) {
         try {
             const result = await this.query(`
-                SELECT 
+                SELECT
                     ID,
                     SessionID,
                     RawPayload,
@@ -711,10 +925,10 @@ class DatabaseClient {
                     JSON_VALUE(PayloadJson, '$.type') as PayloadType,
                     CapturedTS,
                     Valid
-                FROM dbo.QrScans 
+                FROM dbo.QrScans
                 WHERE SessionID = ?
                 ORDER BY CapturedTS DESC
-                ${limit > 0 ? `OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY` : ''}
+                    ${limit > 0 ? `OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY` : ''}
             `, [sessionId]);
 
             // Erweitere jeden Scan mit geparsten Daten
@@ -735,7 +949,7 @@ class DatabaseClient {
     async getQRScanById(scanId) {
         try {
             const result = await this.query(`
-                SELECT 
+                SELECT
                     ID,
                     SessionID,
                     RawPayload,
@@ -743,7 +957,7 @@ class DatabaseClient {
                     JSON_VALUE(PayloadJson, '$.type') as PayloadType,
                     CapturedTS,
                     Valid
-                FROM dbo.QrScans 
+                FROM dbo.QrScans
                 WHERE ID = ?
             `, [scanId]);
 
@@ -770,15 +984,15 @@ class DatabaseClient {
                 SELECT TOP(${limit})
                     q.ID,
                     q.SessionID,
-                    q.RawPayload,
-                    q.PayloadJson,
-                    JSON_VALUE(q.PayloadJson, '$.type') as PayloadType,
-                    q.CapturedTS,
-                    q.Valid,
-                    u.BenutzerName
+                       q.RawPayload,
+                       q.PayloadJson,
+                       JSON_VALUE(q.PayloadJson, '$.type') as PayloadType,
+                       q.CapturedTS,
+                       q.Valid,
+                       u.BenutzerName
                 FROM dbo.QrScans q
-                    INNER JOIN dbo.Sessions s ON q.SessionID = s.ID
-                    INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                         INNER JOIN dbo.Sessions s ON q.SessionID = s.ID
+                         INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
                 WHERE q.Valid = 1
                 ORDER BY q.CapturedTS DESC
             `);
@@ -802,7 +1016,7 @@ class DatabaseClient {
             const params = sessionId ? [sessionId] : [];
 
             const result = await this.query(`
-                SELECT 
+                SELECT
                     COUNT(*) as TotalScans,
                     COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'star_separated' THEN 1 END) as StarSeparated,
                     COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'caret_separated' THEN 1 END) as CaretSeparated,
@@ -812,8 +1026,8 @@ class DatabaseClient {
                     COUNT(CASE WHEN JSON_VALUE(PayloadJson, '$.type') = 'text' THEN 1 END) as TextCodes,
                     MIN(CapturedTS) as FirstScan,
                     MAX(CapturedTS) as LastScan
-                FROM dbo.QrScans 
-                ${whereClause}
+                FROM dbo.QrScans
+                         ${whereClause}
             `, params);
 
             const stats = result.recordset[0];
@@ -910,13 +1124,13 @@ class DatabaseClient {
             const result = await this.query(`
                 SELECT TOP ${limit}
                     ID,
-                    SessionID, 
-                    RawPayload,
-                    PayloadJson,
-                    JSON_VALUE(PayloadJson, '$.type') as PayloadType,
-                    CapturedTS
-                FROM dbo.QrScans 
-                ${whereClause}
+                    SessionID,
+                       RawPayload,
+                       PayloadJson,
+                       JSON_VALUE(PayloadJson, '$.type') as PayloadType,
+                       CapturedTS
+                FROM dbo.QrScans
+                         ${whereClause}
                 ORDER BY CapturedTS DESC
             `, params);
 
@@ -963,12 +1177,12 @@ class DatabaseClient {
                 SELECT TOP 1
                     ID,
                     SessionID,
-                    RawPayload,
-                    PayloadJson,
-                    CapturedTS,
-                    DATEDIFF(MINUTE, CapturedTS, SYSDATETIME()) as MinutesAgo
+                       RawPayload,
+                       PayloadJson,
+                       CapturedTS,
+                       DATEDIFF(MINUTE, CapturedTS, SYSDATETIME()) as MinutesAgo
                 FROM dbo.QrScans
-                WHERE RawPayload = ? 
+                WHERE RawPayload = ?
                   AND CapturedTS > DATEADD(MINUTE, -?, SYSDATETIME())
                   AND SessionID = ?
                 ORDER BY CapturedTS DESC
@@ -1299,4 +1513,52 @@ class DatabaseClient {
     }
 }
 
+// ===== SESSIONTYPE CONSTANTS & UTILITY FUNCTIONS =====
+
+/**
+ * Standard SessionTypes für die Anwendung
+ */
+const SESSION_TYPES = {
+    WARENEINGANG: 'Wareneingang',
+    QUALITAETSKONTROLLE: 'Qualitätskontrolle',
+    KOMMISSIONIERUNG: 'Kommissionierung',
+    INVENTUR: 'Inventur',
+    WARTUNG: 'Wartung'
+};
+
+/**
+ * Helper-Funktion zum Erstellen einer Wareneingang-Session
+ * @param {DatabaseClient} dbClient - Datenbankverbindung
+ * @param {number} userId - Benutzer-ID
+ * @returns {Object|null} - Neue Session oder null
+ */
+async function createWareneingangSession(dbClient, userId) {
+    return await dbClient.createSession(userId, SESSION_TYPES.WARENEINGANG);
+}
+
+/**
+ * Helper-Funktion zum Abrufen der SessionType-ID für Wareneingang
+ * @param {DatabaseClient} dbClient - Datenbankverbindung
+ * @returns {number|null} - SessionType ID oder null
+ */
+async function getWareneingangSessionTypeId(dbClient) {
+    try {
+        const types = await dbClient.getSessionTypes();
+        const wareneingang = types.find(type => type.TypeName === SESSION_TYPES.WARENEINGANG);
+        return wareneingang ? wareneingang.ID : null;
+    } catch (error) {
+        console.error('Fehler beim Abrufen der Wareneingang SessionType ID:', error);
+        return null;
+    }
+}
+
+// ===== EXPORT FÜR RÜCKWÄRTSKOMPATIBILITÄT =====
+
+// Standard-Export bleibt DatabaseClient (für bestehenden Code)
 module.exports = DatabaseClient;
+
+// Zusätzliche Named Exports als Properties
+module.exports.DatabaseClient = DatabaseClient;
+module.exports.SESSION_TYPES = SESSION_TYPES;
+module.exports.createWareneingangSession = createWareneingangSession;
+module.exports.getWareneingangSessionTypeId = getWareneingangSessionTypeId;
