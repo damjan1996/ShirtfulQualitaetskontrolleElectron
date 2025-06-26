@@ -694,7 +694,7 @@ class WareneingangApp {
                 case 'duplicate_transaction':
                     this.globalScannedCodes.add(qrData);
                     this.showScanSuccess(qrData, 'duplicate');
-                    this.showNotification('warning', 'Duplikat erkannt', message);
+                    this.showNotification('error', 'Duplikat erkannt', message);
                     break;
 
                 case 'rate_limit':
@@ -728,7 +728,7 @@ class WareneingangApp {
         // CSS-Klassen je nach Typ
         const feedbackClasses = {
             success: 'scan-feedback-success',
-            duplicate: 'scan-feedback-duplicate',
+            duplicate: 'scan-feedback-error', // Duplikate jetzt rot
             warning: 'scan-feedback-duplicate',
             error: 'scan-feedback-error',
             info: 'scan-feedback-success'
@@ -741,32 +741,7 @@ class WareneingangApp {
             overlay.classList.remove(feedbackClass);
         }, 1000);
 
-        // Vollbild-Erfolg anzeigen
-        const successOverlay = document.getElementById('scanSuccessOverlay');
-        const successDetails = document.getElementById('scanSuccessDetails');
-
-        // QR-Inhalt anzeigen (gekürzt)
-        const displayText = qrData.length > 50 ?
-            qrData.substring(0, 50) + '...' : qrData;
-        successDetails.textContent = displayText;
-
-        // Overlay-Farbe je nach Typ
-        if (type === 'duplicate' || type === 'warning') {
-            successOverlay.style.background = 'rgba(255, 193, 7, 0.9)';
-        } else if (type === 'error') {
-            successOverlay.style.background = 'rgba(220, 53, 69, 0.9)';
-        } else {
-            successOverlay.style.background = 'rgba(40, 167, 69, 0.9)';
-        }
-
-        successOverlay.classList.add('show');
-
-        setTimeout(() => {
-            successOverlay.classList.remove('show');
-            successOverlay.style.background = ''; // Reset
-        }, 2000);
-
-        // Sound-Feedback
+        // VISUELLES VOLLBILD-OVERLAY ENTFERNT - Nur noch Audio-Feedback
         this.playSuccessSound(type);
     }
 
@@ -784,19 +759,34 @@ class WareneingangApp {
             if (type === 'success') {
                 oscillator.frequency.setValueAtTime(800, context.currentTime);
                 oscillator.frequency.setValueAtTime(1000, context.currentTime + 0.1);
-            } else if (type === 'duplicate' || type === 'warning') {
+                gainNode.gain.setValueAtTime(0.3, context.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
+                oscillator.start(context.currentTime);
+                oscillator.stop(context.currentTime + 0.3);
+            } else if (type === 'duplicate') {
+                // BEMERKBARER DUPLIKAT-SOUND: Längerer, tieferer, dringenderer Ton
+                oscillator.frequency.setValueAtTime(400, context.currentTime);
+                oscillator.frequency.setValueAtTime(350, context.currentTime + 0.2);
+                oscillator.frequency.setValueAtTime(400, context.currentTime + 0.4);
+                gainNode.gain.setValueAtTime(0.5, context.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.6);
+                oscillator.start(context.currentTime);
+                oscillator.stop(context.currentTime + 0.6);
+            } else if (type === 'warning') {
                 oscillator.frequency.setValueAtTime(600, context.currentTime);
                 oscillator.frequency.setValueAtTime(700, context.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.3, context.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
+                oscillator.start(context.currentTime);
+                oscillator.stop(context.currentTime + 0.3);
             } else if (type === 'error') {
                 oscillator.frequency.setValueAtTime(400, context.currentTime);
                 oscillator.frequency.setValueAtTime(300, context.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.3, context.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
+                oscillator.start(context.currentTime);
+                oscillator.stop(context.currentTime + 0.3);
             }
-
-            gainNode.gain.setValueAtTime(0.3, context.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
-
-            oscillator.start(context.currentTime);
-            oscillator.stop(context.currentTime + 0.3);
         } catch (error) {
             // Sound-Fehler ignorieren
             console.log('Sound-Feedback nicht verfügbar');
@@ -870,9 +860,9 @@ class WareneingangApp {
                     ` (vor ${duplicateInfo.minutesAgo} Min)` : '';
                 return {
                     cssClass: 'scan-duplicate',
-                    icon: '⚠️',
+                    icon: '🚫',
                     label: `Duplikat${timeInfo}`,
-                    color: '#ffc107'
+                    color: '#dc3545' // ROT statt gelb
                 };
 
             case 'rate_limit':
