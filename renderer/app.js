@@ -657,11 +657,19 @@ class WareneingangApp {
         }
     }
 
-    // ===== STRUKTURIERTE SCAN-RESULT-BEHANDLUNG =====
+    // ===== STRUKTURIERTE SCAN-RESULT-BEHANDLUNG MIT DEKODIERUNG =====
     handleScanResult(result, qrData) {
         const { success, status, message, data, duplicateInfo } = result;
 
         console.log('QR-Scan Ergebnis:', { success, status, message });
+
+        // Dekodierte Daten extrahieren falls verfügbar
+        let decodedData = null;
+        if (data && data.DecodedData) {
+            decodedData = data.DecodedData;
+        } else if (data && data.ParsedPayload && data.ParsedPayload.decoded) {
+            decodedData = data.ParsedPayload.decoded;
+        }
 
         // Zu Recent Scans hinzufügen (alle Ergebnisse)
         const scanItem = {
@@ -672,7 +680,8 @@ class WareneingangApp {
             status: status,
             message: message,
             success: success,
-            duplicateInfo: duplicateInfo
+            duplicateInfo: duplicateInfo,
+            decodedData: decodedData // ← Dekodierte Daten hinzufügen
         };
 
         this.addToRecentScans(scanItem);
@@ -685,7 +694,19 @@ class WareneingangApp {
             this.scanCount++;
             this.updateUserDisplay();
             this.showScanSuccess(qrData, 'success');
-            this.showNotification('success', 'QR-Code gespeichert', message);
+
+            // Erweiterte Nachricht mit dekodierten Daten
+            let enhancedMessage = message;
+            if (decodedData) {
+                const parts = [];
+                if (decodedData.auftrags_nr) parts.push(`Auftrag: ${decodedData.auftrags_nr}`);
+                if (decodedData.paket_nr) parts.push(`Paket: ${decodedData.paket_nr}`);
+                if (parts.length > 0) {
+                    enhancedMessage = `${message} (${parts.join(', ')})`;
+                }
+            }
+
+            this.showNotification('success', 'QR-Code gespeichert', enhancedMessage);
         } else {
             // Verschiedene Fehler/Duplikat-Typen
             switch (status) {
@@ -793,7 +814,7 @@ class WareneingangApp {
         }
     }
 
-    // ===== RECENT SCANS MIT ERWEITERTEN STATUS-ANZEIGEN =====
+    // ===== RECENT SCANS MIT ERWEITERTEN STATUS-ANZEIGEN UND DEKODIERUNG =====
     addToRecentScans(scan) {
         this.recentScans.unshift(scan);
 
@@ -823,6 +844,9 @@ class WareneingangApp {
             // CSS-Klassen und Icons je nach Status
             const statusInfo = this.getScanStatusInfo(scan);
 
+            // Dekodierte Daten formatieren
+            const decodedInfo = this.formatDecodedData(scan.decodedData);
+
             return `
                 <div class="scan-item ${statusInfo.cssClass}">
                     <div class="scan-header">
@@ -831,6 +855,24 @@ class WareneingangApp {
                             ${statusInfo.icon} ${statusInfo.label}
                         </span>
                     </div>
+                    
+                    ${decodedInfo.hasData ? `
+                        <div class="scan-decoded-data">
+                            <div class="decoded-summary">
+                                <span class="decoded-icon">${decodedInfo.icon}</span>
+                                <span class="decoded-title">${decodedInfo.title}</span>
+                            </div>
+                            <div class="decoded-fields">
+                                ${decodedInfo.fields.map(field => `
+                                    <div class="decoded-field">
+                                        <span class="field-label">${field.label}:</span>
+                                        <span class="field-value">${field.value}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
                     <div class="scan-content">${contentPreview}</div>
                     <div class="scan-info">${scan.message}</div>
                 </div>
@@ -838,6 +880,77 @@ class WareneingangApp {
         }).join('');
 
         scansList.innerHTML = scansHtml;
+    }
+
+    /**
+     * Formatiert dekodierte QR-Code Daten für die Anzeige
+     * @param {Object} decodedData - Dekodierte Daten
+     * @returns {Object} - Formatierte Anzeige-Informationen
+     */
+    formatDecodedData(decodedData) {
+        if (!decodedData || typeof decodedData !== 'object') {
+            return {
+                hasData: false,
+                icon: '📄',
+                title: 'Unstrukturierte Daten',
+                fields: []
+            };
+        }
+
+        const { auftrags_nr, paket_nr, kunden_name } = decodedData;
+        const fields = [];
+
+        // Auftragsnummer
+        if (auftrags_nr && auftrags_nr.trim()) {
+            fields.push({
+                label: 'Auftrag',
+                value: auftrags_nr,
+                type: 'auftrag'
+            });
+        }
+
+        // Paketnummer
+        if (paket_nr && paket_nr.trim()) {
+            fields.push({
+                label: 'Paket',
+                value: paket_nr,
+                type: 'paket'
+            });
+        }
+
+        // Kundenname/ID
+        if (kunden_name && kunden_name.trim()) {
+            fields.push({
+                label: 'Kunde',
+                value: kunden_name,
+                type: 'kunde'
+            });
+        }
+
+        // Icon und Titel basierend auf verfügbaren Daten
+        let icon = '📄';
+        let title = 'Paketdaten';
+
+        if (auftrags_nr && paket_nr) {
+            icon = '📦';
+            title = 'Vollständige Paketinformationen';
+        } else if (auftrags_nr || paket_nr) {
+            icon = '📋';
+            title = 'Teilweise Paketinformationen';
+        } else if (kunden_name) {
+            icon = '👤';
+            title = 'Kundeninformationen';
+        } else {
+            icon = '📄';
+            title = 'Unstrukturierte Daten';
+        }
+
+        return {
+            hasData: fields.length > 0,
+            icon: icon,
+            title: title,
+            fields: fields
+        };
     }
 
     getScanStatusInfo(scan) {

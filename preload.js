@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     db: {
         query: (query, params) => ipcRenderer.invoke('db-query', query, params),
         getUserByEPC: (tagId) => ipcRenderer.invoke('db-get-user-by-epc', tagId),
-        getUserById: (userId) => ipcRenderer.invoke('db-get-user-by-id', userId)  // ← Diese Zeile hinzufügen
+        getUserById: (userId) => ipcRenderer.invoke('db-get-user-by-id', userId)
     },
 
     // ===== SESSION MANAGEMENT =====
@@ -15,9 +15,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         end: (sessionId) => ipcRenderer.invoke('session-end', sessionId)
     },
 
-    // ===== QR-CODE OPERATIONEN =====
+    // ===== QR-CODE OPERATIONEN MIT DEKODIERUNG =====
     qr: {
-        saveScan: (sessionId, payload) => ipcRenderer.invoke('qr-scan-save', sessionId, payload)
+        saveScan: (sessionId, payload) => ipcRenderer.invoke('qr-scan-save', sessionId, payload),
+        getDecodedScans: (sessionId, limit) => ipcRenderer.invoke('qr-get-decoded-scans', sessionId, limit),
+        searchDecoded: (searchTerm, sessionId) => ipcRenderer.invoke('qr-search-decoded', searchTerm, sessionId),
+        getDecodingStats: (sessionId) => ipcRenderer.invoke('qr-get-decoding-stats', sessionId)
     },
 
     // ===== RFID OPERATIONEN =====
@@ -48,7 +51,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
             'user-login',
             'user-logout',
             'rfid-scan-error',
-            'qr-scan-detected'
+            'qr-scan-detected',
+            'decoding-stats-updated'
         ];
 
         if (validChannels.includes(channel)) {
@@ -68,7 +72,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
             'user-login',
             'user-logout',
             'rfid-scan-error',
-            'qr-scan-detected'
+            'qr-scan-detected',
+            'decoding-stats-updated'
         ];
 
         if (validChannels.includes(channel)) {
@@ -100,7 +105,7 @@ contextBridge.exposeInMainWorld('cameraAPI', {
     }
 });
 
-// ===== VERBESSERTE UTILITY FUNKTIONEN =====
+// ===== VERBESSERTE UTILITY FUNKTIONEN MIT QR-CODE DEKODIERUNG =====
 contextBridge.exposeInMainWorld('utils', {
     // ===== ZEIT & DATUM FORMATIERUNG =====
     formatDuration: (seconds) => {
@@ -134,7 +139,8 @@ contextBridge.exposeInMainWorld('utils', {
                         ...options,
                         hour: '2-digit',
                         minute: '2-digit',
-                        second: '2-digit'
+                        second: '2-digit',
+                        hour12: false
                     });
 
                 case 'date':
@@ -224,7 +230,257 @@ contextBridge.exposeInMainWorld('utils', {
         }
     },
 
-    // ===== QR-CODE VERARBEITUNG =====
+    // ===== QR-CODE DEKODIERUNG UND VERARBEITUNG =====
+
+    /**
+     * Dekodiert QR-Code Daten basierend auf der Backend-Logik
+     * @param {string} data - Rohe QR-Code Daten
+     * @returns {Object} - Dekodierte Informationen
+     */
+    decodeQRData: (data) => {
+        const result = {
+            auftrags_nr: "",
+            paket_nr: "",
+            kunden_name: "",
+            original_data: data,
+            format_type: "unknown"
+        };
+
+        if (!data || typeof data !== 'string') {
+            return result;
+        }
+
+        try {
+            // Spezielles durch ^ getrenntes Format (hat höchste Priorität)
+            if (data.includes('^')) {
+                const parts = data.split('^');
+
+                // Wir benötigen mindestens 4 Teile für Auftragsnummer und Paketnummer
+                if (parts.length >= 4) {
+                    result.format_type = "caret_separated";
+
+                    // Auftragsnummer ist im zweiten Feld (Index 1)
+                    result.auftrags_nr = parts[1] || "";
+
+                    // Paketnummer ist im vierten Feld (Index 3)
+                    result.paket_nr = parts[3] || "";
+
+                    // Falls verfügbar, Kundennummer oder ID im dritten Feld (Index 2)
+                    if (parts.length > 2 && parts[2]) {
+                        result.kunden_name = `Kunden-ID: ${parts[2]}`;
+                    }
+
+                    return result;
+                }
+            }
+
+            result.format_type = "pattern_matching";
+
+            // Versuch, die Auftragsnummer zu extrahieren
+            // Basierend auf den Beispielbildern, Muster "NL-XXXXXXX" oder ähnlich
+            const auftragsNrMatch = data.match(/[A-Z]{2}-\d+/);
+            if (auftragsNrMatch) {
+                result.auftrags_nr = auftragsNrMatch[0];
+            }
+
+            // Versuch, die Paketnummer zu extrahieren
+            // Langer numerischer Code, wie in den Beispielbildern
+            const paketNrMatch = data.match(/\d{10,}/);
+            if (paketNrMatch) {
+                result.paket_nr = paketNrMatch[0];
+            }
+
+            // Versuch, den Kundennamen zu extrahieren
+            if (data.includes("KUNDENNAME:")) {
+                const parts = data.split("KUNDENNAME:");
+                if (parts.length > 1) {
+                    let kundenName = parts[1].trim();
+                    // Bis zum nächsten Schlüsselwort oder Ende nehmen
+                    const endMarkers = ["PAKET-NR", "AUFTRAG", "\n"];
+                    for (const marker of endMarkers) {
+                        if (kundenName.includes(marker)) {
+                            kundenName = kundenName.split(marker)[0].trim();
+                            break;
+                        }
+                    }
+                    result.kunden_name = kundenName;
+                }
+            }
+
+            // Zusätzliche Suche für andere Formate
+            // Nach "Referenz: XXX" oder ähnlichen Patterns suchen
+            if (!result.auftrags_nr) {
+                const referenzMatch = data.match(/Referenz:\s+([A-Z0-9-]+)/);
+                if (referenzMatch) {
+                    result.auftrags_nr = referenzMatch[1];
+                }
+            }
+
+            // Nach "Tracking: XXX" oder ähnlichen Patterns suchen
+            if (!result.paket_nr) {
+                const trackingMatch = data.match(/Tracking:\s+(\d+)/);
+                if (trackingMatch) {
+                    result.paket_nr = trackingMatch[1];
+                }
+            }
+
+            return result;
+
+        } catch (error) {
+            console.error('Fehler beim Dekodieren der QR-Code Daten:', error);
+            result.format_type = "error";
+            return result;
+        }
+    },
+
+    /**
+     * Erstellt eine benutzerfreundliche Anzeige für dekodierte QR-Codes
+     * @param {Object} decoded - Dekodierte QR-Code Daten
+     * @returns {Object} - Formatierte Anzeige-Informationen
+     */
+    formatDecodedData: (decoded) => {
+        if (!decoded || typeof decoded !== 'object') {
+            return {
+                hasData: false,
+                icon: '📄',
+                title: 'Unstrukturierte Daten',
+                fields: [],
+                summary: 'Keine dekodierten Daten verfügbar'
+            };
+        }
+
+        const { auftrags_nr, paket_nr, kunden_name, format_type } = decoded;
+        const fields = [];
+
+        // Auftragsnummer
+        if (auftrags_nr && auftrags_nr.trim()) {
+            fields.push({
+                label: 'Auftrag',
+                value: auftrags_nr.trim(),
+                type: 'auftrag',
+                icon: '📋'
+            });
+        }
+
+        // Paketnummer
+        if (paket_nr && paket_nr.trim()) {
+            fields.push({
+                label: 'Paket',
+                value: paket_nr.trim(),
+                type: 'paket',
+                icon: '📦'
+            });
+        }
+
+        // Kundenname/ID
+        if (kunden_name && kunden_name.trim()) {
+            fields.push({
+                label: 'Kunde',
+                value: kunden_name.trim(),
+                type: 'kunde',
+                icon: '👤'
+            });
+        }
+
+        // Icon und Titel basierend auf verfügbaren Daten
+        let icon = '📄';
+        let title = 'Paketdaten';
+        let quality = 'minimal';
+
+        if (auftrags_nr && paket_nr) {
+            icon = '📦';
+            title = 'Vollständige Paketinformationen';
+            quality = 'complete';
+        } else if (auftrags_nr || paket_nr) {
+            icon = '📋';
+            title = 'Teilweise Paketinformationen';
+            quality = 'partial';
+        } else if (kunden_name) {
+            icon = '👤';
+            title = 'Kundeninformationen';
+            quality = 'customer';
+        } else {
+            icon = '📄';
+            title = 'Unstrukturierte Daten';
+            quality = 'minimal';
+        }
+
+        // Zusammenfassung erstellen
+        const parts = [];
+        if (auftrags_nr) parts.push(`Auftrag: ${auftrags_nr}`);
+        if (paket_nr) parts.push(`Paket: ${paket_nr}`);
+        if (kunden_name) parts.push(kunden_name);
+
+        const summary = parts.length > 0 ? parts.join(' • ') : 'Keine strukturierten Daten erkannt';
+
+        return {
+            hasData: fields.length > 0,
+            icon: icon,
+            title: title,
+            fields: fields,
+            summary: summary,
+            quality: quality,
+            formatType: format_type || 'unknown'
+        };
+    },
+
+    /**
+     * Validiert dekodierte QR-Code Daten
+     * @param {Object} decoded - Dekodierte Daten
+     * @returns {Object} - Validierungsergebnis
+     */
+    validateDecodedData: (decoded) => {
+        const validation = {
+            isValid: false,
+            hasAuftrag: false,
+            hasPaket: false,
+            hasKunde: false,
+            completeness: 0,
+            issues: []
+        };
+
+        if (!decoded || typeof decoded !== 'object') {
+            validation.issues.push('Keine dekodierten Daten vorhanden');
+            return validation;
+        }
+
+        const { auftrags_nr, paket_nr, kunden_name } = decoded;
+
+        // Auftragsnummer prüfen
+        if (auftrags_nr && auftrags_nr.trim()) {
+            validation.hasAuftrag = true;
+            // Validiere Format (z.B. NL-123456)
+            if (!/^[A-Z]{2}-\d+$/.test(auftrags_nr.trim())) {
+                validation.issues.push('Auftragsnummer hat ungewöhnliches Format');
+            }
+        }
+
+        // Paketnummer prüfen
+        if (paket_nr && paket_nr.trim()) {
+            validation.hasPaket = true;
+            // Validiere dass es numerisch ist und mindestens 10 Stellen hat
+            if (!/^\d{10,}$/.test(paket_nr.trim())) {
+                validation.issues.push('Paketnummer hat ungewöhnliches Format');
+            }
+        }
+
+        // Kundenname prüfen
+        if (kunden_name && kunden_name.trim()) {
+            validation.hasKunde = true;
+        }
+
+        // Vollständigkeit berechnen
+        let completenessScore = 0;
+        if (validation.hasAuftrag) completenessScore += 40;
+        if (validation.hasPaket) completenessScore += 40;
+        if (validation.hasKunde) completenessScore += 20;
+
+        validation.completeness = completenessScore;
+        validation.isValid = validation.hasAuftrag || validation.hasPaket;
+
+        return validation;
+    },
+
     parseQRPayload: (payload) => {
         if (!payload || typeof payload !== 'string') {
             return { type: 'invalid', data: null, display: 'Ungültiger QR-Code' };
@@ -240,6 +496,20 @@ contextBridge.exposeInMainWorld('utils', {
                 preview: this.createJSONPreview(jsonData)
             };
         } catch (e) {
+            // Versuche QR-Code zu dekodieren
+            const decoded = this.decodeQRData(payload);
+            const formatted = this.formatDecodedData(decoded);
+
+            if (formatted.hasData) {
+                return {
+                    type: 'decoded_qr',
+                    data: decoded,
+                    display: formatted.summary,
+                    preview: formatted.title,
+                    formatted: formatted
+                };
+            }
+
             // Key-Value Format versuchen (Format: key1:value1^key2:value2)
             if (payload.includes('^') && payload.includes(':')) {
                 const parts = payload.split('^');
@@ -336,7 +606,7 @@ contextBridge.exposeInMainWorld('utils', {
         }
     },
 
-    // ===== SCAN RESULT HANDLING =====
+    // ===== SCAN RESULT HANDLING MIT DEKODIERUNG =====
     formatScanResult: (result) => {
         if (!result || typeof result !== 'object') {
             return {
@@ -350,6 +620,19 @@ contextBridge.exposeInMainWorld('utils', {
 
         let formattedMessage = message || 'Unbekannter Status';
         let displayType = status || 'unknown';
+        let decodedSummary = null;
+
+        // Dekodierte Daten extrahieren falls verfügbar
+        if (data && data.DecodedData) {
+            const formatted = this.formatDecodedData(data.DecodedData);
+            if (formatted.hasData) {
+                decodedSummary = formatted.summary;
+                // Nachricht mit dekodierten Daten erweitern
+                if (success) {
+                    formattedMessage = `${message} - ${formatted.summary}`;
+                }
+            }
+        }
 
         // Status-spezifische Formatierung
         switch (status) {
@@ -372,6 +655,9 @@ contextBridge.exposeInMainWorld('utils', {
             case 'saved':
                 if (data && data.ID) {
                     formattedMessage = `Erfolgreich gespeichert (ID: ${data.ID})`;
+                    if (decodedSummary) {
+                        formattedMessage += ` - ${decodedSummary}`;
+                    }
                 }
                 displayType = 'success';
                 break;
@@ -392,8 +678,36 @@ contextBridge.exposeInMainWorld('utils', {
             status: displayType,
             data: data || null,
             duplicateInfo: duplicateInfo || null,
+            decodedSummary: decodedSummary,
             timestamp: new Date().toISOString()
         };
+    },
+
+    // ===== COPY TO CLIPBOARD FUNKTIONALITÄT =====
+    copyToClipboard: async (text) => {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } else {
+                // Fallback für ältere Browser
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                textArea.style.top = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+
+                const result = document.execCommand('copy');
+                document.body.removeChild(textArea);
+                return result;
+            }
+        } catch (error) {
+            console.error('Clipboard-Fehler:', error);
+            return false;
+        }
     },
 
     // ===== ZAHLKONVERTIERUNG =====
@@ -741,7 +1055,7 @@ document.addEventListener('DOMContentLoaded', () => {
         originalConsoleWarn.apply(console, args);
     };
 
-    console.log('✅ Preload Script erfolgreich initialisiert');
+    console.log('✅ Preload Script erfolgreich initialisiert mit QR-Code Dekodierung');
 });
 
-console.log('Preload Script geladen');
+console.log('Preload Script mit QR-Code Dekodierung geladen');

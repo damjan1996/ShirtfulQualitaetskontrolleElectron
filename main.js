@@ -45,6 +45,15 @@ class WareneingangMainApp {
         this.qrScanRateLimit = new Map();
         this.maxQRScansPerMinute = 20; // Verhindere übermäßige Scans
 
+        // QR-Code Dekodierung Statistiken
+        this.decodingStats = {
+            totalScans: 0,
+            successfulDecodes: 0,
+            withAuftrag: 0,
+            withPaket: 0,
+            withKunde: 0
+        };
+
         this.initializeApp();
     }
 
@@ -197,6 +206,9 @@ class WareneingangMainApp {
 
             console.log('✅ Datenbank erfolgreich verbunden');
 
+            // QR-Code Dekodierung Statistiken laden
+            await this.loadDecodingStats();
+
         } catch (error) {
             this.systemStatus.database = false;
             this.systemStatus.lastError = `Datenbank: ${error.message}`;
@@ -214,6 +226,28 @@ class WareneingangMainApp {
                     '• SQL Server Verfügbarkeit'
                 );
             }
+        }
+    }
+
+    async loadDecodingStats() {
+        try {
+            if (!this.dbClient || !this.systemStatus.database) return;
+
+            const stats = await this.dbClient.getQRScanStats();
+            if (stats) {
+                this.decodingStats = {
+                    totalScans: stats.TotalScans || 0,
+                    successfulDecodes: stats.DecodedScans || 0,
+                    withAuftrag: stats.ScansWithAuftrag || 0,
+                    withPaket: stats.ScansWithPaket || 0,
+                    withKunde: stats.ScansWithKunde || 0,
+                    decodingSuccessRate: stats.DecodingSuccessRate || 0
+                };
+
+                console.log('📋 QR-Code Dekodierung Statistiken geladen:', this.decodingStats);
+            }
+        } catch (error) {
+            console.error('Fehler beim Laden der Dekodierung-Statistiken:', error);
         }
     }
 
@@ -364,7 +398,7 @@ class WareneingangMainApp {
             }
         });
 
-        // ===== QR-CODE OPERATIONEN MIT STRUKTURIERTEN ANTWORTEN =====
+        // ===== QR-CODE OPERATIONEN MIT STRUKTURIERTEN ANTWORTEN UND DEKODIERUNG =====
         ipcMain.handle('qr-scan-save', async (event, sessionId, payload) => {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
@@ -391,18 +425,22 @@ class WareneingangMainApp {
                 // Payload bereinigen (BOM entfernen falls vorhanden)
                 const cleanPayload = payload.replace(/^\ufeff/, '');
 
-                // QR-Scan speichern - gibt jetzt immer strukturierte Antwort zurück
+                // QR-Scan speichern - gibt jetzt immer strukturierte Antwort mit Dekodierung zurück
                 const result = await this.dbClient.saveQRScan(sessionId, cleanPayload);
 
                 // Rate Limit Counter aktualisieren bei erfolgreichen Scans
                 if (result.success) {
                     this.updateQRScanRateLimit(sessionId);
+
+                    // Dekodierung-Statistiken aktualisieren
+                    await this.updateDecodingStats(result);
                 }
 
                 console.log(`QR-Scan Ergebnis für Session ${sessionId}:`, {
                     success: result.success,
                     status: result.status,
-                    message: result.message
+                    message: result.message,
+                    hasDecodedData: !!(result.data?.DecodedData)
                 });
 
                 return result;
@@ -419,6 +457,54 @@ class WareneingangMainApp {
             }
         });
 
+        // ===== QR-CODE DEKODIERUNG OPERATIONEN =====
+        ipcMain.handle('qr-get-decoded-scans', async (event, sessionId, limit = 50) => {
+            try {
+                if (!this.dbClient || !this.systemStatus.database) {
+                    return [];
+                }
+
+                const scans = await this.dbClient.getQRScansBySession(sessionId, limit);
+
+                // Nur Scans mit dekodierten Daten zurückgeben
+                return scans.filter(scan => scan.DecodedData && Object.keys(scan.DecodedData).length > 0);
+            } catch (error) {
+                console.error('Fehler beim Abrufen dekodierter QR-Scans:', error);
+                return [];
+            }
+        });
+
+        ipcMain.handle('qr-search-decoded', async (event, searchTerm, sessionId = null) => {
+            try {
+                if (!this.dbClient || !this.systemStatus.database) {
+                    return [];
+                }
+
+                return await this.dbClient.searchQRScans(searchTerm, sessionId, 20);
+            } catch (error) {
+                console.error('Fehler bei dekodierter QR-Code-Suche:', error);
+                return [];
+            }
+        });
+
+        ipcMain.handle('qr-get-decoding-stats', async (event, sessionId = null) => {
+            try {
+                if (!this.dbClient || !this.systemStatus.database) {
+                    return this.decodingStats;
+                }
+
+                const stats = await this.dbClient.getQRScanStats(sessionId);
+                return {
+                    ...this.decodingStats,
+                    ...stats,
+                    lastUpdated: new Date().toISOString()
+                };
+            } catch (error) {
+                console.error('Fehler beim Abrufen der Dekodierung-Statistiken:', error);
+                return this.decodingStats;
+            }
+        });
+
         // ===== SYSTEM STATUS =====
         ipcMain.handle('get-system-status', async (event) => {
             return {
@@ -428,7 +514,8 @@ class WareneingangMainApp {
                 currentSession: this.currentSession,
                 uptime: Math.floor(process.uptime()),
                 timestamp: new Date().toISOString(),
-                qrScanStats: this.getQRScanStats()
+                qrScanStats: this.getQRScanStats(),
+                decodingStats: this.decodingStats
             };
         });
 
@@ -439,7 +526,12 @@ class WareneingangMainApp {
                 nodeVersion: process.versions.node,
                 platform: process.platform,
                 arch: process.arch,
-                env: process.env.NODE_ENV || 'production'
+                env: process.env.NODE_ENV || 'production',
+                features: {
+                    qrDecoding: true,
+                    decodingFormats: ['caret_separated', 'pattern_matching', 'structured_data'],
+                    supportedFields: ['auftrags_nr', 'paket_nr', 'kunden_name']
+                }
             };
         });
 
@@ -482,6 +574,54 @@ class WareneingangMainApp {
             app.relaunch();
             app.exit();
         });
+    }
+
+    // ===== QR-CODE DEKODIERUNG STATISTIKEN =====
+    async updateDecodingStats(scanResult) {
+        try {
+            if (!scanResult.success || !scanResult.data) return;
+
+            this.decodingStats.totalScans++;
+
+            const decodedData = scanResult.data.DecodedData;
+            if (decodedData) {
+                this.decodingStats.successfulDecodes++;
+
+                if (decodedData.auftrags_nr && decodedData.auftrags_nr.trim()) {
+                    this.decodingStats.withAuftrag++;
+                }
+
+                if (decodedData.paket_nr && decodedData.paket_nr.trim()) {
+                    this.decodingStats.withPaket++;
+                }
+
+                if (decodedData.kunden_name && decodedData.kunden_name.trim()) {
+                    this.decodingStats.withKunde++;
+                }
+
+                // Success Rate berechnen
+                this.decodingStats.decodingSuccessRate = Math.round(
+                    (this.decodingStats.successfulDecodes / this.decodingStats.totalScans) * 100
+                );
+
+                console.log(`📊 Dekodierung-Statistiken aktualisiert:`, {
+                    total: this.decodingStats.totalScans,
+                    decoded: this.decodingStats.successfulDecodes,
+                    rate: this.decodingStats.decodingSuccessRate + '%',
+                    auftrag: this.decodingStats.withAuftrag,
+                    paket: this.decodingStats.withPaket,
+                    kunde: this.decodingStats.withKunde
+                });
+
+                // Statistiken an Renderer senden
+                this.sendToRenderer('decoding-stats-updated', {
+                    stats: this.decodingStats,
+                    timestamp: new Date().toISOString()
+                });
+            }
+        } catch (error) {
+            console.error('Fehler beim Aktualisieren der Dekodierung-Statistiken:', error);
+        }
     }
 
     // ===== ZEITSTEMPEL NORMALISIERUNG =====
@@ -687,7 +827,8 @@ class WareneingangMainApp {
             database: this.systemStatus.database,
             rfid: this.systemStatus.rfid,
             lastError: this.systemStatus.lastError,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            decodingStats: this.decodingStats
         });
     }
 
@@ -704,6 +845,15 @@ class WareneingangMainApp {
 
             // Rate Limits zurücksetzen
             this.qrScanRateLimit.clear();
+
+            // Dekodierung-Statistiken zurücksetzen
+            this.decodingStats = {
+                totalScans: 0,
+                successfulDecodes: 0,
+                withAuftrag: 0,
+                withPaket: 0,
+                withKunde: 0
+            };
 
             // RFID-Listener stoppen
             if (this.rfidListener) {
