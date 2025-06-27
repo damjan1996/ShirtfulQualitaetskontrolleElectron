@@ -52,7 +52,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
             'user-logout',
             'rfid-scan-error',
             'qr-scan-detected',
-            'decoding-stats-updated'
+            'decoding-stats-updated',
+            'session-reset-before-login' // ← Neues Event für RFID-Benutzerwechsel
         ];
 
         if (validChannels.includes(channel)) {
@@ -73,7 +74,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
             'user-logout',
             'rfid-scan-error',
             'qr-scan-detected',
-            'decoding-stats-updated'
+            'decoding-stats-updated',
+            'session-reset-before-login' // ← Neues Event für RFID-Benutzerwechsel
         ];
 
         if (validChannels.includes(channel)) {
@@ -1055,7 +1057,7 @@ document.addEventListener('DOMContentLoaded', () => {
         originalConsoleWarn.apply(console, args);
     };
 
-    console.log('✅ Preload Script erfolgreich initialisiert mit QR-Code Dekodierung');
+    console.log('✅ Preload Script erfolgreich initialisiert mit QR-Code Dekodierung und Session-Reset Support');
 });
 
-console.log('Preload Script mit QR-Code Dekodierung geladen');
+console.log('Preload Script mit QR-Code Dekodierung und Session-Reset Support geladen');

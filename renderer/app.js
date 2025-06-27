@@ -31,6 +31,9 @@ class WareneingangApp {
         this.lastProcessedQR = null;
         this.lastProcessedTime = 0;
 
+        // Session-Reset Status für RFID-Wechsel
+        this.sessionResetInProgress = false;
+
         this.init();
     }
 
@@ -106,7 +109,6 @@ class WareneingangApp {
         });
     }
 
-    // ===== IPC EVENT LISTENERS - ERWEITERT FÜR AUTOMATISCHE LOGOUTS =====
     setupIPCListeners() {
         // System bereit
         window.electronAPI.on('system-ready', (data) => {
@@ -122,50 +124,22 @@ class WareneingangApp {
             this.showErrorModal('System-Fehler', data.error);
         });
 
-        // ===== ERWEITERTE BENUTZER-ANMELDUNG =====
-        window.electronAPI.on('user-login', (data) => {
-            console.log('Benutzer-Anmeldung:', data);
-
-            // Erweiterte Anmeldungslogik mit Info über vorherige Logouts
-            this.handleUserLogin(data.user, data.session);
-
-            // Falls vorherige Benutzer automatisch abgemeldet wurden, informiere darüber
-            if (data.previousLogouts && data.previousLogouts > 0) {
-                const message = data.previousLogouts === 1
-                    ? 'Ein anderer Benutzer wurde automatisch abgemeldet'
-                    : `${data.previousLogouts} andere Benutzer wurden automatisch abgemeldet`;
-
-                // Kurze Verzögerung, damit die Willkommensnachricht zuerst angezeigt wird
-                setTimeout(() => {
-                    this.showNotification('info', 'Automatische Abmeldung', message);
-                }, 1500);
-            }
+        // ===== NEUES EVENT: Session-Reset vor RFID-Login =====
+        window.electronAPI.on('session-reset-before-login', (data) => {
+            console.log('🔄 Session-Reset vor RFID-Login ausgelöst:', data);
+            this.handleSessionResetBeforeLogin(data);
         });
 
-        // ===== ERWEITERTE BENUTZER-ABMELDUNG =====
+        // Benutzer-Anmeldung
+        window.electronAPI.on('user-login', (data) => {
+            console.log('Benutzer-Anmeldung:', data);
+            this.handleUserLogin(data.user, data.session, data);
+        });
+
+        // Benutzer-Abmeldung
         window.electronAPI.on('user-logout', (data) => {
             console.log('Benutzer-Abmeldung:', data);
-
-            // Prüfen ob dies eine automatische Abmeldung ist
-            const isAutomaticLogout = data.reason === 'automatic_logout_new_user';
-            const isManualLogout = data.reason === 'manual_logout';
-
-            // Nur UI aktualisieren wenn es der aktuell angemeldete Benutzer ist
-            if (this.currentUser && this.currentUser.id === data.user.ID) {
-                this.handleUserLogout(data.user);
-
-                // Entsprechende Nachricht je nach Logout-Grund
-                if (isAutomaticLogout) {
-                    this.showNotification('info', 'Automatische Abmeldung',
-                        'Sie wurden abgemeldet - ein anderer Benutzer hat sich angemeldet');
-                } else if (isManualLogout) {
-                    this.showNotification('info', 'Abgemeldet',
-                        `${data.user.BenutzerName} abgemeldet`);
-                } else {
-                    this.showNotification('info', 'Abgemeldet',
-                        `${data.user.BenutzerName} abgemeldet`);
-                }
-            }
+            this.handleUserLogout(data.user, data);
         });
 
         // RFID-Fehler
@@ -173,22 +147,82 @@ class WareneingangApp {
             console.error('RFID-Fehler:', data);
             this.showNotification('error', 'RFID-Fehler', data.message);
         });
-
-        // QR-Code erkannt
-        window.electronAPI.on('qr-scan-detected', (data) => {
-            console.log('QR-Code erkannt:', data);
-            this.handleQRScanResult(data.payload, data.success);
-        });
-
-        // Dekodierung-Stats aktualisiert
-        window.electronAPI.on('decoding-stats-updated', (data) => {
-            console.log('Dekodierung-Stats:', data);
-            this.updateDecodingStats(data);
-        });
     }
 
-    // ===== ERWEITERTE USER MANAGEMENT METHODEN =====
-    handleUserLogin(user, session) {
+    // ===== NEUER SESSION-RESET HANDLER FÜR RFID-BENUTZERWECHSEL =====
+    handleSessionResetBeforeLogin(data) {
+        console.log('🔄 Führe vollständigen Session-Reset vor RFID-Login durch...');
+
+        this.sessionResetInProgress = true;
+
+        // QR-Scanner stoppen falls aktiv
+        if (this.scannerActive) {
+            console.log('⏹️ Stoppe QR-Scanner für Session-Reset...');
+            this.stopQRScanner();
+        }
+
+        // Session-Timer stoppen
+        this.stopSessionTimer();
+
+        // VOLLSTÄNDIGER RESET aller Session-Daten
+        this.globalScannedCodes.clear();
+        this.sessionScannedCodes.clear();
+        this.recentlyScanned.clear();
+        this.pendingScans.clear();
+        this.recentScans = [];
+        this.scanCount = 0;
+
+        // UI sofort aktualisieren
+        this.updateRecentScansList();
+
+        // Workspace vorübergehend verbergen für sauberen Übergang
+        document.getElementById('workspace').style.display = 'none';
+        document.getElementById('loginSection').style.display = 'flex';
+
+        // Session-Daten zurücksetzen
+        this.currentUser = null;
+        this.sessionStartTime = null;
+
+        console.log('✅ Vollständiger Session-Reset vor RFID-Login abgeschlossen');
+
+        // Kurze Benachrichtigung über Benutzerwechsel
+        if (data.newUser) {
+            this.showNotification('info', 'Benutzerwechsel',
+                `Wechsle zu ${data.newUser.BenutzerName}...`);
+        }
+
+        // Reset-Flag wird nach kurzer Verzögerung zurückgesetzt
+        setTimeout(() => {
+            this.sessionResetInProgress = false;
+        }, 500);
+    }
+
+    // ===== USER MANAGEMENT =====
+    handleUserLogin(user, session, eventData = {}) {
+        // Bei RFID-Reset bereits durchgeführt, aber sicherheitshalber nochmal prüfen
+        if (!this.sessionResetInProgress && eventData.source === 'rfid_scan') {
+            console.log('🔄 Sicherheits-Reset für RFID-Login (falls noch nicht erfolgt)...');
+
+            // Vollständiger Reset für RFID-basierte Anmeldungen
+            this.globalScannedCodes.clear();
+            this.sessionScannedCodes.clear();
+            this.recentlyScanned.clear();
+            this.pendingScans.clear();
+            this.recentScans = [];
+            this.scanCount = 0;
+
+            this.updateRecentScansList();
+        } else if (!eventData.source) {
+            // Für manuelle Anmeldungen (falls implementiert) normaler Reset
+            this.sessionScannedCodes.clear();
+            this.recentlyScanned.clear();
+            this.pendingScans.clear();
+            this.recentScans = [];
+            this.scanCount = 0;
+
+            this.updateRecentScansList();
+        }
+
         this.currentUser = {
             id: user.ID,
             name: user.BenutzerName,
@@ -223,40 +257,81 @@ class WareneingangApp {
             this.sessionStartTime = new Date(); // Fallback auf aktuelle Zeit
         }
 
-        this.scanCount = 0;
-
-        // Reset alle Duplikat-Sets bei neuer Anmeldung
-        this.sessionScannedCodes.clear();
-        this.recentlyScanned.clear();
-        this.pendingScans.clear();
-
         this.showWorkspace();
         this.startSessionTimer();
 
-        this.showNotification('success', 'Angemeldet', `Willkommen ${user.BenutzerName}!`);
+        // Spezielle Nachrichten für RFID-Wechsel
+        if (eventData.source === 'rfid_scan') {
+            const previousCount = eventData.previousLogouts || 0;
+            let message = `Willkommen ${user.BenutzerName}!`;
+            if (previousCount > 0) {
+                message += ` (${previousCount} vorherige Session${previousCount > 1 ? 's' : ''} beendet)`;
+            }
+            this.showNotification('success', 'RFID-Anmeldung', message);
+        } else {
+            this.showNotification('success', 'Angemeldet', `Willkommen ${user.BenutzerName}!`);
+        }
+
         this.updateInstructionText('QR-Code vor die Kamera halten um Pakete zu erfassen');
+
+        console.log('✅ Benutzer-Anmeldung abgeschlossen:', {
+            user: user.BenutzerName,
+            sessionId: session.ID,
+            source: eventData.source || 'unknown',
+            fullReset: eventData.fullReset || false,
+            scanHistoryCleared: this.recentScans.length === 0
+        });
     }
 
-    handleUserLogout(user) {
-        this.hideWorkspace();
-        this.stopSessionTimer();
-        this.stopQRScanner();
+    handleUserLogout(user, eventData = {}) {
+        const reason = eventData.reason || 'unknown';
 
-        this.currentUser = null;
-        this.sessionStartTime = null;
-        this.scanCount = 0;
+        // Bei manuellem Logout IMMER kompletten UI-Reset durchführen
+        if (reason === 'manual_logout' || !this.sessionResetInProgress) {
+            this.hideWorkspace();
+            this.stopSessionTimer();
+            this.stopQRScanner();
 
-        // Reset alle Duplikat-Sets bei Abmeldung
-        this.sessionScannedCodes.clear();
-        this.recentlyScanned.clear();
-        this.pendingScans.clear();
+            // Session-Daten zurücksetzen
+            this.currentUser = null;
+            this.sessionStartTime = null;
+            this.scanCount = 0;
 
-        // UI zurücksetzen
-        this.clearScanHistory();
+            // VOLLSTÄNDIGER RESET aller Session-Daten bei Abmeldung
+            this.globalScannedCodes.clear();
+            this.sessionScannedCodes.clear();
+            this.recentlyScanned.clear();
+            this.pendingScans.clear();
+            this.recentScans = [];
+
+            this.updateRecentScansList();
+        }
+
+        // Spezielle Behandlung für manuellen Logout: Immer Login-Bildschirm anzeigen
+        if (reason === 'manual_logout') {
+            // Sicherstellen dass Login-Bildschirm angezeigt wird
+            document.getElementById('workspace').style.display = 'none';
+            document.getElementById('loginSection').style.display = 'flex';
+
+            this.showNotification('info', 'Abgemeldet', `${user.BenutzerName} erfolgreich abgemeldet`);
+            console.log(`👋 Manueller Logout durchgeführt: ${user.BenutzerName}`);
+        } else if (reason === 'automatic_logout_rfid_switch') {
+            // Stille Abmeldung bei RFID-Wechsel (keine Benachrichtigung)
+            console.log(`👋 Automatische Abmeldung bei RFID-Wechsel: ${user.BenutzerName}`);
+        } else {
+            this.showNotification('info', 'Abgemeldet', `${user.BenutzerName} abgemeldet`);
+        }
+
         this.updateInstructionText('RFID-Tag scannen = Anmelden • QR-Code scannen = Paket erfassen');
+
+        console.log('✅ Benutzer-Abmeldung abgeschlossen:', {
+            user: user.BenutzerName,
+            reason: reason,
+            scanHistoryCleared: this.recentScans.length === 0,
+            loginScreenShown: reason === 'manual_logout'
+        });
     }
 
-    // ===== ERWEITERTE LOGOUT-METHODE =====
     async logoutCurrentUser() {
         if (!this.currentUser) return;
 
@@ -267,7 +342,7 @@ class WareneingangApp {
 
             if (success) {
                 // **WICHTIG: UI-Update direkt durchführen, nicht auf Event warten**
-                this.handleUserLogout(userToLogout);
+                this.handleUserLogout(userToLogout, { reason: 'manual_logout' });
 
                 this.showNotification('info', 'Abmeldung', 'Sie wurden erfolgreich abgemeldet');
             } else {
@@ -277,23 +352,6 @@ class WareneingangApp {
             console.error('Abmelde-Fehler:', error);
             this.showNotification('error', 'Fehler', 'Abmeldung fehlgeschlagen');
         }
-    }
-
-    // ===== HILFSMETHODEN =====
-    clearScanHistory() {
-        const scanList = document.getElementById('scansList');
-        if (scanList) {
-            scanList.innerHTML = '';
-        }
-
-        const scanCount = document.getElementById('sessionScans');
-        if (scanCount) {
-            scanCount.textContent = '0';
-        }
-
-        // Recentscans Array auch leeren
-        this.recentScans = [];
-        this.updateRecentScansList();
     }
 
     showWorkspace() {
@@ -310,16 +368,8 @@ class WareneingangApp {
     updateUserDisplay() {
         if (!this.currentUser) return;
 
-        const userNameElement = document.getElementById('currentUserName');
-        const sessionScansElement = document.getElementById('sessionScans');
-
-        if (userNameElement) {
-            userNameElement.textContent = this.currentUser.name;
-        }
-
-        if (sessionScansElement) {
-            sessionScansElement.textContent = this.scanCount;
-        }
+        document.getElementById('currentUserName').textContent = this.currentUser.name;
+        document.getElementById('sessionScans').textContent = this.scanCount;
     }
 
     // ===== SESSION TIMER =====
@@ -676,6 +726,12 @@ class WareneingangApp {
     // ===== QR-CODE VERARBEITUNG MIT STRUKTURIERTEN ANTWORTEN =====
     async handleQRCodeDetected(qrData) {
         const now = Date.now();
+
+        // Während Session-Reset keine QR-Scans verarbeiten
+        if (this.sessionResetInProgress) {
+            console.log('🔄 QR-Scan während Session-Reset ignoriert');
+            return;
+        }
 
         // 1. Sofortige Duplikat-Prüfung (identischer Code + Zeit)
         if (this.lastProcessedQR === qrData && (now - this.lastProcessedTime) < 2000) {
@@ -1091,6 +1147,7 @@ class WareneingangApp {
         this.recentScans = [];
         this.updateRecentScansList();
         this.showNotification('info', 'Scans geleert', 'Scan-Historie wurde geleert');
+        console.log('🗑️ Scan-Historie manuell geleert');
     }
 
     // ===== UTILITY METHODS =====
@@ -1116,10 +1173,7 @@ class WareneingangApp {
     }
 
     updateInstructionText(text) {
-        const instructionElement = document.getElementById('instructionText');
-        if (instructionElement) {
-            instructionElement.textContent = `💡 ${text}`;
-        }
+        document.getElementById('instructionText').textContent = `💡 ${text}`;
     }
 
     startClockUpdate() {
@@ -1200,13 +1254,12 @@ class WareneingangApp {
 
         notifications.appendChild(notification);
 
-        // Auto-Remove mit längerer Dauer für wichtige Nachrichten
-        const autoRemoveDuration = type === 'error' ? duration * 1.5 : duration;
+        // Auto-Remove
         setTimeout(() => {
             if (notification.parentNode) {
                 notification.remove();
             }
-        }, autoRemoveDuration);
+        }, duration);
     }
 
     showErrorModal(title, message) {

@@ -54,6 +54,10 @@ class WareneingangMainApp {
             withKunde: 0
         };
 
+        // RFID-Session-Wechsel Tracking
+        this.lastRFIDScanTime = 0;
+        this.rfidScanCooldown = 2000; // 2 Sekunden zwischen RFID-Scans
+
         this.initializeApp();
     }
 
@@ -704,8 +708,17 @@ class WareneingangMainApp {
         return stats;
     }
 
-    // ===== RFID HANDLING MIT AUTOMATISCHEM LOGOUT ALLER BENUTZER =====
+    // ===== VERBESSERTER RFID HANDLING MIT ZUVERLÄSSIGEM SESSION-RESET =====
     async handleRFIDScan(tagId) {
+        const now = Date.now();
+
+        // Cooldown für RFID-Scans prüfen (verhindert Doppel-Scans)
+        if (now - this.lastRFIDScanTime < this.rfidScanCooldown) {
+            console.log(`🔄 RFID-Scan zu schnell, ignoriert: ${tagId} (${now - this.lastRFIDScanTime}ms < ${this.rfidScanCooldown}ms)`);
+            return;
+        }
+        this.lastRFIDScanTime = now;
+
         console.log(`🏷️ RFID-Tag gescannt: ${tagId}`);
 
         try {
@@ -725,8 +738,21 @@ class WareneingangMainApp {
                 return;
             }
 
-            // ===== NEUE LOGIK: ALLE AKTIVEN SESSIONS BEENDEN =====
-            console.log(`👤 Benutzer gefunden: ${user.BenutzerName} - Beende alle aktiven Sessions...`);
+            console.log(`👤 Benutzer gefunden: ${user.BenutzerName} (ID: ${user.ID})`);
+
+            // ===== SCHRITT 1: VOLLSTÄNDIGER SESSION-RESET IM FRONTEND AUSLÖSEN =====
+            console.log('🔄 Triggere vollständigen Session-Reset im Frontend...');
+            this.sendToRenderer('session-reset-before-login', {
+                newUser: user,
+                timestamp: new Date().toISOString(),
+                reason: 'rfid_user_switch'
+            });
+
+            // Kurze Verzögerung für Frontend-Reset
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            // ===== SCHRITT 2: ALLE AKTIVEN SESSIONS IN DATENBANK BEENDEN =====
+            console.log(`🔚 Beende alle aktiven Sessions vor Anmeldung von ${user.BenutzerName}...`);
 
             const endResult = await this.dbClient.endAllActiveSessions();
 
@@ -740,7 +766,7 @@ class WareneingangMainApp {
                 return;
             }
 
-            // Logout-Events für alle beendeten Sessions senden
+            // ===== SCHRITT 3: LOGOUT-EVENTS FÜR ALLE BEENDETEN SESSIONS SENDEN =====
             if (endResult.endedUsers.length > 0) {
                 console.log(`👋 ${endResult.endedUsers.length} aktive Session(s) beendet:`);
 
@@ -755,27 +781,31 @@ class WareneingangMainApp {
                         },
                         sessionId: endedUser.sessionId,
                         timestamp: new Date().toISOString(),
-                        reason: 'automatic_logout_new_user'
+                        reason: 'automatic_logout_rfid_switch'
                     });
                 }
 
-                // Aktuelle Session zurücksetzen
+                // Lokale Session-Daten zurücksetzen
                 this.currentSession = null;
 
                 // Rate Limits für alle beendeten Sessions zurücksetzen
                 for (const endedUser of endResult.endedUsers) {
                     this.qrScanRateLimit.delete(endedUser.sessionId);
                 }
+
+                // Weitere Verzögerung für vollständigen Frontend-Reset
+                await new Promise(resolve => setTimeout(resolve, 200));
             } else {
                 console.log('📝 Keine aktiven Sessions gefunden');
             }
 
-            // ===== NEUE SESSION FÜR DEN GESCANNTEN BENUTZER STARTEN =====
+            // ===== SCHRITT 4: NEUE SESSION FÜR DEN GESCANNTEN BENUTZER STARTEN =====
             console.log(`🔑 Starte neue Session für ${user.BenutzerName}...`);
 
             const session = await this.dbClient.createSession(user.ID);
 
             if (session) {
+                // Lokale Session-Daten setzen
                 this.currentSession = {
                     sessionId: session.ID,
                     userId: user.ID,
@@ -791,21 +821,26 @@ class WareneingangMainApp {
                     StartTS: this.normalizeTimestamp(session.StartTS)
                 };
 
+                // ===== SCHRITT 5: LOGIN-EVENT SENDEN =====
                 this.sendToRenderer('user-login', {
                     user,
                     session: normalizedSession,
                     timestamp: new Date().toISOString(),
-                    previousLogouts: endResult.endedUsers.length
+                    previousLogouts: endResult.endedUsers.length,
+                    source: 'rfid_scan',
+                    fullReset: true // ← Kennzeichnet dass vollständiger Reset erfolgt ist
                 });
 
-                console.log(`✅ Benutzer erfolgreich angemeldet: ${user.BenutzerName} (Session ${session.ID})`);
+                console.log(`✅ RFID-Benutzerwechsel erfolgreich abgeschlossen:`);
+                console.log(`   Neuer Benutzer: ${user.BenutzerName} (Session ${session.ID})`);
                 if (endResult.endedUsers.length > 0) {
                     console.log(`   ${endResult.endedUsers.length} vorherige Session(s) automatisch beendet`);
                 }
+                console.log(`   Vollständiger Session-Reset durchgeführt`);
             } else {
                 this.sendToRenderer('rfid-scan-error', {
                     tagId,
-                    message: 'Fehler beim Erstellen der Session',
+                    message: 'Fehler beim Erstellen der neuen Session',
                     timestamp: new Date().toISOString()
                 });
             }
