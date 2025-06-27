@@ -137,6 +137,15 @@ class DatabaseClient {
         return await this.sessions.endSession(sessionId);
     }
 
+    /**
+     * ===== NEUE METHODE: ALLE AKTIVEN SESSIONS BEENDEN =====
+     * Beendet alle aktiven Sessions - für Single-User-Mode
+     * @returns {Object} - Erfolg, Anzahl beendeter Sessions und betroffene Benutzer
+     */
+    async endAllActiveSessions() {
+        return await this.sessions.endAllActiveSessions();
+    }
+
     async getActiveSession(userId) {
         return await this.sessions.getActiveSession(userId);
     }

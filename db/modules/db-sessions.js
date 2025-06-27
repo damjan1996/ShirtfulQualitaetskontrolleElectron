@@ -86,6 +86,72 @@ class SessionModule {
     }
 
     /**
+     * ===== NEUE METHODE: ALLE AKTIVEN SESSIONS BEENDEN =====
+     * Beendet alle aktiven Sessions - verwendet für Single-User-Mode
+     * @returns {Object} - Anzahl beendeter Sessions und Liste der betroffenen Benutzer
+     */
+    async endAllActiveSessions() {
+        try {
+            customConsole.info('Beende alle aktiven Sessions...');
+
+            // Erst die aktuell aktiven Sessions abrufen (für Logging/Events)
+            const activeSessionsResult = await this.db.query(`
+                SELECT 
+                    s.ID as SessionID,
+                    s.UserID,
+                    u.BenutzerName,
+                    s.StartTS
+                FROM dbo.Sessions s
+                INNER JOIN dbo.ScannBenutzer u ON s.UserID = u.ID
+                WHERE s.Active = 1
+            `);
+
+            const activeSessions = activeSessionsResult.recordset;
+
+            if (activeSessions.length === 0) {
+                customConsole.info('Keine aktiven Sessions gefunden');
+                return {
+                    success: true,
+                    endedCount: 0,
+                    endedUsers: []
+                };
+            }
+
+            // Alle aktiven Sessions beenden
+            const endResult = await this.db.query(`
+                UPDATE dbo.Sessions
+                SET EndTS = SYSDATETIME(), Active = 0
+                WHERE Active = 1
+            `);
+
+            const endedCount = endResult.rowsAffected && endResult.rowsAffected[0] || 0;
+
+            customConsole.success(`${endedCount} aktive Session(s) beendet`);
+
+            // Return-Objekt mit Details für Event-Handling
+            return {
+                success: true,
+                endedCount: endedCount,
+                endedUsers: activeSessions.map(session => ({
+                    sessionId: session.SessionID,
+                    userId: session.UserID,
+                    userName: session.BenutzerName,
+                    startTime: this.utils.normalizeTimestamp(session.StartTS)
+                }))
+            };
+
+        } catch (error) {
+            customConsole.error('Fehler beim Beenden aller aktiven Sessions:', error);
+            return {
+                success: false,
+                endedCount: 0,
+                endedUsers: [],
+                error: error.message
+            };
+        }
+    }
+
+    /**
      * Session mit SessionType-Informationen abrufen
      * @param {number} sessionId - Session ID
      * @returns {Object|null} - Session mit SessionType-Details

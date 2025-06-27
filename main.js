@@ -383,7 +383,8 @@ class WareneingangMainApp {
                             this.sendToRenderer('user-logout', {
                                 user: currentSessionUser,
                                 sessionId: oldSession.sessionId,
-                                timestamp: new Date().toISOString()
+                                timestamp: new Date().toISOString(),
+                                reason: 'manual_logout'
                             });
 
                             console.log(`👋 Benutzer abgemeldet (Button): ${currentSessionUser.BenutzerName}`);
@@ -703,7 +704,7 @@ class WareneingangMainApp {
         return stats;
     }
 
-    // ===== RFID HANDLING =====
+    // ===== RFID HANDLING MIT AUTOMATISCHEM LOGOUT ALLER BENUTZER =====
     async handleRFIDScan(tagId) {
         console.log(`🏷️ RFID-Tag gescannt: ${tagId}`);
 
@@ -724,66 +725,93 @@ class WareneingangMainApp {
                 return;
             }
 
-            // Prüfen ob Benutzer bereits eine aktive Session hat
-            const hasActiveSession = this.currentSession && this.currentSession.userId === user.ID;
+            // ===== NEUE LOGIK: ALLE AKTIVEN SESSIONS BEENDEN =====
+            console.log(`👤 Benutzer gefunden: ${user.BenutzerName} - Beende alle aktiven Sessions...`);
 
-            if (hasActiveSession) {
-                // Benutzer abmelden
-                const success = await this.dbClient.endSession(this.currentSession.sessionId);
+            const endResult = await this.dbClient.endAllActiveSessions();
 
-                if (success) {
-                    const oldSession = this.currentSession;
-                    this.currentSession = null;
+            if (!endResult.success) {
+                console.error('Fehler beim Beenden der aktiven Sessions:', endResult.error);
+                this.sendToRenderer('rfid-scan-error', {
+                    tagId,
+                    message: 'Fehler beim Beenden aktiver Sessions',
+                    timestamp: new Date().toISOString()
+                });
+                return;
+            }
 
-                    // Rate Limit für Session zurücksetzen
-                    this.qrScanRateLimit.delete(oldSession.sessionId);
+            // Logout-Events für alle beendeten Sessions senden
+            if (endResult.endedUsers.length > 0) {
+                console.log(`👋 ${endResult.endedUsers.length} aktive Session(s) beendet:`);
 
+                for (const endedUser of endResult.endedUsers) {
+                    console.log(`   - ${endedUser.userName} (Session ${endedUser.sessionId})`);
+
+                    // Logout-Event für jeden beendeten Benutzer senden
                     this.sendToRenderer('user-logout', {
-                        user,
-                        sessionId: oldSession.sessionId,
-                        timestamp: new Date().toISOString()
+                        user: {
+                            ID: endedUser.userId,
+                            BenutzerName: endedUser.userName
+                        },
+                        sessionId: endedUser.sessionId,
+                        timestamp: new Date().toISOString(),
+                        reason: 'automatic_logout_new_user'
                     });
+                }
 
-                    console.log(`👋 Benutzer abgemeldet: ${user.BenutzerName}`);
+                // Aktuelle Session zurücksetzen
+                this.currentSession = null;
+
+                // Rate Limits für alle beendeten Sessions zurücksetzen
+                for (const endedUser of endResult.endedUsers) {
+                    this.qrScanRateLimit.delete(endedUser.sessionId);
                 }
             } else {
-                // Benutzer anmelden
-                const session = await this.dbClient.createSession(user.ID);
+                console.log('📝 Keine aktiven Sessions gefunden');
+            }
 
-                if (session) {
-                    this.currentSession = {
-                        sessionId: session.ID,
-                        userId: user.ID,
-                        startTime: session.StartTS
-                    };
+            // ===== NEUE SESSION FÜR DEN GESCANNTEN BENUTZER STARTEN =====
+            console.log(`🔑 Starte neue Session für ${user.BenutzerName}...`);
 
-                    // Rate Limit für neue Session initialisieren
-                    this.qrScanRateLimit.set(session.ID, []);
+            const session = await this.dbClient.createSession(user.ID);
 
-                    // Session-Daten mit normalisiertem Zeitstempel senden
-                    const normalizedSession = {
-                        ...session,
-                        StartTS: this.normalizeTimestamp(session.StartTS)
-                    };
+            if (session) {
+                this.currentSession = {
+                    sessionId: session.ID,
+                    userId: user.ID,
+                    startTime: session.StartTS
+                };
 
-                    this.sendToRenderer('user-login', {
-                        user,
-                        session: normalizedSession,
-                        timestamp: new Date().toISOString()
-                    });
+                // Rate Limit für neue Session initialisieren
+                this.qrScanRateLimit.set(session.ID, []);
 
-                    console.log(`✅ Benutzer angemeldet: ${user.BenutzerName} (Session-Start: ${normalizedSession.StartTS})`);
-                } else {
-                    this.sendToRenderer('rfid-scan-error', {
-                        tagId,
-                        message: 'Session konnte nicht erstellt werden',
-                        timestamp: new Date().toISOString()
-                    });
+                // Session-Daten mit normalisiertem Zeitstempel senden
+                const normalizedSession = {
+                    ...session,
+                    StartTS: this.normalizeTimestamp(session.StartTS)
+                };
+
+                this.sendToRenderer('user-login', {
+                    user,
+                    session: normalizedSession,
+                    timestamp: new Date().toISOString(),
+                    previousLogouts: endResult.endedUsers.length
+                });
+
+                console.log(`✅ Benutzer erfolgreich angemeldet: ${user.BenutzerName} (Session ${session.ID})`);
+                if (endResult.endedUsers.length > 0) {
+                    console.log(`   ${endResult.endedUsers.length} vorherige Session(s) automatisch beendet`);
                 }
+            } else {
+                this.sendToRenderer('rfid-scan-error', {
+                    tagId,
+                    message: 'Fehler beim Erstellen der Session',
+                    timestamp: new Date().toISOString()
+                });
             }
 
         } catch (error) {
-            console.error('RFID-Scan Verarbeitung fehlgeschlagen:', error);
+            console.error('RFID-Verarbeitungs-Fehler:', error);
             this.sendToRenderer('rfid-scan-error', {
                 tagId,
                 message: error.message,

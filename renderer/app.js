@@ -106,6 +106,7 @@ class WareneingangApp {
         });
     }
 
+    // ===== IPC EVENT LISTENERS - ERWEITERT FÜR AUTOMATISCHE LOGOUTS =====
     setupIPCListeners() {
         // System bereit
         window.electronAPI.on('system-ready', (data) => {
@@ -121,16 +122,50 @@ class WareneingangApp {
             this.showErrorModal('System-Fehler', data.error);
         });
 
-        // Benutzer-Anmeldung
+        // ===== ERWEITERTE BENUTZER-ANMELDUNG =====
         window.electronAPI.on('user-login', (data) => {
             console.log('Benutzer-Anmeldung:', data);
+
+            // Erweiterte Anmeldungslogik mit Info über vorherige Logouts
             this.handleUserLogin(data.user, data.session);
+
+            // Falls vorherige Benutzer automatisch abgemeldet wurden, informiere darüber
+            if (data.previousLogouts && data.previousLogouts > 0) {
+                const message = data.previousLogouts === 1
+                    ? 'Ein anderer Benutzer wurde automatisch abgemeldet'
+                    : `${data.previousLogouts} andere Benutzer wurden automatisch abgemeldet`;
+
+                // Kurze Verzögerung, damit die Willkommensnachricht zuerst angezeigt wird
+                setTimeout(() => {
+                    this.showNotification('info', 'Automatische Abmeldung', message);
+                }, 1500);
+            }
         });
 
-        // Benutzer-Abmeldung
+        // ===== ERWEITERTE BENUTZER-ABMELDUNG =====
         window.electronAPI.on('user-logout', (data) => {
             console.log('Benutzer-Abmeldung:', data);
-            this.handleUserLogout(data.user);
+
+            // Prüfen ob dies eine automatische Abmeldung ist
+            const isAutomaticLogout = data.reason === 'automatic_logout_new_user';
+            const isManualLogout = data.reason === 'manual_logout';
+
+            // Nur UI aktualisieren wenn es der aktuell angemeldete Benutzer ist
+            if (this.currentUser && this.currentUser.id === data.user.ID) {
+                this.handleUserLogout(data.user);
+
+                // Entsprechende Nachricht je nach Logout-Grund
+                if (isAutomaticLogout) {
+                    this.showNotification('info', 'Automatische Abmeldung',
+                        'Sie wurden abgemeldet - ein anderer Benutzer hat sich angemeldet');
+                } else if (isManualLogout) {
+                    this.showNotification('info', 'Abgemeldet',
+                        `${data.user.BenutzerName} abgemeldet`);
+                } else {
+                    this.showNotification('info', 'Abgemeldet',
+                        `${data.user.BenutzerName} abgemeldet`);
+                }
+            }
         });
 
         // RFID-Fehler
@@ -138,9 +173,21 @@ class WareneingangApp {
             console.error('RFID-Fehler:', data);
             this.showNotification('error', 'RFID-Fehler', data.message);
         });
+
+        // QR-Code erkannt
+        window.electronAPI.on('qr-scan-detected', (data) => {
+            console.log('QR-Code erkannt:', data);
+            this.handleQRScanResult(data.payload, data.success);
+        });
+
+        // Dekodierung-Stats aktualisiert
+        window.electronAPI.on('decoding-stats-updated', (data) => {
+            console.log('Dekodierung-Stats:', data);
+            this.updateDecodingStats(data);
+        });
     }
 
-    // ===== USER MANAGEMENT =====
+    // ===== ERWEITERTE USER MANAGEMENT METHODEN =====
     handleUserLogin(user, session) {
         this.currentUser = {
             id: user.ID,
@@ -204,10 +251,12 @@ class WareneingangApp {
         this.recentlyScanned.clear();
         this.pendingScans.clear();
 
-        this.showNotification('info', 'Abgemeldet', `${user.BenutzerName} abgemeldet`);
+        // UI zurücksetzen
+        this.clearScanHistory();
         this.updateInstructionText('RFID-Tag scannen = Anmelden • QR-Code scannen = Paket erfassen');
     }
 
+    // ===== ERWEITERTE LOGOUT-METHODE =====
     async logoutCurrentUser() {
         if (!this.currentUser) return;
 
@@ -230,6 +279,23 @@ class WareneingangApp {
         }
     }
 
+    // ===== HILFSMETHODEN =====
+    clearScanHistory() {
+        const scanList = document.getElementById('scansList');
+        if (scanList) {
+            scanList.innerHTML = '';
+        }
+
+        const scanCount = document.getElementById('sessionScans');
+        if (scanCount) {
+            scanCount.textContent = '0';
+        }
+
+        // Recentscans Array auch leeren
+        this.recentScans = [];
+        this.updateRecentScansList();
+    }
+
     showWorkspace() {
         document.getElementById('loginSection').style.display = 'none';
         document.getElementById('workspace').style.display = 'grid';
@@ -244,8 +310,16 @@ class WareneingangApp {
     updateUserDisplay() {
         if (!this.currentUser) return;
 
-        document.getElementById('currentUserName').textContent = this.currentUser.name;
-        document.getElementById('sessionScans').textContent = this.scanCount;
+        const userNameElement = document.getElementById('currentUserName');
+        const sessionScansElement = document.getElementById('sessionScans');
+
+        if (userNameElement) {
+            userNameElement.textContent = this.currentUser.name;
+        }
+
+        if (sessionScansElement) {
+            sessionScansElement.textContent = this.scanCount;
+        }
     }
 
     // ===== SESSION TIMER =====
@@ -1042,7 +1116,10 @@ class WareneingangApp {
     }
 
     updateInstructionText(text) {
-        document.getElementById('instructionText').textContent = `💡 ${text}`;
+        const instructionElement = document.getElementById('instructionText');
+        if (instructionElement) {
+            instructionElement.textContent = `💡 ${text}`;
+        }
     }
 
     startClockUpdate() {
@@ -1123,12 +1200,13 @@ class WareneingangApp {
 
         notifications.appendChild(notification);
 
-        // Auto-Remove
+        // Auto-Remove mit längerer Dauer für wichtige Nachrichten
+        const autoRemoveDuration = type === 'error' ? duration * 1.5 : duration;
         setTimeout(() => {
             if (notification.parentNode) {
                 notification.remove();
             }
-        }, duration);
+        }, autoRemoveDuration);
     }
 
     showErrorModal(title, message) {
