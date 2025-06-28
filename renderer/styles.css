@@ -471,9 +471,161 @@ body {
     margin: 0;
 }
 
-.scans-list {
+/* ===== CURRENT SCAN DISPLAY ===== */
+.current-scan-display {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+    border-left: 4px solid var(--info-color);
+}
+
+.current-scan-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-sm);
+}
+
+.current-scan-time {
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    font-family: 'Courier New', monospace;
+    font-weight: 500;
+}
+
+.current-scan-status {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
+.current-scan-content {
+    font-size: var(--font-size-sm);
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    padding: var(--spacing-sm);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    max-height: 60px;
+    overflow-y: auto;
+    word-break: break-word;
+    white-space: pre-wrap;
+    margin-bottom: var(--spacing-xs);
+    font-family: 'Courier New', monospace;
+}
+
+.current-scan-message {
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
+    font-style: italic;
+    padding: var(--spacing-xs);
+    background: rgba(0, 0, 0, 0.03);
+    border-radius: var(--radius-sm);
+}
+
+/* Status-spezifische Styles für Current Scan */
+.current-scan-display.scan-success {
+    border-left-color: var(--secondary-color);
+    background: rgba(40, 167, 69, 0.05);
+}
+
+.current-scan-display.scan-duplicate {
+    border-left-color: var(--danger-color);
+    background: rgba(220, 53, 69, 0.05);
+}
+
+.current-scan-display.scan-error {
+    border-left-color: var(--danger-color);
+    background: rgba(220, 53, 69, 0.05);
+}
+
+.current-scan-display.scan-info {
+    border-left-color: var(--info-color);
+    background: rgba(23, 162, 184, 0.05);
+}
+
+.current-scan-display.scan-success .current-scan-message {
+    color: var(--secondary-color);
+    background: rgba(40, 167, 69, 0.1);
+}
+
+.current-scan-display.scan-duplicate .current-scan-message,
+.current-scan-display.scan-error .current-scan-message {
+    color: var(--danger-color);
+    background: rgba(220, 53, 69, 0.1);
+}
+
+.current-scan-display.scan-info .current-scan-message {
+    color: var(--info-color);
+    background: rgba(23, 162, 184, 0.1);
+}
+
+/* ===== SUCCESS SCANS TABLE ===== */
+.success-scans-table-container {
     flex: 1;
     overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.success-scans-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm);
+}
+
+.success-scans-table th {
+    background: var(--bg-tertiary);
+    padding: var(--spacing-sm) var(--spacing-md);
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.success-scans-table td {
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+    vertical-align: top;
+}
+
+.success-scans-table tr:hover {
+    background: var(--bg-tertiary);
+}
+
+.success-scans-table .scan-time-col {
+    font-family: 'Courier New', monospace;
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+    width: 80px;
+}
+
+.success-scans-table .auftrag-col,
+.success-scans-table .kunde-col,
+.success-scans-table .paket-col {
+    font-family: 'Courier New', monospace;
+    font-weight: 500;
+    word-break: break-all;
+}
+
+.success-scans-table .auftrag-col {
+    color: var(--auftrag-color);
+}
+
+.success-scans-table .kunde-col {
+    color: var(--kunde-color);
+}
+
+.success-scans-table .paket-col {
+    color: var(--paket-color);
 }
 
 .empty-scans {
@@ -488,248 +640,27 @@ body {
     opacity: 0.5;
 }
 
-.scan-item {
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-md);
-    padding: var(--spacing-md);
-    margin-bottom: var(--spacing-sm);
-    border-left: 4px solid var(--primary-color);
-    transition: var(--transition);
-}
-
-.scan-item:hover {
-    transform: translateX(2px);
-    box-shadow: var(--shadow-sm);
-}
-
-/* ===== SCAN STATUS STYLING ===== */
-.scan-item.scan-success {
-    border-left-color: var(--secondary-color);
-    background: rgba(40, 167, 69, 0.05);
-}
-
-.scan-item.scan-duplicate {
-    border-left-color: var(--danger-color);
-    background: rgba(220, 53, 69, 0.05);
-}
-
-.scan-item.scan-error {
-    border-left-color: var(--danger-color);
-    background: rgba(220, 53, 69, 0.05);
-}
-
-.scan-item.scan-info {
-    border-left-color: var(--info-color);
-    background: rgba(23, 162, 184, 0.05);
-}
-
-.scan-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: var(--spacing-xs);
-}
-
-.scan-time {
-    font-size: var(--font-size-xs);
+.empty-current-scan {
+    text-align: center;
+    padding: var(--spacing-lg);
     color: var(--text-muted);
-    font-family: 'Courier New', monospace;
-    font-weight: 500;
-}
-
-.scan-status {
-    font-size: var(--font-size-sm);
-    font-weight: 600;
-}
-
-/* ===== QR-CODE DEKODIERUNG STYLING ===== */
-.scan-decoded-data {
-    background: var(--decoded-bg);
-    border: 1px solid var(--decoded-border);
-    border-radius: var(--radius-sm);
-    padding: var(--spacing-sm);
-    margin: var(--spacing-sm) 0;
-}
-
-.decoded-summary {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-xs);
-    margin-bottom: var(--spacing-xs);
-    padding-bottom: var(--spacing-xs);
-    border-bottom: 1px solid var(--decoded-border);
-}
-
-.decoded-icon {
-    font-size: var(--font-size-lg);
-}
-
-.decoded-title {
-    font-weight: 600;
-    color: var(--text-primary);
-    font-size: var(--font-size-sm);
-}
-
-.decoded-fields {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-xs);
-}
-
-.decoded-field {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-xs);
-    background: var(--bg-secondary);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--decoded-border);
-}
-
-.field-label {
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    min-width: 50px;
-    flex-shrink: 0;
-}
-
-.field-value {
-    font-size: var(--font-size-sm);
-    font-weight: 500;
-    color: var(--text-primary);
-    font-family: 'Courier New', monospace;
-    flex: 1;
-    word-break: break-all;
-}
-
-/* Spezifische Farben für verschiedene Feldtypen */
-.decoded-field[data-type="auftrag"] {
-    border-left: 3px solid var(--auftrag-color);
-}
-
-.decoded-field[data-type="auftrag"] .field-label {
-    color: var(--auftrag-color);
-}
-
-.decoded-field[data-type="paket"] {
-    border-left: 3px solid var(--paket-color);
-}
-
-.decoded-field[data-type="paket"] .field-label {
-    color: var(--paket-color);
-}
-
-.decoded-field[data-type="kunde"] {
-    border-left: 3px solid var(--kunde-color);
-}
-
-.decoded-field[data-type="kunde"] .field-label {
-    color: var(--kunde-color);
-}
-
-/* Erweiterte Scan-Item Styles für dekodierte Daten */
-.scan-item.has-decoded-data {
-    border-left-width: 6px;
-}
-
-.scan-item.has-decoded-data.scan-success {
-    background: linear-gradient(135deg, rgba(40, 167, 69, 0.05), rgba(40, 167, 69, 0.02));
-}
-
-/* Hover-Effekte für dekodierte Felder */
-.decoded-field:hover {
-    background: #f1f3f4;
-    transform: translateX(2px);
-}
-
-.decoded-field:hover .field-value {
-    color: var(--primary-color);
-}
-
-/* ===== RESPONSIVE GRID FÜR DEKODIERTE FELDER ===== */
-@media (min-width: 768px) {
-    .decoded-fields {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: var(--spacing-xs);
-    }
-
-    .decoded-field.kunde-field {
-        grid-column: 1 / -1; /* Kunde-Feld über volle Breite */
-    }
-}
-
-/* ===== VISUAL INDICATORS FÜR SCAN-QUALITÄT ===== */
-.scan-quality-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--spacing-xs);
-    font-size: var(--font-size-xs);
-    font-weight: 500;
-    padding: 2px var(--spacing-xs);
-    border-radius: var(--radius-sm);
-    margin-left: var(--spacing-sm);
-}
-
-.scan-quality-indicator.complete {
-    background: rgba(40, 167, 69, 0.1);
-    color: var(--secondary-color);
-}
-
-.scan-quality-indicator.partial {
-    background: rgba(255, 193, 7, 0.1);
-    color: var(--warning-color);
-}
-
-.scan-quality-indicator.minimal {
-    background: rgba(23, 162, 184, 0.1);
-    color: var(--info-color);
-}
-
-/* ===== SCAN CONTENT STYLING ===== */
-.scan-content {
-    font-size: var(--font-size-sm);
-    color: var(--text-primary);
-    background: var(--bg-secondary);
-    padding: var(--spacing-sm);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-color);
-    max-height: 80px;
-    overflow-y: auto;
-    word-break: break-word;
-    white-space: pre-wrap;
-    margin-bottom: var(--spacing-xs);
-}
-
-.scan-info {
-    font-size: var(--font-size-xs);
-    color: var(--text-secondary);
     font-style: italic;
-    padding: var(--spacing-xs);
-    background: rgba(0, 0, 0, 0.03);
-    border-radius: var(--radius-sm);
-    border: 1px solid transparent;
 }
 
-.scan-item.scan-success .scan-info {
-    color: var(--secondary-color);
-    background: rgba(40, 167, 69, 0.1);
-    border-color: rgba(40, 167, 69, 0.2);
-}
+/* ===== RESPONSIVE TABLE ===== */
+@media (max-width: 768px) {
+    .success-scans-table {
+        font-size: var(--font-size-xs);
+    }
 
-.scan-item.scan-duplicate .scan-info {
-    color: var(--danger-color);
-    background: rgba(220, 53, 69, 0.1);
-    border-color: rgba(220, 53, 69, 0.2);
-}
+    .success-scans-table th,
+    .success-scans-table td {
+        padding: var(--spacing-xs) var(--spacing-sm);
+    }
 
-.scan-item.scan-error .scan-info {
-    color: var(--danger-color);
-    background: rgba(220, 53, 69, 0.1);
-    border-color: rgba(220, 53, 69, 0.2);
+    .success-scans-table .scan-time-col {
+        width: 60px;
+    }
 }
 
 /* ===== BUTTONS ===== */
@@ -973,26 +904,6 @@ body {
     .scanner-controls {
         flex-direction: column;
     }
-
-    /* Mobile Optimierungen für dekodierte Daten */
-    .decoded-fields {
-        display: flex !important;
-        flex-direction: column;
-    }
-
-    .decoded-field {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: var(--spacing-xs);
-    }
-
-    .field-label {
-        min-width: auto;
-    }
-
-    .field-value {
-        font-size: var(--font-size-xs);
-    }
 }
 
 /* ===== SCROLLBAR STYLING ===== */
@@ -1046,111 +957,6 @@ body {
     background: rgba(220, 53, 69, 0.3) !important;
 }
 
-/* ===== QR-CODE DEKODIERUNG ANIMATIONS ===== */
-@keyframes decodeSuccess {
-    0% {
-        opacity: 0;
-        transform: translateY(10px) scale(0.95);
-    }
-    50% {
-        opacity: 1;
-        transform: translateY(-2px) scale(1.02);
-    }
-    100% {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
-}
-
-.scan-decoded-data {
-    animation: decodeSuccess 0.4s ease-out;
-}
-
-.decoded-field {
-    animation: slideInField 0.3s ease-out;
-    animation-fill-mode: both;
-}
-
-.decoded-field:nth-child(1) { animation-delay: 0.1s; }
-.decoded-field:nth-child(2) { animation-delay: 0.2s; }
-.decoded-field:nth-child(3) { animation-delay: 0.3s; }
-
-@keyframes slideInField {
-    from {
-        opacity: 0;
-        transform: translateX(-10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
-}
-
-/* ===== DEKODIERTE DATEN HIGHLIGHTING ===== */
-.decoded-field.highlight {
-    animation: fieldHighlight 0.6s ease-in-out;
-}
-
-@keyframes fieldHighlight {
-    0%, 100% {
-        background: var(--bg-secondary);
-        box-shadow: none;
-    }
-    50% {
-        background: #fff3cd;
-        box-shadow: 0 0 8px rgba(255, 193, 7, 0.3);
-    }
-}
-
-/* ===== COPY-TO-CLIPBOARD FUNCTIONALITY ===== */
-.decoded-field {
-    position: relative;
-    cursor: pointer;
-}
-
-.decoded-field:hover::after {
-    content: "📋";
-    position: absolute;
-    right: var(--spacing-xs);
-    top: 50%;
-    transform: translateY(-50%);
-    opacity: 0.6;
-    transition: var(--transition);
-}
-
-.decoded-field:active {
-    transform: scale(0.98);
-}
-
-/* ===== SCAN COUNTER INDICATOR ===== */
-.scan-count-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--spacing-xs);
-    background: var(--primary-color);
-    color: white;
-    padding: var(--spacing-xs) var(--spacing-sm);
-    border-radius: var(--radius-md);
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    margin-left: var(--spacing-sm);
-}
-
-.scan-count-indicator.new-scan {
-    animation: countPulse 0.6s ease-out;
-}
-
-@keyframes countPulse {
-    0%, 100% {
-        transform: scale(1);
-        background: var(--primary-color);
-    }
-    50% {
-        transform: scale(1.1);
-        background: var(--secondary-color);
-    }
-}
-
 /* ===== ACCESSIBILITY IMPROVEMENTS ===== */
 @media (prefers-reduced-motion: reduce) {
     * {
@@ -1162,14 +968,6 @@ body {
     .pulse-animation {
         animation: none;
     }
-
-    .decoded-field {
-        animation: none;
-    }
-
-    .scan-decoded-data {
-        animation: none;
-    }
 }
 
 /* ===== HIGH CONTRAST MODE ===== */
@@ -1178,15 +976,6 @@ body {
         --border-color: #000000;
         --text-muted: #333333;
         --bg-tertiary: #f0f0f0;
-        --decoded-border: #666666;
-    }
-
-    .decoded-field {
-        border-width: 2px;
-    }
-
-    .field-value {
-        font-weight: 700;
     }
 }
 
@@ -1205,13 +994,7 @@ body {
         overflow: visible;
     }
 
-    .scan-item {
+    .success-scans-table {
         break-inside: avoid;
-        margin-bottom: var(--spacing-md);
-    }
-
-    .decoded-field {
-        border: 1px solid #000;
-        padding: var(--spacing-sm);
     }
 }

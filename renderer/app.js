@@ -10,7 +10,10 @@ class WareneingangApp {
         this.sessionStartTime = null;
         this.sessionTimer = null;
         this.scanCount = 0;
-        this.recentScans = [];
+
+        // NEUE DATENSTRUKTUR: Getrennte Scan-Verwaltung
+        this.currentScan = null; // Aktueller Scan (egal ob erfolgreich oder nicht)
+        this.successfulScans = []; // Nur erfolgreich gescannte Pakete für Tabelle
 
         // QR-Scanner Status
         this.scannerActive = false;
@@ -169,11 +172,15 @@ class WareneingangApp {
         this.sessionScannedCodes.clear();
         this.recentlyScanned.clear();
         this.pendingScans.clear();
-        this.recentScans = [];
+
+        // NEUE DATENSTRUKTUR: Reset für getrennte Scan-Verwaltung
+        this.currentScan = null;
+        this.successfulScans = [];
         this.scanCount = 0;
 
         // UI sofort aktualisieren
-        this.updateRecentScansList();
+        this.updateCurrentScanDisplay();
+        this.updateSuccessfulScansTable();
 
         // Workspace vorübergehend verbergen für sauberen Übergang
         document.getElementById('workspace').style.display = 'none';
@@ -208,19 +215,27 @@ class WareneingangApp {
             this.sessionScannedCodes.clear();
             this.recentlyScanned.clear();
             this.pendingScans.clear();
-            this.recentScans = [];
+
+            // NEUE DATENSTRUKTUR: Reset für getrennte Scan-Verwaltung
+            this.currentScan = null;
+            this.successfulScans = [];
             this.scanCount = 0;
 
-            this.updateRecentScansList();
+            this.updateCurrentScanDisplay();
+            this.updateSuccessfulScansTable();
         } else if (!eventData.source) {
             // Für manuelle Anmeldungen (falls implementiert) normaler Reset
             this.sessionScannedCodes.clear();
             this.recentlyScanned.clear();
             this.pendingScans.clear();
-            this.recentScans = [];
+
+            // NEUE DATENSTRUKTUR: Reset für getrennte Scan-Verwaltung
+            this.currentScan = null;
+            this.successfulScans = [];
             this.scanCount = 0;
 
-            this.updateRecentScansList();
+            this.updateCurrentScanDisplay();
+            this.updateSuccessfulScansTable();
         }
 
         this.currentUser = {
@@ -279,7 +294,7 @@ class WareneingangApp {
             sessionId: session.ID,
             source: eventData.source || 'unknown',
             fullReset: eventData.fullReset || false,
-            scanHistoryCleared: this.recentScans.length === 0
+            scanHistoryCleared: this.successfulScans.length === 0
         });
     }
 
@@ -302,9 +317,13 @@ class WareneingangApp {
             this.sessionScannedCodes.clear();
             this.recentlyScanned.clear();
             this.pendingScans.clear();
-            this.recentScans = [];
 
-            this.updateRecentScansList();
+            // NEUE DATENSTRUKTUR: Reset für getrennte Scan-Verwaltung
+            this.currentScan = null;
+            this.successfulScans = [];
+
+            this.updateCurrentScanDisplay();
+            this.updateSuccessfulScansTable();
         }
 
         // Spezielle Behandlung für manuellen Logout: Immer Login-Bildschirm anzeigen
@@ -327,7 +346,7 @@ class WareneingangApp {
         console.log('✅ Benutzer-Abmeldung abgeschlossen:', {
             user: user.BenutzerName,
             reason: reason,
-            scanHistoryCleared: this.recentScans.length === 0,
+            scanHistoryCleared: this.successfulScans.length === 0,
             loginScreenShown: reason === 'manual_logout'
         });
     }
@@ -787,7 +806,7 @@ class WareneingangApp {
         }
     }
 
-    // ===== STRUKTURIERTE SCAN-RESULT-BEHANDLUNG MIT DEKODIERUNG =====
+    // ===== STRUKTURIERTE SCAN-RESULT-BEHANDLUNG MIT GETRENNTE ANZEIGE =====
     handleScanResult(result, qrData) {
         const { success, status, message, data, duplicateInfo } = result;
 
@@ -801,8 +820,8 @@ class WareneingangApp {
             decodedData = data.ParsedPayload.decoded;
         }
 
-        // Zu Recent Scans hinzufügen (alle Ergebnisse)
-        const scanItem = {
+        // 1. AKTUELLER SCAN: Jeden Scan anzeigen (egal ob erfolgreich oder nicht)
+        this.currentScan = {
             id: data?.ID || `temp_${Date.now()}`,
             timestamp: new Date(),
             content: qrData,
@@ -811,18 +830,42 @@ class WareneingangApp {
             message: message,
             success: success,
             duplicateInfo: duplicateInfo,
-            decodedData: decodedData // ← Dekodierte Daten hinzufügen
+            decodedData: decodedData
         };
 
-        this.addToRecentScans(scanItem);
+        this.updateCurrentScanDisplay();
 
-        // Visual Feedback je nach Status
+        // 2. ERFOLGREICHE SCANS: Nur erfolgreiche Scans zur Tabelle hinzufügen
+        if (success && decodedData) {
+            // Prüfe auf Duplikate in der Erfolgstabelle
+            const isDuplicateInTable = this.successfulScans.some(scan =>
+                scan.content === qrData ||
+                (decodedData.auftrags_nr && decodedData.paket_nr &&
+                    scan.decodedData?.auftrags_nr === decodedData.auftrags_nr &&
+                    scan.decodedData?.paket_nr === decodedData.paket_nr)
+            );
+
+            if (!isDuplicateInTable) {
+                this.addToSuccessfulScans({
+                    id: data.ID,
+                    timestamp: new Date(),
+                    content: qrData,
+                    user: this.currentUser.name,
+                    decodedData: decodedData
+                });
+
+                this.scanCount++;
+                this.updateUserDisplay();
+                console.log('✅ Erfolgreicher Scan zur Tabelle hinzugefügt');
+            } else {
+                console.log('🔄 Erfolgreicher Scan bereits in Tabelle vorhanden');
+            }
+        }
+
+        // 3. VISUAL FEEDBACK je nach Status
         if (success) {
-            // Erfolgreiche Speicherung
             this.globalScannedCodes.add(qrData);
             this.sessionScannedCodes.add(qrData);
-            this.scanCount++;
-            this.updateUserDisplay();
             this.showScanSuccess(qrData, 'success');
 
             // Erweiterte Nachricht mit dekodierten Daten
@@ -944,143 +987,96 @@ class WareneingangApp {
         }
     }
 
-    // ===== RECENT SCANS MIT ERWEITERTEN STATUS-ANZEIGEN UND DEKODIERUNG =====
-    addToRecentScans(scan) {
-        this.recentScans.unshift(scan);
+    // ===== CURRENT SCAN DISPLAY =====
+    updateCurrentScanDisplay() {
+        const currentScanDisplay = document.getElementById('currentScanDisplay');
+        const currentScanTime = document.getElementById('currentScanTime');
+        const currentScanStatus = document.getElementById('currentScanStatus');
+        const currentScanContent = document.getElementById('currentScanContent');
+        const currentScanMessage = document.getElementById('currentScanMessage');
 
-        // Maximal 10 Scans behalten
-        if (this.recentScans.length > 10) {
-            this.recentScans = this.recentScans.slice(0, 10);
-        }
-
-        this.updateRecentScansList();
-    }
-
-    updateRecentScansList() {
-        const scansList = document.getElementById('scansList');
-        const emptyScans = document.getElementById('emptyScans');
-
-        if (this.recentScans.length === 0) {
-            scansList.innerHTML = '';
-            scansList.appendChild(emptyScans);
+        if (!this.currentScan) {
+            currentScanDisplay.style.display = 'none';
             return;
         }
 
-        const scansHtml = this.recentScans.map(scan => {
+        const scan = this.currentScan;
+        const timeString = scan.timestamp.toLocaleTimeString('de-DE');
+        const statusInfo = this.getScanStatusInfo(scan);
+
+        // CSS-Klasse für Status
+        currentScanDisplay.className = `current-scan-display ${statusInfo.cssClass}`;
+        currentScanDisplay.style.display = 'block';
+
+        // Inhalt aktualisieren
+        currentScanTime.textContent = timeString;
+        currentScanStatus.innerHTML = `
+            <span class="status-icon">${statusInfo.icon}</span>
+            <span class="status-text" style="color: ${statusInfo.color};">${statusInfo.label}</span>
+        `;
+
+        // QR-Code Inhalt (gekürzt für bessere Übersicht)
+        const contentPreview = scan.content.length > 150 ?
+            scan.content.substring(0, 150) + '...' : scan.content;
+        currentScanContent.textContent = contentPreview;
+
+        currentScanMessage.textContent = scan.message;
+    }
+
+    // ===== SUCCESSFUL SCANS TABLE =====
+    addToSuccessfulScans(scan) {
+        this.successfulScans.unshift(scan);
+
+        // Maximal 50 erfolgreiche Scans behalten (mehr als früher da nur Erfolge)
+        if (this.successfulScans.length > 50) {
+            this.successfulScans = this.successfulScans.slice(0, 50);
+        }
+
+        this.updateSuccessfulScansTable();
+    }
+
+    updateSuccessfulScansTable() {
+        const tableBody = document.getElementById('successScansTableBody');
+        const emptyMessage = document.getElementById('emptySuccessScans');
+        const tableContainer = document.querySelector('.success-scans-table-container table');
+
+        if (this.successfulScans.length === 0) {
+            tableContainer.style.display = 'none';
+            emptyMessage.style.display = 'block';
+            return;
+        }
+
+        tableContainer.style.display = 'table';
+        emptyMessage.style.display = 'none';
+
+        const rowsHtml = this.successfulScans.map(scan => {
             const timeString = scan.timestamp.toLocaleTimeString('de-DE');
-            const contentPreview = scan.content.length > 100 ?
-                scan.content.substring(0, 100) + '...' : scan.content;
-
-            // CSS-Klassen und Icons je nach Status
-            const statusInfo = this.getScanStatusInfo(scan);
-
-            // Dekodierte Daten formatieren
-            const decodedInfo = this.formatDecodedData(scan.decodedData);
+            const decoded = scan.decodedData || {};
 
             return `
-                <div class="scan-item ${statusInfo.cssClass}">
-                    <div class="scan-header">
-                        <span class="scan-time">${timeString}</span>
-                        <span class="scan-status" style="color: ${statusInfo.color};">
-                            ${statusInfo.icon} ${statusInfo.label}
-                        </span>
-                    </div>
-                    
-                    ${decodedInfo.hasData ? `
-                        <div class="scan-decoded-data">
-                            <div class="decoded-summary">
-                                <span class="decoded-icon">${decodedInfo.icon}</span>
-                                <span class="decoded-title">${decodedInfo.title}</span>
-                            </div>
-                            <div class="decoded-fields">
-                                ${decodedInfo.fields.map(field => `
-                                    <div class="decoded-field">
-                                        <span class="field-label">${field.label}:</span>
-                                        <span class="field-value">${field.value}</span>
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>
-                    ` : ''}
-                    
-                    <div class="scan-content">${contentPreview}</div>
-                    <div class="scan-info">${scan.message}</div>
-                </div>
+                <tr>
+                    <td class="scan-time-col">${timeString}</td>
+                    <td class="auftrag-col">${decoded.auftrags_nr || '-'}</td>
+                    <td class="kunde-col">${decoded.kunden_name || decoded.kunden_id || '-'}</td>
+                    <td class="paket-col">${decoded.paket_nr || '-'}</td>
+                </tr>
             `;
         }).join('');
 
-        scansList.innerHTML = scansHtml;
+        tableBody.innerHTML = rowsHtml;
     }
 
-    /**
-     * Formatiert dekodierte QR-Code Daten für die Anzeige
-     * @param {Object} decodedData - Dekodierte Daten
-     * @returns {Object} - Formatierte Anzeige-Informationen
-     */
-    formatDecodedData(decodedData) {
-        if (!decodedData || typeof decodedData !== 'object') {
-            return {
-                hasData: false,
-                icon: '📄',
-                title: 'Unstrukturierte Daten',
-                fields: []
-            };
-        }
+    clearRecentScans() {
+        // Current Scan zurücksetzen
+        this.currentScan = null;
+        this.updateCurrentScanDisplay();
 
-        const { auftrags_nr, paket_nr, kunden_name } = decodedData;
-        const fields = [];
+        // Erfolgreiche Scans löschen
+        this.successfulScans = [];
+        this.updateSuccessfulScansTable();
 
-        // Auftragsnummer
-        if (auftrags_nr && auftrags_nr.trim()) {
-            fields.push({
-                label: 'Auftrag',
-                value: auftrags_nr,
-                type: 'auftrag'
-            });
-        }
-
-        // Paketnummer
-        if (paket_nr && paket_nr.trim()) {
-            fields.push({
-                label: 'Paket',
-                value: paket_nr,
-                type: 'paket'
-            });
-        }
-
-        // Kundenname/ID
-        if (kunden_name && kunden_name.trim()) {
-            fields.push({
-                label: 'Kunde',
-                value: kunden_name,
-                type: 'kunde'
-            });
-        }
-
-        // Icon und Titel basierend auf verfügbaren Daten
-        let icon = '📄';
-        let title = 'Paketdaten';
-
-        if (auftrags_nr && paket_nr) {
-            icon = '📦';
-            title = 'Vollständige Paketinformationen';
-        } else if (auftrags_nr || paket_nr) {
-            icon = '📋';
-            title = 'Teilweise Paketinformationen';
-        } else if (kunden_name) {
-            icon = '👤';
-            title = 'Kundeninformationen';
-        } else {
-            icon = '📄';
-            title = 'Unstrukturierte Daten';
-        }
-
-        return {
-            hasData: fields.length > 0,
-            icon: icon,
-            title: title,
-            fields: fields
-        };
+        this.showNotification('info', 'Scans geleert', 'Scan-Historie wurde geleert');
+        console.log('🗑️ Scan-Historie manuell geleert');
     }
 
     getScanStatusInfo(scan) {
@@ -1141,13 +1137,6 @@ class WareneingangApp {
                     color: '#dc3545'
                 };
         }
-    }
-
-    clearRecentScans() {
-        this.recentScans = [];
-        this.updateRecentScansList();
-        this.showNotification('info', 'Scans geleert', 'Scan-Historie wurde geleert');
-        console.log('🗑️ Scan-Historie manuell geleert');
     }
 
     // ===== UTILITY METHODS =====
