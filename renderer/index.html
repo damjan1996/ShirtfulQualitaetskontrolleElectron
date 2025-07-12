@@ -11,7 +11,7 @@
         img-src 'self' blob: data: https:;
         style-src 'self' 'unsafe-inline';
     ">
-    <title>RFID Wareneinlagerung - Shirtful</title>
+    <title>RFID Qualitätskontrolle - Shirtful</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -19,7 +19,7 @@
 <header class="main-header">
     <div class="header-content">
         <div class="company-info">
-            <h1 class="app-title">📦 Wareneinlagerung</h1>
+            <h1 class="app-title">🔍 Qualitätskontrolle</h1>
             <div class="company-name">Shirtful GmbH</div>
         </div>
 
@@ -48,6 +48,7 @@
             <div class="login-info">
                 <p>💡 Mehrere Mitarbeiter können gleichzeitig arbeiten</p>
                 <p>🔄 Erneutes Scannen startet Ihre Session neu</p>
+                <p>📦 <strong>Doppel-Scan:</strong> 1. Scan = Start, 2. Scan = Abschluss</p>
             </div>
         </div>
     </section>
@@ -96,195 +97,157 @@
                         <span id="scannerUserInfo">Wählen Sie einen Mitarbeiter aus</span>
                     </div>
                     <div class="scanner-controls">
-                        <button class="btn-primary" id="startScannerBtn">
-                            📹 Scanner starten
+                        <button class="btn btn-primary" id="startScannerBtn">
+                            <span>▶️</span>
+                            Scanner starten
                         </button>
-                        <button class="btn-secondary" id="stopScannerBtn" style="display: none;">
-                            ⏹️ Scanner stoppen
+                        <button class="btn btn-secondary" id="stopScannerBtn" style="display: none;">
+                            <span>⏹️</span>
+                            Scanner stoppen
                         </button>
-                    </div>
-                </div>
-
-                <!-- Kamera-Vorschau -->
-                <div class="camera-container" id="cameraContainer">
-                    <video id="scannerVideo" autoplay playsinline muted></video>
-                    <div class="scanner-overlay">
-                        <div class="scanner-frame"></div>
-                        <div class="scan-target">
-                            <div class="corner tl"></div>
-                            <div class="corner tr"></div>
-                            <div class="corner bl"></div>
-                            <div class="corner br"></div>
+                        <div class="scanner-status" id="scannerStatus">
+                            <span id="scannerStatusText">Scanner gestoppt</span>
                         </div>
                     </div>
+                </div>
+
+                <!-- Kamera-Bereich -->
+                <div class="camera-container">
+                    <video id="qrVideo" autoplay muted playsinline></video>
+                    <canvas id="qrCanvas" style="display: none;"></canvas>
+
+                    <!-- Scan-Rahmen -->
+                    <div class="scan-frame">
+                        <div class="scan-corners">
+                            <div class="corner top-left"></div>
+                            <div class="corner top-right"></div>
+                            <div class="corner bottom-left"></div>
+                            <div class="corner bottom-right"></div>
+                        </div>
+                        <div class="scan-instruction">QR-Code hier positionieren</div>
+                    </div>
+
+                    <!-- Kamera-Status -->
                     <div class="camera-status" id="cameraStatus">
-                        <div class="status-icon">📷</div>
-                        <div class="status-text">Klicken Sie "Scanner starten"</div>
+                        <div class="camera-icon">📹</div>
+                        <div class="camera-message" id="cameraMessage">Kamera wird geladen...</div>
+                        <button class="btn btn-small" id="requestCameraAccess">Kamera-Zugriff erlauben</button>
                     </div>
                 </div>
-                <canvas id="scannerCanvas" style="display: none;"></canvas>
 
-                <!-- Scanner-Info -->
-                <div class="scanner-info">
-                    <div class="info-row">
-                        <span class="info-label">Status:</span>
-                        <span class="info-value" id="scannerStatusText">Bereit</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Letzter Scan:</span>
-                        <span class="info-value" id="lastScanTime">-</span>
+                <!-- Aktueller Scan Status -->
+                <div class="current-scan-panel">
+                    <h4>Aktueller Scan</h4>
+                    <div class="scan-status" id="scanStatus">
+                        <div class="scan-info" id="currentScanInfo">Bereit zum Scannen</div>
                     </div>
                 </div>
             </div>
 
-            <!-- QR-Scans Übersicht -->
-            <div class="recent-scans-section">
-                <div class="scans-header">
-                    <h3>📋 QR-Scans</h3>
-                    <div class="scans-controls">
-                        <button class="btn-secondary btn-small" id="clearScansBtn">🗑️ Leeren</button>
-                        <button class="btn-secondary btn-small" id="refreshScansBtn">🔄 Aktualisieren</button>
-                    </div>
+            <!-- Qualitätskontrolle Dashboard -->
+            <div class="quality-dashboard">
+                <div class="dashboard-header">
+                    <h3>📊 Qualitätskontrolle Dashboard</h3>
+                    <button class="btn btn-small btn-secondary" id="resetQualityStats">Statistiken zurücksetzen</button>
                 </div>
 
-                <!-- Aktueller Scan -->
-                <div class="current-scan-display" id="currentScanDisplay" style="display: none;">
-                    <div class="current-scan-header">
-                        <span class="current-scan-time" id="currentScanTime">--:--:--</span>
-                        <span class="current-scan-status" id="currentScanStatus">
-                            <span class="status-icon">📄</span>
-                            <span class="status-text">Aktueller Scan</span>
-                        </span>
+                <div class="quality-stats-grid">
+                    <!-- Karton-Statistiken -->
+                    <div class="stat-card">
+                        <div class="stat-icon">📦</div>
+                        <div class="stat-content">
+                            <div class="stat-label">Kartons gestartet</div>
+                            <div class="stat-value" id="totalBoxesStarted">0</div>
+                        </div>
                     </div>
-                    <div class="current-scan-content" id="currentScanContent">Noch kein QR-Code gescannt</div>
-                    <div class="current-scan-message" id="currentScanMessage">Scannen Sie einen QR-Code</div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-content">
+                            <div class="stat-label">Kartons abgeschlossen</div>
+                            <div class="stat-value" id="totalBoxesCompleted">0</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon">🔄</div>
+                        <div class="stat-content">
+                            <div class="stat-label">In Bearbeitung</div>
+                            <div class="stat-value" id="boxesInProgress">0</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon">⚠️</div>
+                        <div class="stat-content">
+                            <div class="stat-label">Duplikat-Versuche</div>
+                            <div class="stat-value" id="duplicateAttempts">0</div>
+                        </div>
+                    </div>
+
+                    <!-- Leistungs-Statistiken -->
+                    <div class="stat-card wide">
+                        <div class="stat-icon">⏱️</div>
+                        <div class="stat-content">
+                            <div class="stat-label">Ø Bearbeitungszeit</div>
+                            <div class="stat-value" id="averageProcessingTime">-</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card wide">
+                        <div class="stat-icon">📈</div>
+                        <div class="stat-content">
+                            <div class="stat-label">Abschlussrate</div>
+                            <div class="stat-value" id="completionRate">0%</div>
+                        </div>
+                    </div>
                 </div>
+            </div>
 
-                <!-- Erfolgreich gescannte Pakete - Tabellenansicht -->
-                <div class="success-scans-table-container">
-                    <table class="success-scans-table" id="successScansTable">
-                        <thead>
-                        <tr>
-                            <th class="scan-time-col">Zeit</th>
-                            <th class="user-col">Mitarbeiter</th>
-                            <th class="auftrag-col">Auftrags-ID</th>
-                            <th class="kunde-col">Kunden-ID</th>
-                            <th class="paket-col">Paket-ID</th>
-                        </tr>
-                        </thead>
-                        <tbody id="successScansTableBody">
-                        <!-- Erfolgreiche Scans werden hier eingefügt -->
-                        </tbody>
-                    </table>
-
-                    <div class="empty-scans" id="emptySuccessScans">
-                        <div class="empty-icon">📦</div>
-                        <p>Noch keine Pakete erfolgreich gescannt</p>
+            <!-- Scan-Historie -->
+            <div class="scan-history-panel">
+                <div class="history-header">
+                    <h4>📜 Scan-Historie</h4>
+                    <div class="scan-counter">
+                        <span id="scanCount">0</span> Scans heute
                     </div>
+                </div>
+                <div class="scan-history-list" id="scanHistoryList">
+                    <!-- Dynamisch gefüllte Historie -->
                 </div>
             </div>
         </div>
     </section>
 </main>
 
-<!-- Footer -->
+<!-- Footer / Debug Panel -->
 <footer class="main-footer">
     <div class="footer-content">
-        <div class="footer-left">
-            <span id="instructionText">💡 RFID-Tag scannen = Anmelden • QR-Code scannen = Paket einlagern • Erneuter RFID-Scan = Session neu starten</span>
+        <!-- RFID-Simulation (Development) -->
+        <div class="debug-panel">
+            <h4>🧪 RFID-Simulation</h4>
+            <div class="rfid-sim-controls">
+                <input type="text" id="rfidSimInput" placeholder="RFID-Tag eingeben (z.B. A1B2C3D4)" maxlength="12">
+                <button class="btn btn-small" id="rfidSimBtn">Simulieren</button>
+            </div>
         </div>
-        <div class="footer-right">
-            <span id="versionText">v1.0.0</span>
-            <span class="separator">•</span>
-            <span id="dateText">--.--.----</span>
+
+        <!-- System-Info -->
+        <div class="system-info">
+            <div class="info-item">
+                <span class="info-label">Qualitätskontrolle v1.0</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Doppel-Scan-System</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Multi-User Support</span>
+            </div>
         </div>
     </div>
 </footer>
 
-<!-- Benachrichtigungen -->
-<div class="notifications" id="notifications"></div>
-
-<!-- Error Modal -->
-<div class="modal" id="errorModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3 class="modal-title">
-                <span class="icon">⚠️</span>
-                Fehler
-            </h3>
-            <button class="modal-close" id="errorModalClose">✕</button>
-        </div>
-        <div class="modal-body">
-            <div class="error-message" id="errorMessage"></div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn-primary" id="errorModalOk">OK</button>
-        </div>
-    </div>
-</div>
-
-<!-- Camera Permission Modal -->
-<div class="modal" id="cameraPermissionModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3 class="modal-title">
-                <span class="icon">📷</span>
-                Kamera-Berechtigung
-            </h3>
-        </div>
-        <div class="modal-body">
-            <p>Die Anwendung benötigt Zugriff auf Ihre Kamera für das QR-Code-Scanning.</p>
-            <p>Bitte erlauben Sie den Kamera-Zugriff im nächsten Dialog.</p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn-primary" id="grantCameraPermission">Kamera erlauben</button>
-            <button class="btn-secondary" id="cancelCameraPermission">Abbrechen</button>
-        </div>
-    </div>
-</div>
-
-<!-- User Logout Confirmation Modal -->
-<div class="modal" id="logoutModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3 class="modal-title">
-                <span class="icon">🔓</span>
-                Mitarbeiter abmelden
-            </h3>
-            <button class="modal-close" id="logoutModalClose">✕</button>
-        </div>
-        <div class="modal-body">
-            <p>Möchten Sie <strong id="logoutUserName"></strong> wirklich abmelden?</p>
-            <p class="modal-warning">Die Session wird beendet und alle ungespeicherten Daten gehen verloren.</p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn-danger" id="confirmLogout">Ja, abmelden</button>
-            <button class="btn-secondary" id="cancelLogout">Abbrechen</button>
-        </div>
-    </div>
-</div>
-
-<!-- Session Restart Confirmation Modal -->
-<div class="modal" id="sessionRestartModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3 class="modal-title">
-                <span class="icon">🔄</span>
-                Session neu starten
-            </h3>
-            <button class="modal-close" id="sessionRestartModalClose">✕</button>
-        </div>
-        <div class="modal-body">
-            <p>Möchten Sie die Session von <strong id="restartUserName"></strong> neu starten?</p>
-            <p class="modal-info">Der Timer wird zurückgesetzt und die Session beginnt von vorne.</p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn-primary" id="confirmSessionRestart">Ja, neu starten</button>
-            <button class="btn-secondary" id="cancelSessionRestart">Abbrechen</button>
-        </div>
-    </div>
-</div>
-
+<!-- JavaScript -->
 <script src="app.js"></script>
 </body>
 </html>

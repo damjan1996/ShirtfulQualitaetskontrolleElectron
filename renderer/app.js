@@ -1,17 +1,18 @@
 /**
- * RFID Wareneinlagerung - Hauptanwendung für parallele Sessions
+ * RFID Qualitätskontrolle - Hauptanwendung für Doppel-Scan-System
  * Ermöglicht mehreren Mitarbeitern gleichzeitig zu arbeiten
- * KORRIGIERT: Unterstützt Session-Ende + Neue Session Workflow
+ * Spezialisiert auf Qualitätskontrolle mit Ein-/Ausgang-Scanning
  */
 
-class WareneinlagerungApp {
+class QualitaetskontrolleApp {
     constructor() {
         // PARALLELE SESSION-VERWALTUNG
         this.activeSessions = new Map(); // userId -> sessionData
         this.selectedSession = null; // Aktuell ausgewählte Session für QR-Scanning
         this.sessionTimers = new Map(); // userId -> timerInterval
 
-        // NEUE DATENSTRUKTUR: Getrennte Scan-Verwaltung pro Session
+        // QUALITÄTSKONTROLLE-SPEZIFISCHE DATENSTRUKTUREN
+        this.qrScanStates = new Map(); // qrCode -> scanState
         this.currentScan = null; // Aktueller Scan (egal ob erfolgreich oder nicht)
         this.successfulScans = []; // Alle erfolgreichen Scans (sitzungsübergreifend)
 
@@ -20,13 +21,13 @@ class WareneinlagerungApp {
         this.videoStream = null;
         this.scanLoop = null;
         this.lastScanTime = 0;
-        this.scanCooldown = 3000; // 3 Sekunden zwischen Scans
+        this.scanCooldown = 2000; // 2 Sekunden zwischen Scans
 
         // QR-Scanner Engine
         this.qrScanner = null;
         this.loadQRLibrary();
 
-        // Verbesserte Duplikat-Vermeidung
+        // Verbesserte Duplikat-Vermeidung für Qualitätskontrolle
         this.globalScannedCodes = new Set();
         this.sessionScannedCodes = new Map(); // sessionId -> Set von QR-Codes
         this.recentlyScanned = new Map(); // Zeitbasierte Duplikat-Vermeidung
@@ -34,11 +35,20 @@ class WareneinlagerungApp {
         this.lastProcessedQR = null;
         this.lastProcessedTime = 0;
 
+        // Qualitätskontrolle Statistiken
+        this.qualityStats = {
+            totalBoxesStarted: 0,
+            totalBoxesCompleted: 0,
+            duplicateAttempts: 0,
+            averageProcessingTime: 0,
+            activeSessions: 0
+        };
+
         this.init();
     }
 
     async init() {
-        console.log('🚀 Wareneinlagerung-App wird initialisiert...');
+        console.log('🚀 Qualitätskontrolle-App wird initialisiert...');
 
         this.setupEventListeners();
         this.setupIPCListeners();
@@ -48,10 +58,26 @@ class WareneinlagerungApp {
         // Kamera-Verfügbarkeit prüfen
         await this.checkCameraAvailability();
 
+        // Aktive Sessions beim Start laden
+        await this.loadInitialSessions();
+
         // Periodisches Laden der aktiven Sessions
         this.startPeriodicSessionUpdate();
 
-        console.log('✅ Wareneinlagerung-App bereit');
+        // Qualitätskontrolle-spezifische Updates
+        this.startQualityStatsUpdate();
+
+        console.log('✅ Qualitätskontrolle-App bereit');
+    }
+
+    async loadInitialSessions() {
+        try {
+            const sessions = await window.electronAPI.invoke('sessions:get-active');
+            this.updateActiveSessions(sessions);
+            console.log(`📋 ${sessions.length} aktive Sessions beim Start geladen`);
+        } catch (error) {
+            console.error('Fehler beim Laden der initialen Sessions:', error);
+        }
     }
 
     // ===== EVENT LISTENERS =====
@@ -65,693 +91,134 @@ class WareneinlagerungApp {
             this.stopQRScanner();
         });
 
-        // Scans Management
-        document.getElementById('clearScansBtn').addEventListener('click', () => {
-            this.clearRecentScans();
-        });
-
-        document.getElementById('refreshScansBtn').addEventListener('click', () => {
-            this.refreshScans();
-        });
-
-        // Selected User Logout
+        // Session Management
         document.getElementById('selectedUserLogout').addEventListener('click', () => {
             if (this.selectedSession) {
-                this.showLogoutModal(this.selectedSession);
+                this.logoutUser(this.selectedSession.sessionId);
             }
         });
 
-        // Modal Controls
-        this.setupModalHandlers();
-    }
+        // Benutzer-Liste Event-Delegation
+        document.getElementById('activeUsersList').addEventListener('click', (e) => {
+            const userCard = e.target.closest('.user-card');
+            if (userCard) {
+                const userId = parseInt(userCard.dataset.userId);
+                this.selectUser(userId);
+            }
 
-    setupModalHandlers() {
-        // Error Modal
-        const errorModal = document.getElementById('errorModal');
-        const errorModalClose = document.getElementById('errorModalClose');
-        const errorModalOk = document.getElementById('errorModalOk');
-
-        errorModalClose.addEventListener('click', () => this.hideModal('errorModal'));
-        errorModalOk.addEventListener('click', () => this.hideModal('errorModal'));
-
-        // Camera Permission Modal
-        const cameraModal = document.getElementById('cameraPermissionModal');
-        const grantPermission = document.getElementById('grantCameraPermission');
-        const cancelPermission = document.getElementById('cancelCameraPermission');
-
-        grantPermission.addEventListener('click', () => {
-            this.hideModal('cameraPermissionModal');
-            this.requestCameraPermission();
+            // Logout-Button
+            const logoutBtn = e.target.closest('.user-logout-btn');
+            if (logoutBtn) {
+                e.stopPropagation();
+                const userId = parseInt(logoutBtn.closest('.user-card').dataset.userId);
+                const session = this.activeSessions.get(userId);
+                if (session) {
+                    this.logoutUser(session.sessionId);
+                }
+            }
         });
 
-        cancelPermission.addEventListener('click', () => {
-            this.hideModal('cameraPermissionModal');
-        });
+        // RFID-Simulation
+        const rfidSimInput = document.getElementById('rfidSimInput');
+        const rfidSimBtn = document.getElementById('rfidSimBtn');
 
-        // Logout Modal
-        const logoutModal = document.getElementById('logoutModal');
-        const logoutModalClose = document.getElementById('logoutModalClose');
-        const confirmLogout = document.getElementById('confirmLogout');
-        const cancelLogout = document.getElementById('cancelLogout');
-
-        logoutModalClose.addEventListener('click', () => this.hideModal('logoutModal'));
-        cancelLogout.addEventListener('click', () => this.hideModal('logoutModal'));
-        confirmLogout.addEventListener('click', () => this.executeLogout());
-
-        // Session Restart Modal
-        const restartModal = document.getElementById('sessionRestartModal');
-        const restartModalClose = document.getElementById('sessionRestartModalClose');
-        const confirmRestart = document.getElementById('confirmSessionRestart');
-        const cancelRestart = document.getElementById('cancelSessionRestart');
-
-        restartModalClose.addEventListener('click', () => this.hideModal('sessionRestartModal'));
-        cancelRestart.addEventListener('click', () => this.hideModal('sessionRestartModal'));
-        confirmRestart.addEventListener('click', () => this.executeSessionRestart());
-
-        // Click outside to close modals
-        [errorModal, cameraModal, logoutModal, restartModal].forEach(modal => {
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) {
-                    this.hideModal(modal.id);
+        if (rfidSimBtn) {
+            rfidSimBtn.addEventListener('click', () => {
+                const tagId = rfidSimInput.value.trim();
+                if (tagId) {
+                    this.simulateRFIDTag(tagId);
+                    rfidSimInput.value = '';
                 }
             });
+        }
+
+        if (rfidSimInput) {
+            rfidSimInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    rfidSimBtn.click();
+                }
+            });
+        }
+
+        // Kamera-Zugriff Button
+        const requestCameraBtn = document.getElementById('requestCameraAccess');
+        if (requestCameraBtn) {
+            requestCameraBtn.addEventListener('click', () => {
+                this.requestCameraAccess();
+            });
+        }
+
+        // Qualitätskontrolle-spezifische Buttons
+        document.getElementById('resetQualityStats')?.addEventListener('click', () => {
+            this.resetQualityStats();
         });
+
+        console.log('✅ Event-Listener eingerichtet');
     }
 
+    // ===== IPC LISTENERS =====
     setupIPCListeners() {
-        // System bereit
-        window.electronAPI.on('system-ready', (data) => {
-            console.log('System bereit:', data);
-            this.updateSystemStatus('active', 'System bereit');
-            this.showNotification('success', 'System bereit', 'RFID und Datenbank verbunden');
+        // Session Events
+        window.electronAPI.on('session-started', (sessionData) => {
+            console.log('📢 Session gestartet:', sessionData);
+            this.handleSessionStarted(sessionData);
         });
 
-        // System-Fehler
-        window.electronAPI.on('system-error', (data) => {
-            console.error('System-Fehler:', data);
-            this.updateSystemStatus('error', 'System-Fehler');
-            this.showErrorModal('System-Fehler', data.error);
-        });
-
-        // ===== KORRIGIERTE EVENT-HANDLER FÜR SESSION-MANAGEMENT =====
-
-        // Benutzer-Anmeldung (neue Session)
-        window.electronAPI.on('user-login', (data) => {
-            console.log('🔑 Neue Benutzer-Anmeldung:', data);
-            this.handleUserLogin(data.user, data.session, data);
-        });
-
-        // Session beendet (durch RFID-Rescan oder manuell)
         window.electronAPI.on('session-ended', (data) => {
-            console.log('📝 Session beendet:', data);
+            console.log('📢 Session beendet:', data);
             this.handleSessionEnded(data);
         });
 
-        // Session neu gestartet (nur für manuelle Restarts über UI)
-        window.electronAPI.on('session-restarted', (data) => {
-            console.log('🔄 Session neu gestartet:', data);
-            this.handleSessionRestarted(data);
+        window.electronAPI.on('sessions-updated', (sessions) => {
+            console.log('📢 Sessions aktualisiert:', sessions);
+            this.updateActiveSessions(sessions);
         });
 
-        // Benutzer-Abmeldung (für manuelle Abmeldungen ohne neue Session)
-        window.electronAPI.on('user-logout', (data) => {
-            console.log('👋 Benutzer-Abmeldung:', data);
-            this.handleUserLogout(data.user, data);
-        });
-
-        // Session-Timer-Updates
         window.electronAPI.on('session-timer-update', (data) => {
-            this.handleSessionTimerUpdate(data);
+            this.updateSessionTimer(data);
         });
 
-        // Session-Fallback-Warnung
-        window.electronAPI.on('session-fallback-warning', (data) => {
-            console.warn('⚠️ SessionType Fallback verwendet:', data);
-            this.showNotification('warning', 'SessionType Fallback',
-                `${data.user.BenutzerName}: ${data.sessionType} verwendet`);
+        // RFID Events
+        window.electronAPI.on('rfid-scan-success', (data) => {
+            console.log('📢 RFID-Scan erfolgreich:', data);
+            this.showNotification('success', 'RFID-Scan', `${data.action === 'login' ? 'Angemeldet' : 'Abgemeldet'}: ${data.user.Name}`);
         });
 
-        // RFID-Fehler
         window.electronAPI.on('rfid-scan-error', (data) => {
-            console.error('RFID-Fehler:', data);
+            console.log('📢 RFID-Scan Fehler:', data);
             this.showNotification('error', 'RFID-Fehler', data.message);
         });
 
-        // QR-Scan detected (für erweiterte Benachrichtigungen)
-        window.electronAPI.on('qr-scan-detected', (data) => {
-            console.log('QR-Scan erkannt:', data);
-            // Zusätzliche Verarbeitung für QR-Scans falls nötig
+        // Qualitätskontrolle-spezifische Events
+        window.electronAPI.on('quality-stats-updated', (stats) => {
+            this.qualityStats = stats;
+            this.updateQualityStatsDisplay();
         });
 
-        // Dekodierung-Statistiken aktualisiert
-        window.electronAPI.on('decoding-stats-updated', (data) => {
-            console.log('📊 Dekodierung-Statistiken aktualisiert:', data.stats);
-            // UI mit neuen Statistiken aktualisieren falls nötig
-        });
+        console.log('✅ IPC-Listener eingerichtet');
     }
 
-    // ===== KORRIGIERTE SESSION MANAGEMENT =====
-    async handleUserLogin(user, session, eventData = {}) {
-        console.log(`🔑 Benutzer-Anmeldung: ${user.BenutzerName} (Session ${session.ID})`);
-
-        // Session zu lokaler Verwaltung hinzufügen
-        this.activeSessions.set(user.ID, {
-            sessionId: session.ID,
-            userId: user.ID,
-            userName: user.BenutzerName,
-            department: user.Abteilung || '',
-            startTime: new Date(session.StartTS),
-            scanCount: 0,
-            isActive: true,
-            sessionType: eventData.sessionType || 'Wareneinlagerung'
-        });
-
-        // Session-spezifische QR-Code-Duplikat-Erkennung initialisieren
-        this.sessionScannedCodes.set(session.ID, new Set());
-
-        // Session-Timer starten
-        this.startSessionTimer(user.ID);
-
-        // UI aktualisieren
-        this.updateActiveUsersDisplay();
-        this.showWorkspace();
-
-        // Notification je nach Quelle und Typ
-        if (eventData.source === 'rfid_scan') {
-            if (eventData.isNewSession) {
-                this.showNotification('success', 'Neue Session gestartet',
-                    `${user.BenutzerName} ist bereit zum Arbeiten!`);
-            } else {
-                this.showNotification('success', 'Angemeldet',
-                    `${user.BenutzerName} ist bereit!`);
-            }
-        } else {
-            this.showNotification('success', 'Angemeldet',
-                `${user.BenutzerName} ist bereit!`);
-        }
-
-        // Fallback-Warnung anzeigen falls nötig
-        if (eventData.fallbackUsed) {
-            this.showNotification('warning', 'SessionType Fallback',
-                `Verwendet: ${eventData.sessionType}`);
-        }
-
-        // Arbeitsbereich nur anzeigen wenn wir Benutzer haben
-        this.updateWorkspaceVisibility();
-    }
-
-    // ===== KORRIGIERTER SESSION-ENDED HANDLER =====
-    async handleSessionEnded(data) {
-        console.log(`📝 Session beendet für ${data.user.BenutzerName}: ${Math.round(data.duration / 1000)}s`);
-
-        // Session aus lokaler Verwaltung entfernen
-        if (this.activeSessions.has(data.user.ID)) {
-            const session = this.activeSessions.get(data.user.ID);
-            this.activeSessions.delete(data.user.ID);
-
-            // Session-Timer stoppen
-            this.stopSessionTimer(data.user.ID);
-
-            // Session-spezifische QR-Codes entfernen
-            this.sessionScannedCodes.delete(data.sessionId);
-
-            // Falls ausgewählte Session, Auswahl zurücksetzen
-            if (this.selectedSession && this.selectedSession.userId === data.user.ID) {
-                this.selectedSession = null;
-                this.updateSelectedUserDisplay();
-                this.updateScannerInfo();
-            }
-
-            // UI aktualisieren
-            this.updateActiveUsersDisplay();
-            this.updateWorkspaceVisibility();
-
-            // Benachrichtigung anzeigen
-            const durationText = data.durationFormatted || this.formatDuration(data.duration);
-
-            if (data.source === 'rfid_scan') {
-                this.showNotification('info', 'Session beendet',
-                    `${data.user.BenutzerName}: ${durationText} gearbeitet`);
-            } else {
-                this.showNotification('success', 'Abgemeldet',
-                    `${data.user.BenutzerName} erfolgreich abgemeldet`);
-            }
-        }
-    }
-
-    async handleUserLogout(user, eventData = {}) {
-        console.log(`👋 Benutzer-Abmeldung: ${user.BenutzerName}`);
-
-        // Session aus lokaler Verwaltung entfernen
-        this.activeSessions.delete(user.ID);
-
-        // Session-Timer stoppen
-        this.stopSessionTimer(user.ID);
-
-        // Session-spezifische QR-Codes entfernen
-        const userSession = Array.from(this.activeSessions.values()).find(s => s.userId === user.ID);
-        if (userSession) {
-            this.sessionScannedCodes.delete(userSession.sessionId);
-        }
-
-        // Falls ausgewählte Session, Auswahl zurücksetzen
-        if (this.selectedSession && this.selectedSession.userId === user.ID) {
-            this.selectedSession = null;
-            this.updateSelectedUserDisplay();
-            this.updateScannerInfo();
-        }
-
-        // UI aktualisieren
-        this.updateActiveUsersDisplay();
-        this.updateWorkspaceVisibility();
-
-        this.showNotification('info', 'Abgemeldet', `${user.BenutzerName} wurde abgemeldet`);
-    }
-
-    // ===== SESSION-RESTART HANDLER (für UI-basierte Restarts) =====
-    async handleSessionRestarted(data) {
-        console.log(`🔄 Session neu gestartet: ${data.userId}`);
-
-        // Lokale Session-Daten aktualisieren
-        const session = this.activeSessions.get(data.userId);
-        if (session) {
-            // Wichtig: Session-ID aktualisieren!
-            session.sessionId = data.newSessionId;
-            session.startTime = new Date();
-            session.scanCount = 0; // Reset der Scan-Anzahl
-
-            // Session-spezifische QR-Codes für neue Session initialisieren
-            this.sessionScannedCodes.delete(data.oldSessionId);
-            this.sessionScannedCodes.set(data.newSessionId, new Set());
-
-            // Timer neu starten
-            this.stopSessionTimer(data.userId);
-            this.startSessionTimer(data.userId);
-
-            // UI aktualisieren
-            this.updateActiveUsersDisplay();
-
-            // Falls diese Session ausgewählt ist, anzeigen aktualisieren
-            if (this.selectedSession && this.selectedSession.userId === data.userId) {
-                this.selectedSession.sessionId = data.newSessionId;
-                this.updateSelectedUserDisplay();
-            }
-
-            this.showNotification('success', 'Session neu gestartet',
-                'Timer wurde zurückgesetzt');
-        }
-    }
-
-    handleSessionTimerUpdate(data) {
-        // Timer-Update für spezifische Session
-        const session = this.activeSessions.get(data.userId);
-        if (session) {
-            // Falls diese Session ausgewählt ist, Timer aktualisieren
-            if (this.selectedSession && this.selectedSession.userId === data.userId) {
-                this.updateSelectedSessionTimer();
-            }
-        }
-    }
-
-    // ===== SESSION TIMER MANAGEMENT =====
-    startSessionTimer(userId) {
-        // Bestehenden Timer stoppen falls vorhanden
-        this.stopSessionTimer(userId);
-
-        // Neuen Timer starten
-        const timer = setInterval(() => {
-            this.updateSessionTimer(userId);
-        }, 1000);
-
-        this.sessionTimers.set(userId, timer);
-        console.log(`Session-Timer gestartet für Benutzer ${userId}`);
-    }
-
-    stopSessionTimer(userId) {
-        const timer = this.sessionTimers.get(userId);
-        if (timer) {
-            clearInterval(timer);
-            this.sessionTimers.delete(userId);
-            console.log(`Session-Timer gestoppt für Benutzer ${userId}`);
-        }
-    }
-
-    updateSessionTimer(userId) {
-        const session = this.activeSessions.get(userId);
-        if (!session) return;
-
-        // Timer im User-Card aktualisieren
-        const userCard = document.querySelector(`[data-user-id="${userId}"]`);
-        if (userCard) {
-            const timerElement = userCard.querySelector('.user-timer');
-            if (timerElement) {
-                const duration = utils.calculateSessionDuration(session.startTime);
-                timerElement.textContent = utils.formatDuration(duration);
-            }
-        }
-
-        // Falls diese Session ausgewählt ist, auch dort aktualisieren
-        if (this.selectedSession && this.selectedSession.userId === userId) {
-            this.updateSelectedSessionTimer();
-        }
-    }
-
-    updateSelectedSessionTimer() {
-        if (!this.selectedSession) return;
-
-        const session = this.activeSessions.get(this.selectedSession.userId);
-        if (session) {
-            const duration = utils.calculateSessionDuration(session.startTime);
-            document.getElementById('selectedSessionTime').textContent = utils.formatDuration(duration);
-        }
-    }
-
-    // ===== HILFSFUNKTIONEN FÜR SESSION-MANAGEMENT =====
-    formatDuration(milliseconds) {
-        const seconds = Math.floor(milliseconds / 1000);
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        const remainingSeconds = seconds % 60;
-
-        if (hours > 0) {
-            return `${hours}h ${minutes}m ${remainingSeconds}s`;
-        } else if (minutes > 0) {
-            return `${minutes}m ${remainingSeconds}s`;
-        } else {
-            return `${remainingSeconds}s`;
-        }
-    }
-
-    // ===== PERIODISCHES SESSION-UPDATE =====
-    startPeriodicSessionUpdate() {
-        // Alle 30 Sekunden aktive Sessions vom Backend laden
-        setInterval(async () => {
-            await this.syncActiveSessions();
-        }, 30000);
-
-        // Initial einmal laden
-        setTimeout(() => this.syncActiveSessions(), 2000);
-    }
-
-    async syncActiveSessions() {
-        try {
-            const backendSessions = await window.electronAPI.session.getAllActive();
-
-            // Prüfe auf neue oder entfernte Sessions
-            const backendUserIds = new Set(backendSessions.map(s => s.UserID));
-            const localUserIds = new Set(this.activeSessions.keys());
-
-            // Entfernte Sessions
-            for (const userId of localUserIds) {
-                if (!backendUserIds.has(userId)) {
-                    console.log(`Session für Benutzer ${userId} nicht mehr aktiv - entferne lokal`);
-                    this.activeSessions.delete(userId);
-                    this.stopSessionTimer(userId);
-                }
-            }
-
-            // Neue Sessions
-            for (const backendSession of backendSessions) {
-                if (!localUserIds.has(backendSession.UserID)) {
-                    console.log(`Neue Session gefunden für Benutzer ${backendSession.UserID}`);
-
-                    this.activeSessions.set(backendSession.UserID, {
-                        sessionId: backendSession.ID,
-                        userId: backendSession.UserID,
-                        userName: backendSession.UserName || 'Unbekannt',
-                        department: backendSession.Department || '',
-                        startTime: new Date(backendSession.StartTS),
-                        scanCount: backendSession.ScanCount || 0,
-                        isActive: true
-                    });
-
-                    // Session-Timer starten
-                    this.startSessionTimer(backendSession.UserID);
-
-                    // Session-spezifische QR-Code-Duplikat-Erkennung
-                    this.sessionScannedCodes.set(backendSession.ID, new Set());
-                }
-            }
-
-            // UI aktualisieren
-            this.updateActiveUsersDisplay();
-            this.updateWorkspaceVisibility();
-
-        } catch (error) {
-            console.error('Fehler beim Synchronisieren der Sessions:', error);
-        }
-    }
-
-    // ===== UI MANAGEMENT =====
-    updateActiveUsersDisplay() {
-        const usersList = document.getElementById('activeUsersList');
-        const userCount = document.getElementById('activeUserCount');
-
-        userCount.textContent = this.activeSessions.size;
-
-        if (this.activeSessions.size === 0) {
-            usersList.innerHTML = '<div class="no-users">Keine aktiven Mitarbeiter</div>';
-            return;
-        }
-
-        // Benutzer-Karten erstellen
-        const userCards = Array.from(this.activeSessions.values()).map(session => {
-            return this.createUserCard(session);
-        }).join('');
-
-        usersList.innerHTML = userCards;
-
-        // Event-Listener für Benutzer-Karten hinzufügen
-        this.attachUserCardListeners();
-    }
-
-    createUserCard(session) {
-        const duration = utils.calculateSessionDuration(session.startTime);
-        const isSelected = this.selectedSession && this.selectedSession.userId === session.userId;
-
-        return `
-            <div class="user-card ${isSelected ? 'selected' : ''}" 
-                 data-user-id="${session.userId}" 
-                 data-session-id="${session.sessionId}">
-                <div class="user-main">
-                    <div class="user-avatar">👤</div>
-                    <div class="user-info">
-                        <div class="user-name">${session.userName}</div>
-                        <div class="user-department">${session.department}</div>
-                        <div class="user-timer">${utils.formatDuration(duration)}</div>
-                        <div class="user-scans">${session.scanCount} Scans</div>
-                    </div>
-                </div>
-                <div class="user-actions">
-                    <button class="btn-icon select-user" title="Für QR-Scanning auswählen">
-                        📱
-                    </button>
-                    <button class="btn-icon restart-session" title="Session neu starten">
-                        🔄
-                    </button>
-                    <button class="btn-icon logout-user" title="Abmelden">
-                        🔓
-                    </button>
-                </div>
-            </div>
-        `;
-    }
-
-    attachUserCardListeners() {
-        // Benutzer auswählen
-        document.querySelectorAll('.select-user').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const userCard = e.target.closest('.user-card');
-                const userId = parseInt(userCard.dataset.userId);
-                this.selectUser(userId);
-            });
-        });
-
-        // Session neu starten
-        document.querySelectorAll('.restart-session').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const userCard = e.target.closest('.user-card');
-                const userId = parseInt(userCard.dataset.userId);
-                const sessionId = parseInt(userCard.dataset.sessionId);
-                this.showSessionRestartModal(userId, sessionId);
-            });
-        });
-
-        // Benutzer abmelden
-        document.querySelectorAll('.logout-user').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const userCard = e.target.closest('.user-card');
-                const userId = parseInt(userCard.dataset.userId);
-                const session = this.activeSessions.get(userId);
-                if (session) {
-                    this.showLogoutModal(session);
-                }
-            });
-        });
-
-        // Klick auf ganze Karte = Benutzer auswählen
-        document.querySelectorAll('.user-card').forEach(card => {
-            card.addEventListener('click', () => {
-                const userId = parseInt(card.dataset.userId);
-                this.selectUser(userId);
-            });
-        });
-    }
-
-    selectUser(userId) {
-        const session = this.activeSessions.get(userId);
-        if (!session) return;
-
-        this.selectedSession = session;
-
-        // UI aktualisieren
-        document.querySelectorAll('.user-card').forEach(card => {
-            card.classList.remove('selected');
-        });
-        document.querySelector(`[data-user-id="${userId}"]`).classList.add('selected');
-
-        this.updateSelectedUserDisplay();
-        this.updateScannerInfo();
-
-        // Scan-Historie für ausgewählten Benutzer laden
-        this.refreshScansForSelectedUser();
-
-        console.log(`Benutzer ausgewählt: ${session.userName} (Session ${session.sessionId})`);
-    }
-
-    updateSelectedUserDisplay() {
-        const panel = document.getElementById('selectedUserPanel');
-
-        if (!this.selectedSession) {
-            panel.style.display = 'none';
-            return;
-        }
-
-        panel.style.display = 'block';
-
-        document.getElementById('selectedUserName').textContent = this.selectedSession.userName;
-        document.getElementById('selectedSessionScans').textContent = this.selectedSession.scanCount;
-
-        this.updateSelectedSessionTimer();
-    }
-
-    updateScannerInfo() {
-        const scannerUserInfo = document.getElementById('scannerUserInfo');
-
-        if (this.selectedSession) {
-            scannerUserInfo.textContent = `Scannt für: ${this.selectedSession.userName}`;
-            scannerUserInfo.className = 'scanner-user-selected';
-        } else {
-            scannerUserInfo.textContent = 'Wählen Sie einen Mitarbeiter aus';
-            scannerUserInfo.className = 'scanner-user-none';
-        }
-    }
-
-    updateWorkspaceVisibility() {
-        const loginSection = document.getElementById('loginSection');
-        const workspace = document.getElementById('workspace');
-
-        if (this.activeSessions.size > 0) {
-            loginSection.style.display = 'none';
-            workspace.style.display = 'grid';
-        } else {
-            loginSection.style.display = 'flex';
-            workspace.style.display = 'none';
-
-            // QR-Scanner stoppen wenn keine aktiven Benutzer
-            if (this.scannerActive) {
-                this.stopQRScanner();
-            }
-        }
-    }
-
-    showWorkspace() {
-        this.updateWorkspaceVisibility();
-    }
-
-    // ===== MODAL MANAGEMENT =====
-    showLogoutModal(session) {
-        document.getElementById('logoutUserName').textContent = session.userName;
-        this.logoutSession = session;
-        this.showModal('logoutModal');
-    }
-
-    async executeLogout() {
-        if (!this.logoutSession) return;
-
-        try {
-            const success = await window.electronAPI.session.end(
-                this.logoutSession.sessionId,
-                this.logoutSession.userId
-            );
-
-            if (success) {
-                this.showNotification('success', 'Abmeldung', `${this.logoutSession.userName} wurde abgemeldet`);
-            } else {
-                this.showNotification('error', 'Fehler', 'Abmeldung fehlgeschlagen');
-            }
-        } catch (error) {
-            console.error('Abmelde-Fehler:', error);
-            this.showNotification('error', 'Fehler', 'Abmeldung fehlgeschlagen');
-        }
-
-        this.hideModal('logoutModal');
-        this.logoutSession = null;
-    }
-
-    showSessionRestartModal(userId, sessionId) {
-        const session = this.activeSessions.get(userId);
-        if (!session) return;
-
-        document.getElementById('restartUserName').textContent = session.userName;
-        this.restartSession = { userId, sessionId, userName: session.userName };
-        this.showModal('sessionRestartModal');
-    }
-
-    async executeSessionRestart() {
-        if (!this.restartSession) return;
-
-        try {
-            const success = await window.electronAPI.session.restart(
-                this.restartSession.sessionId,
-                this.restartSession.userId
-            );
-
-            if (success) {
-                this.showNotification('success', 'Session neu gestartet',
-                    `${this.restartSession.userName}: Timer zurückgesetzt`);
-            } else {
-                this.showNotification('error', 'Fehler', 'Session-Restart fehlgeschlagen');
-            }
-        } catch (error) {
-            console.error('Session-Restart-Fehler:', error);
-            this.showNotification('error', 'Fehler', 'Session-Restart fehlgeschlagen');
-        }
-
-        this.hideModal('sessionRestartModal');
-        this.restartSession = null;
-    }
-
-    // ===== KAMERA & QR-SCANNER =====
+    // ===== QR-SCANNER MANAGEMENT =====
     async loadQRLibrary() {
         try {
-            // Versuche jsQR zu laden
+            // jsQR über CDN laden
             if (typeof jsQR === 'undefined') {
                 const script = document.createElement('script');
-                script.src = 'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js';
+                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js';
                 script.onload = () => {
                     console.log('✅ jsQR-Bibliothek geladen');
+                    this.qrScanner = jsQR;
                 };
                 script.onerror = () => {
-                    console.warn('⚠️ jsQR konnte nicht geladen werden - Fallback wird verwendet');
+                    console.error('❌ jsQR-Bibliothek konnte nicht geladen werden');
                 };
                 document.head.appendChild(script);
+            } else {
+                this.qrScanner = jsQR;
+                console.log('✅ jsQR bereits verfügbar');
             }
         } catch (error) {
-            console.warn('QR-Bibliothek laden fehlgeschlagen:', error);
+            console.error('Fehler beim Laden der QR-Bibliothek:', error);
         }
     }
 
@@ -760,155 +227,107 @@ class WareneinlagerungApp {
             const devices = await navigator.mediaDevices.enumerateDevices();
             const cameras = devices.filter(device => device.kind === 'videoinput');
 
-            if (cameras.length === 0) {
-                this.showNotification('warning', 'Keine Kamera', 'Keine Kamera gefunden - QR-Scanner nicht verfügbar');
+            const cameraStatus = document.getElementById('cameraStatus');
+            const cameraMessage = document.getElementById('cameraMessage');
+
+            if (cameras.length > 0) {
+                cameraStatus.className = 'camera-status available';
+                cameraMessage.textContent = `${cameras.length} Kamera(s) verfügbar`;
+                return true;
+            } else {
+                cameraStatus.className = 'camera-status unavailable';
+                cameraMessage.textContent = 'Keine Kamera gefunden';
                 return false;
             }
-
-            console.log(`📷 ${cameras.length} Kamera(s) gefunden:`, cameras);
-            return true;
-
         } catch (error) {
-            console.error('Kamera-Verfügbarkeit prüfen fehlgeschlagen:', error);
-            this.showNotification('error', 'Kamera-Fehler', 'Kamera-Zugriff nicht möglich');
+            console.error('Fehler beim Prüfen der Kamera-Verfügbarkeit:', error);
+            const cameraStatus = document.getElementById('cameraStatus');
+            const cameraMessage = document.getElementById('cameraMessage');
+            cameraStatus.className = 'camera-status error';
+            cameraMessage.textContent = 'Kamera-Fehler';
             return false;
         }
     }
 
+    async requestCameraAccess() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment' }
+            });
+
+            // Stream wieder stoppen - nur für Berechtigung
+            stream.getTracks().forEach(track => track.stop());
+
+            this.showNotification('success', 'Kamera-Zugriff', 'Kamera-Berechtigung erteilt');
+            await this.checkCameraAvailability();
+
+        } catch (error) {
+            console.error('Kamera-Zugriff fehlgeschlagen:', error);
+            this.showNotification('error', 'Kamera-Fehler', 'Kamera-Zugriff verweigert');
+        }
+    }
+
     async startQRScanner() {
-        if (this.scannerActive) return;
+        if (this.scannerActive) {
+            console.log('Scanner läuft bereits');
+            return;
+        }
 
         if (!this.selectedSession) {
-            this.showNotification('warning', 'Benutzer auswählen', 'Bitte wählen Sie zuerst einen Mitarbeiter aus');
+            this.showNotification('warning', 'Kein Benutzer ausgewählt', 'Bitte wählen Sie zuerst einen Mitarbeiter aus');
             return;
         }
 
         try {
-            console.log('📷 Starte QR-Scanner...');
+            console.log('📸 Starte QR-Scanner...');
 
-            // Prüfe Kamera-Berechtigung
-            const permission = await this.checkCameraPermission();
-            if (permission === 'denied') {
-                this.showModal('cameraPermissionModal');
-                return;
-            }
+            const video = document.getElementById('qrVideo');
+            const canvas = document.getElementById('qrCanvas');
 
-            // Optimierte Kamera-Constraints für bessere Kompatibilität
-            const constraints = await this.getOptimalCameraConstraints();
-
-            this.videoStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-            const video = document.getElementById('scannerVideo');
-            video.srcObject = this.videoStream;
-
-            // Warte auf Video-Metadaten
-            await new Promise((resolve, reject) => {
-                video.onloadedmetadata = () => {
-                    console.log(`📷 Video bereit: ${video.videoWidth}x${video.videoHeight}`);
-                    resolve();
-                };
-                video.onerror = reject;
-                setTimeout(() => reject(new Error('Video-Load-Timeout')), 10000);
+            // Kamera-Stream starten
+            this.videoStream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: 'environment',
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
             });
 
-            await video.play();
+            video.srcObject = this.videoStream;
+            video.play();
+
+            // Warten bis Video geladen ist
+            await new Promise((resolve) => {
+                video.onloadedmetadata = resolve;
+            });
 
             this.scannerActive = true;
             this.updateScannerUI();
-            this.startQRScanLoop();
+            this.startScanLoop(video, canvas);
 
-            this.showNotification('success', 'Scanner bereit',
-                `QR-Codes werden für ${this.selectedSession.userName} erkannt`);
+            console.log('✅ QR-Scanner gestartet');
+            this.showNotification('success', 'Scanner gestartet', `Scanner aktiv für ${this.selectedSession.userName}`);
 
         } catch (error) {
             console.error('QR-Scanner Start fehlgeschlagen:', error);
-            this.showErrorModal('Scanner-Fehler',
-                `Kamera konnte nicht gestartet werden:\n${error.message}\n\n` +
-                'Lösungsvorschläge:\n' +
-                '• Kamera-Berechtigung erteilen\n' +
-                '• Andere Apps schließen die Kamera verwenden\n' +
-                '• Anwendung neu starten'
-            );
-        }
-    }
-
-    async getOptimalCameraConstraints() {
-        try {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const cameras = devices.filter(device => device.kind === 'videoinput');
-
-            // Basis-Constraints
-            let constraints = {
-                video: {
-                    width: { ideal: 1280, min: 640 },
-                    height: { ideal: 720, min: 480 },
-                    frameRate: { ideal: 30, min: 15 }
-                }
-            };
-
-            // Bevorzuge Rückkamera wenn verfügbar
-            const backCamera = cameras.find(camera =>
-                camera.label.toLowerCase().includes('back') ||
-                camera.label.toLowerCase().includes('rear') ||
-                camera.label.toLowerCase().includes('environment')
-            );
-
-            if (backCamera) {
-                constraints.video.deviceId = { ideal: backCamera.deviceId };
-            } else if (cameras.length > 0) {
-                // Verwende erste verfügbare Kamera
-                constraints.video.deviceId = { ideal: cameras[0].deviceId };
-            }
-
-            return constraints;
-
-        } catch (error) {
-            console.warn('Optimale Kamera-Constraints fehlgeschlagen, verwende Fallback:', error);
-            return {
-                video: {
-                    width: { ideal: 640 },
-                    height: { ideal: 480 }
-                }
-            };
-        }
-    }
-
-    async checkCameraPermission() {
-        try {
-            const result = await navigator.permissions.query({ name: 'camera' });
-            return result.state; // 'granted', 'denied', 'prompt'
-        } catch (error) {
-            return 'unknown';
-        }
-    }
-
-    async requestCameraPermission() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            // Stoppe Stream sofort wieder - nur für Berechtigung
-            stream.getTracks().forEach(track => track.stop());
-
-            this.showNotification('success', 'Berechtigung erteilt', 'Kamera-Zugriff wurde erlaubt');
-
-            // Versuche Scanner zu starten
-            setTimeout(() => this.startQRScanner(), 500);
-
-        } catch (error) {
-            this.showNotification('error', 'Berechtigung verweigert', 'Kamera-Zugriff wurde nicht erlaubt');
+            this.showNotification('error', 'Scanner-Fehler', 'QR-Scanner konnte nicht gestartet werden');
+            this.scannerActive = false;
+            this.updateScannerUI();
         }
     }
 
     stopQRScanner() {
-        if (!this.scannerActive) return;
+        if (!this.scannerActive) {
+            return;
+        }
 
         console.log('⏹️ Stoppe QR-Scanner...');
 
+        this.scannerActive = false;
+
         // Video-Stream stoppen
         if (this.videoStream) {
-            this.videoStream.getTracks().forEach(track => {
-                track.stop();
-                console.log(`Track gestoppt: ${track.kind}`);
-            });
+            this.videoStream.getTracks().forEach(track => track.stop());
             this.videoStream = null;
         }
 
@@ -918,54 +337,38 @@ class WareneinlagerungApp {
             this.scanLoop = null;
         }
 
-        // Video-Element leeren
-        const video = document.getElementById('scannerVideo');
+        // Video zurücksetzen
+        const video = document.getElementById('qrVideo');
         video.srcObject = null;
 
-        this.scannerActive = false;
         this.updateScannerUI();
-
-        this.showNotification('info', 'Scanner gestoppt', 'QR-Scanner wurde beendet');
+        console.log('✅ QR-Scanner gestoppt');
     }
 
-    startQRScanLoop() {
-        const video = document.getElementById('scannerVideo');
-        const canvas = document.getElementById('scannerCanvas');
+    startScanLoop(video, canvas) {
+        if (!this.qrScanner) {
+            console.error('QR-Scanner-Bibliothek nicht verfügbar');
+            this.stopQRScanner();
+            return;
+        }
+
         const context = canvas.getContext('2d');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
 
         const scanFrame = () => {
-            if (!this.scannerActive || !video.videoWidth || !video.videoHeight) {
-                if (this.scannerActive) {
-                    this.scanLoop = requestAnimationFrame(scanFrame);
-                }
-                return;
-            }
+            if (!this.scannerActive) return;
 
             try {
-                // Canvas auf Video-Größe setzen
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-
-                // Video-Frame auf Canvas zeichnen
                 context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                // Image-Data für QR-Erkennung
                 const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
 
-                // QR-Code erkennen
-                if (typeof jsQR !== 'undefined') {
-                    const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                        inversionAttempts: "dontInvert"
-                    });
+                if (this.qrScanner) {
+                    const qrData = this.qrScanner(imageData.data, imageData.width, imageData.height);
 
-                    if (code && code.data) {
-                        this.handleQRCodeDetected(code.data);
-                    }
-                } else {
-                    // Fallback: Einfache Muster-Erkennung
-                    if (this.detectQRPattern(imageData)) {
-                        const mockData = `FALLBACK_QR_${Date.now()}`;
-                        this.handleQRCodeDetected(mockData);
+                    if (qrData && qrData.data) {
+                        console.log('QR-Code erkannt:', qrData.data);
+                        this.handleQRCodeDetected(qrData.data);
                     }
                 }
 
@@ -980,24 +383,6 @@ class WareneinlagerungApp {
 
         this.scanLoop = requestAnimationFrame(scanFrame);
         console.log('🔄 QR-Scan-Loop gestartet');
-    }
-
-    detectQRPattern(imageData) {
-        // Einfache QR-Muster-Erkennung als Fallback
-        // Erkennt grundlegende Muster von QR-Codes
-        const { data, width, height } = imageData;
-        let darkPixels = 0;
-        let totalPixels = width * height;
-
-        // Zähle dunkle Pixel
-        for (let i = 0; i < data.length; i += 4) {
-            const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-            if (brightness < 128) darkPixels++;
-        }
-
-        // QR-Codes haben typischerweise 40-60% dunkle Pixel
-        const darkRatio = darkPixels / totalPixels;
-        return darkRatio > 0.3 && darkRatio < 0.7;
     }
 
     updateScannerUI() {
@@ -1019,7 +404,7 @@ class WareneinlagerungApp {
         }
     }
 
-    // ===== QR-CODE VERARBEITUNG FÜR PARALLELE SESSIONS =====
+    // ===== QUALITÄTSKONTROLLE QR-CODE VERARBEITUNG =====
     async handleQRCodeDetected(qrData) {
         const now = Date.now();
 
@@ -1029,665 +414,668 @@ class WareneinlagerungApp {
             return;
         }
 
-        // 1. Sofortige Duplikat-Prüfung (identischer Code + Zeit)
-        if (this.lastProcessedQR === qrData && (now - this.lastProcessedTime) < 2000) {
-            console.log('🔄 Identischer QR-Code innerhalb 2s ignoriert');
+        // Sofortige Duplikat-Prüfung (identischer Code + Zeit)
+        if (this.lastProcessedQR === qrData && (now - this.lastProcessedTime) < this.scanCooldown) {
+            console.log('🔄 Identischer QR-Code innerhalb Cooldown ignoriert');
             return;
         }
 
-        // 2. Prüfung auf kürzlich gescannte Codes (zeitbasiert)
+        // Prüfung auf kürzlich gescannte Codes
         const recentScanTime = this.recentlyScanned.get(qrData);
         if (recentScanTime && (now - recentScanTime) < this.scanCooldown) {
             console.log(`🔄 QR-Code zu schnell erneut gescannt (${now - recentScanTime}ms < ${this.scanCooldown}ms)`);
             return;
         }
 
-        // 3. Prüfung auf bereits laufende Verarbeitung
+        // Prüfung auf pending Scans
         if (this.pendingScans.has(qrData)) {
-            console.log('🔄 QR-Code wird bereits verarbeitet, überspringe');
+            console.log('🔄 QR-Code wird bereits verarbeitet');
             return;
         }
 
-        // Verarbeitung starten
+        // Als pending markieren
+        this.pendingScans.add(qrData);
         this.lastProcessedQR = qrData;
         this.lastProcessedTime = now;
-        this.pendingScans.add(qrData);
-        this.recentlyScanned.set(qrData, now);
-
-        console.log(`📄 QR-Code erkannt für ${this.selectedSession.userName}:`, qrData);
 
         try {
-            // In Datenbank speichern für ausgewählte Session
-            const result = await window.electronAPI.qr.saveScan(this.selectedSession.sessionId, qrData);
+            console.log(`🔍 Verarbeite QR-Code: "${qrData}"`);
 
-            // Scan-Ergebnis verarbeiten
-            this.handleScanResult(result, qrData);
-
-        } catch (error) {
-            console.error('QR-Code Verarbeitung fehlgeschlagen:', error);
-
-            // Auch bei unerwarteten Fehlern strukturierte Antwort erstellen
-            const errorResult = {
-                success: false,
-                status: 'error',
-                message: `Unerwarteter Fehler: ${error.message}`,
-                data: null,
-                timestamp: new Date().toISOString()
+            // Aktuellen Scan setzen
+            this.currentScan = {
+                qrData,
+                timestamp: now,
+                sessionId: this.selectedSession.sessionId,
+                status: 'processing'
             };
 
-            this.handleScanResult(errorResult, qrData);
+            this.updateCurrentScanDisplay();
+
+            // QR-Code an Main-Process senden
+            const result = await window.electronAPI.invoke('qr:process-scan', qrData, this.selectedSession.sessionId);
+
+            // Erfolg verarbeiten
+            if (result.success) {
+                this.handleQRScanSuccess(result, qrData);
+            } else {
+                this.handleQRScanError(result, qrData);
+            }
+
+            // In recentlyScanned eintragen
+            this.recentlyScanned.set(qrData, now);
+
+            // Alte Einträge aus recentlyScanned entfernen (5 Minuten)
+            const cutoffTime = now - 300000;
+            for (const [code, time] of this.recentlyScanned.entries()) {
+                if (time < cutoffTime) {
+                    this.recentlyScanned.delete(code);
+                }
+            }
+
+        } catch (error) {
+            console.error('Fehler bei QR-Code-Verarbeitung:', error);
+            this.handleQRScanError({
+                success: false,
+                status: 'error',
+                message: `Verarbeitungsfehler: ${error.message}`
+            }, qrData);
 
         } finally {
-            // Verarbeitung abgeschlossen - aus Pending-Set entfernen
+            // Aus pending entfernen
             this.pendingScans.delete(qrData);
         }
     }
 
-    // ===== STRUKTURIERTE SCAN-RESULT-BEHANDLUNG =====
-    handleScanResult(result, qrData) {
-        const { success, status, message, data, duplicateInfo } = result;
+    handleQRScanSuccess(result, qrData) {
+        this.currentScan.status = 'success';
+        this.currentScan.result = result;
 
-        console.log('QR-Scan Ergebnis:', { success, status, message, session: this.selectedSession.userName });
+        // Status-spezifische Behandlung
+        if (result.status === 'first_scan') {
+            console.log(`✅ ERSTER SCAN: ${qrData} - Bearbeitung gestartet`);
+            this.showScanSuccess('Bearbeitung gestartet', `Karton: ${qrData}`, 'first-scan');
 
-        // Dekodierte Daten extrahieren falls verfügbar
-        let decodedData = null;
-        if (data && data.DecodedData) {
-            decodedData = data.DecodedData;
-        } else if (data && data.ParsedPayload && data.ParsedPayload.decoded) {
-            decodedData = data.ParsedPayload.decoded;
-        }
-
-        // 1. AKTUELLER SCAN: Jeden Scan anzeigen
-        this.currentScan = {
-            id: data?.ID || `temp_${Date.now()}`,
-            timestamp: new Date(),
-            content: qrData,
-            user: this.selectedSession.userName,
-            userId: this.selectedSession.userId,
-            sessionId: this.selectedSession.sessionId,
-            status: status,
-            message: message,
-            success: success,
-            duplicateInfo: duplicateInfo,
-            decodedData: decodedData
-        };
-
-        this.updateCurrentScanDisplay();
-
-        // 2. ERFOLGREICHE SCANS: Nur erfolgreiche Scans zur Tabelle hinzufügen
-        if (success && decodedData) {
-            // Session-spezifische Duplikat-Prüfung
-            const sessionCodes = this.sessionScannedCodes.get(this.selectedSession.sessionId) || new Set();
-
-            if (!sessionCodes.has(qrData)) {
-                sessionCodes.add(qrData);
-                this.sessionScannedCodes.set(this.selectedSession.sessionId, sessionCodes);
-
-                this.addToSuccessfulScans({
-                    id: data.ID,
-                    timestamp: new Date(),
-                    content: qrData,
-                    user: this.selectedSession.userName,
-                    userId: this.selectedSession.userId,
-                    sessionId: this.selectedSession.sessionId,
-                    decodedData: decodedData
-                });
-
-                // Session-Scan-Count aktualisieren
-                this.selectedSession.scanCount++;
-                this.updateSelectedUserDisplay();
-                this.updateActiveUsersDisplay();
-
-                console.log(`✅ Erfolgreicher Scan zur Tabelle hinzugefügt für ${this.selectedSession.userName}`);
-            } else {
-                console.log(`🔄 Erfolgreicher Scan bereits in Session-Tabelle vorhanden`);
-            }
-        }
-
-        // 3. VISUAL FEEDBACK je nach Status
-        if (success) {
-            this.globalScannedCodes.add(qrData);
-            this.showScanSuccess(qrData, 'success');
-
-            // Erweiterte Nachricht mit dekodierten Daten
-            let enhancedMessage = message;
-            if (decodedData) {
-                const parts = [];
-                if (decodedData.auftrags_nr) parts.push(`Auftrag: ${decodedData.auftrags_nr}`);
-                if (decodedData.paket_nr) parts.push(`Paket: ${decodedData.paket_nr}`);
-                if (parts.length > 0) {
-                    enhancedMessage = `${this.selectedSession.userName}: ${parts.join(', ')}`;
-                }
-            }
-
-            this.showNotification('success', 'QR-Code gespeichert', enhancedMessage);
-        } else {
-            // Verschiedene Fehler/Duplikat-Typen
-            switch (status) {
-                case 'duplicate_cache':
-                case 'duplicate_database':
-                case 'duplicate_transaction':
-                    this.globalScannedCodes.add(qrData);
-                    this.showScanSuccess(qrData, 'duplicate');
-                    this.showNotification('error', 'Duplikat erkannt', `${this.selectedSession.userName}: ${message}`);
-                    break;
-
-                case 'rate_limit':
-                    this.showScanSuccess(qrData, 'warning');
-                    this.showNotification('warning', 'Rate Limit', message);
-                    break;
-
-                case 'processing':
-                    this.showScanSuccess(qrData, 'info');
-                    this.showNotification('info', 'Verarbeitung', message);
-                    break;
-
-                case 'database_offline':
-                case 'error':
-                default:
-                    this.showScanSuccess(qrData, 'error');
-                    this.showNotification('error', 'Fehler', message);
-                    break;
-            }
-        }
-
-        // Letzte Scan-Zeit aktualisieren
-        document.getElementById('lastScanTime').textContent =
-            new Date().toLocaleTimeString('de-DE');
-    }
-
-    showScanSuccess(qrData, type = 'success') {
-        // Visuelles Feedback im Scanner
-        const overlay = document.querySelector('.scanner-overlay');
-
-        // CSS-Klassen je nach Typ
-        const feedbackClasses = {
-            success: 'scan-feedback-success',
-            duplicate: 'scan-feedback-error', // Duplikate jetzt rot
-            warning: 'scan-feedback-duplicate',
-            error: 'scan-feedback-error',
-            info: 'scan-feedback-success'
-        };
-
-        const feedbackClass = feedbackClasses[type] || 'scan-feedback-success';
-        overlay.classList.add(feedbackClass);
-
-        setTimeout(() => {
-            overlay.classList.remove(feedbackClass);
-        }, 1000);
-
-        // Audio-Feedback
-        this.playSuccessSound(type);
-    }
-
-    playSuccessSound(type = 'success') {
-        try {
-            // Verschiedene Töne je nach Typ
-            const context = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = context.createOscillator();
-            const gainNode = context.createGain();
-
-            oscillator.connect(gainNode);
-            gainNode.connect(context.destination);
-
-            // Töne je nach Status
-            if (type === 'success') {
-                oscillator.frequency.setValueAtTime(800, context.currentTime);
-                oscillator.frequency.setValueAtTime(1000, context.currentTime + 0.1);
-                gainNode.gain.setValueAtTime(0.3, context.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
-                oscillator.start(context.currentTime);
-                oscillator.stop(context.currentTime + 0.3);
-            } else if (type === 'duplicate') {
-                // BEMERKBARER DUPLIKAT-SOUND: Längerer, tieferer, dringenderer Ton
-                oscillator.frequency.setValueAtTime(400, context.currentTime);
-                oscillator.frequency.setValueAtTime(350, context.currentTime + 0.2);
-                oscillator.frequency.setValueAtTime(400, context.currentTime + 0.4);
-                gainNode.gain.setValueAtTime(0.5, context.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.6);
-                oscillator.start(context.currentTime);
-                oscillator.stop(context.currentTime + 0.6);
-            } else if (type === 'warning') {
-                oscillator.frequency.setValueAtTime(600, context.currentTime);
-                oscillator.frequency.setValueAtTime(700, context.currentTime + 0.1);
-                gainNode.gain.setValueAtTime(0.3, context.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
-                oscillator.start(context.currentTime);
-                oscillator.stop(context.currentTime + 0.3);
-            } else if (type === 'error') {
-                oscillator.frequency.setValueAtTime(400, context.currentTime);
-                oscillator.frequency.setValueAtTime(300, context.currentTime + 0.1);
-                gainNode.gain.setValueAtTime(0.3, context.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
-                oscillator.start(context.currentTime);
-                oscillator.stop(context.currentTime + 0.3);
-            }
-        } catch (error) {
-            // Sound-Fehler ignorieren
-            console.log('Sound-Feedback nicht verfügbar');
-        }
-    }
-
-    // ===== CURRENT SCAN DISPLAY =====
-    updateCurrentScanDisplay() {
-        const currentScanDisplay = document.getElementById('currentScanDisplay');
-        const currentScanTime = document.getElementById('currentScanTime');
-        const currentScanStatus = document.getElementById('currentScanStatus');
-        const currentScanContent = document.getElementById('currentScanContent');
-        const currentScanMessage = document.getElementById('currentScanMessage');
-
-        if (!this.currentScan) {
-            currentScanDisplay.style.display = 'none';
-            return;
-        }
-
-        const scan = this.currentScan;
-        const timeString = scan.timestamp.toLocaleTimeString('de-DE');
-        const statusInfo = this.getScanStatusInfo(scan);
-
-        // CSS-Klasse für Status
-        currentScanDisplay.className = `current-scan-display ${statusInfo.cssClass}`;
-        currentScanDisplay.style.display = 'block';
-
-        // Inhalt aktualisieren
-        currentScanTime.textContent = timeString;
-        currentScanStatus.innerHTML = `
-            <span class="status-icon">${statusInfo.icon}</span>
-            <span class="status-text" style="color: ${statusInfo.color};">${statusInfo.label}</span>
-            <span class="scan-user">${scan.user}</span>
-        `;
-
-        // QR-Code Inhalt (gekürzt für bessere Übersicht)
-        const contentPreview = scan.content.length > 150 ?
-            scan.content.substring(0, 150) + '...' : scan.content;
-        currentScanContent.textContent = contentPreview;
-
-        currentScanMessage.textContent = scan.message;
-    }
-
-    // ===== SUCCESSFUL SCANS TABLE =====
-    addToSuccessfulScans(scan) {
-        this.successfulScans.unshift(scan);
-
-        // Maximal 100 erfolgreiche Scans behalten (mehr da parallele Sessions)
-        if (this.successfulScans.length > 100) {
-            this.successfulScans = this.successfulScans.slice(0, 100);
-        }
-
-        this.updateSuccessfulScansTable();
-    }
-
-    updateSuccessfulScansTable() {
-        const tableBody = document.getElementById('successScansTableBody');
-        const emptyMessage = document.getElementById('emptySuccessScans');
-        const tableContainer = document.querySelector('.success-scans-table-container table');
-
-        if (this.successfulScans.length === 0) {
-            tableContainer.style.display = 'none';
-            emptyMessage.style.display = 'block';
-            return;
-        }
-
-        tableContainer.style.display = 'table';
-        emptyMessage.style.display = 'none';
-
-        const rowsHtml = this.successfulScans.map(scan => {
-            const timeString = scan.timestamp.toLocaleTimeString('de-DE');
-            const decoded = scan.decodedData || {};
-
-            return `
-                <tr>
-                    <td class="scan-time-col">${timeString}</td>
-                    <td class="user-col">${scan.user}</td>
-                    <td class="auftrag-col">${decoded.auftrags_nr || '-'}</td>
-                    <td class="kunde-col">${decoded.kunden_name || decoded.kunden_id || '-'}</td>
-                    <td class="paket-col">${decoded.paket_nr || '-'}</td>
-                </tr>
-            `;
-        }).join('');
-
-        tableBody.innerHTML = rowsHtml;
-    }
-
-    async refreshScansForSelectedUser() {
-        if (!this.selectedSession) return;
-
-        try {
-            const scans = await window.electronAPI.qr.getDecodedScans(this.selectedSession.sessionId, 50);
-
-            // Erfolgreiche Scans für ausgewählten Benutzer aktualisieren
-            this.successfulScans = this.successfulScans.filter(s => s.sessionId !== this.selectedSession.sessionId);
-
-            scans.forEach(scan => {
-                this.addToSuccessfulScans({
-                    id: scan.ID,
-                    timestamp: new Date(scan.ScanTime),
-                    content: scan.QrCode,
-                    user: this.selectedSession.userName,
-                    userId: this.selectedSession.userId,
-                    sessionId: this.selectedSession.sessionId,
-                    decodedData: scan.DecodedData
-                });
+            // QR-State aktualisieren
+            this.qrScanStates.set(qrData, {
+                scanCount: 1,
+                status: 'in_progress',
+                sessionId: this.selectedSession.sessionId
             });
 
-            console.log(`Scan-Historie für ${this.selectedSession.userName} aktualisiert: ${scans.length} Scans`);
-        } catch (error) {
-            console.error('Fehler beim Aktualisieren der Scan-Historie:', error);
-        }
-    }
+        } else if (result.status === 'second_scan_complete') {
+            console.log(`✅ ZWEITER SCAN: ${qrData} - Bearbeitung abgeschlossen`);
+            this.showScanSuccess('Karton abgeschlossen!', result.message, 'second-scan');
 
-    async refreshScans() {
-        if (this.selectedSession) {
-            await this.refreshScansForSelectedUser();
-            this.showNotification('info', 'Aktualisiert', 'Scan-Historie wurde aktualisiert');
-        }
-    }
+            // QR-State aktualisieren
+            this.qrScanStates.set(qrData, {
+                scanCount: 2,
+                status: 'completed'
+            });
 
-    clearRecentScans() {
-        // Current Scan zurücksetzen
-        this.currentScan = null;
+            // Session wird automatisch beendet und neu gestartet
+            this.showNotification('success', 'Session beendet', 'Neue Session automatisch gestartet');
+        }
+
+        // Zu erfolgreichen Scans hinzufügen
+        this.successfulScans.unshift({
+            qrData,
+            timestamp: this.currentScan.timestamp,
+            sessionId: this.selectedSession.sessionId,
+            userName: this.selectedSession.userName,
+            status: result.status,
+            processingTime: result.data?.processingTime
+        });
+
+        // Liste auf 20 Einträge begrenzen
+        if (this.successfulScans.length > 20) {
+            this.successfulScans = this.successfulScans.slice(0, 20);
+        }
+
         this.updateCurrentScanDisplay();
-
-        // Erfolgreiche Scans löschen (alle oder nur für ausgewählten Benutzer)
-        if (this.selectedSession) {
-            this.successfulScans = this.successfulScans.filter(s => s.sessionId !== this.selectedSession.sessionId);
-            this.showNotification('info', 'Scans geleert', `Scan-Historie für ${this.selectedSession.userName} wurde geleert`);
-        } else {
-            this.successfulScans = [];
-            this.showNotification('info', 'Scans geleert', 'Komplette Scan-Historie wurde geleert');
-        }
-
-        this.updateSuccessfulScansTable();
-        console.log('🗑️ Scan-Historie manuell geleert');
+        this.updateScanHistoryDisplay();
+        this.updateQualityStatsDisplay();
     }
 
-    getScanStatusInfo(scan) {
-        const { success, status, duplicateInfo } = scan;
+    handleQRScanError(result, qrData) {
+        this.currentScan.status = 'error';
+        this.currentScan.result = result;
 
-        if (success) {
-            return {
-                cssClass: 'scan-success',
-                icon: '✅',
-                label: 'Gespeichert',
-                color: '#28a745'
-            };
-        }
+        let errorTitle = 'Scan-Fehler';
+        let errorClass = 'error';
 
-        switch (status) {
-            case 'duplicate_cache':
-            case 'duplicate_database':
-            case 'duplicate_transaction':
-                const timeInfo = duplicateInfo?.minutesAgo ?
-                    ` (vor ${duplicateInfo.minutesAgo} Min)` : '';
-                return {
-                    cssClass: 'scan-duplicate',
-                    icon: '🚫',
-                    label: `Duplikat${timeInfo}`,
-                    color: '#dc3545' // ROT statt gelb
-                };
+        // Status-spezifische Fehlerbehandlung
+        switch (result.status) {
+            case 'duplicate_completed_box':
+                errorTitle = 'DUPLIKAT-FEHLER';
+                errorClass = 'duplicate-error';
+                this.showScanError(errorTitle, result.message, errorClass);
+                break;
 
-            case 'rate_limit':
-                return {
-                    cssClass: 'scan-error',
-                    icon: '🚫',
-                    label: 'Rate Limit',
-                    color: '#fd7e14'
-                };
+            case 'wrong_session':
+                errorTitle = 'Falscher Mitarbeiter';
+                this.showScanError(errorTitle, result.message, 'warning');
+                break;
 
-            case 'processing':
-                return {
-                    cssClass: 'scan-info',
-                    icon: '🔄',
-                    label: 'Verarbeitung',
-                    color: '#17a2b8'
-                };
+            case 'rate_limited':
+                errorTitle = 'Zu schnell';
+                this.showScanError(errorTitle, result.message, 'warning');
+                break;
 
-            case 'database_offline':
-                return {
-                    cssClass: 'scan-error',
-                    icon: '💾',
-                    label: 'DB Offline',
-                    color: '#dc3545'
-                };
-
-            case 'error':
             default:
-                return {
-                    cssClass: 'scan-error',
-                    icon: '❌',
-                    label: 'Fehler',
-                    color: '#dc3545'
-                };
+                this.showScanError(errorTitle, result.message || 'Unbekannter Fehler', 'error');
+        }
+
+        console.log(`❌ QR-Scan Fehler: ${qrData} - ${result.message}`);
+
+        this.updateCurrentScanDisplay();
+    }
+
+    // ===== UI-UPDATES =====
+
+    updateCurrentScanDisplay() {
+        const currentScanInfo = document.getElementById('currentScanInfo');
+        const scanStatus = document.getElementById('scanStatus');
+
+        if (!this.currentScan) {
+            currentScanInfo.textContent = 'Bereit zum Scannen';
+            scanStatus.className = 'scan-status ready';
+            return;
+        }
+
+        const timeStr = new Date(this.currentScan.timestamp).toLocaleTimeString();
+        currentScanInfo.textContent = `${timeStr}: ${this.currentScan.qrData}`;
+
+        switch (this.currentScan.status) {
+            case 'processing':
+                scanStatus.className = 'scan-status processing';
+                break;
+            case 'success':
+                scanStatus.className = 'scan-status success';
+                break;
+            case 'error':
+                scanStatus.className = 'scan-status error';
+                break;
         }
     }
 
-    // ===== UTILITY METHODS =====
-    cleanupOldScans() {
-        // Bereinige alte Einträge aus recentlyScanned (älter als 1 Minute)
-        const now = Date.now();
-        const oneMinute = 60 * 1000;
+    updateScanHistoryDisplay() {
+        const historyList = document.getElementById('scanHistoryList');
+        historyList.innerHTML = '';
 
-        for (const [qrData, timestamp] of this.recentlyScanned.entries()) {
-            if (now - timestamp > oneMinute) {
-                this.recentlyScanned.delete(qrData);
+        this.successfulScans.slice(0, 10).forEach(scan => {
+            const listItem = document.createElement('div');
+            listItem.className = 'scan-history-item';
+
+            const timeStr = new Date(scan.timestamp).toLocaleTimeString();
+            const statusText = scan.status === 'first_scan' ? 'Gestartet' : 'Abgeschlossen';
+            const processingTime = scan.processingTime ?
+                ` (${this.formatDuration(scan.processingTime)})` : '';
+
+            listItem.innerHTML = `
+                <div class="scan-time">${timeStr}</div>
+                <div class="scan-qr">${scan.qrData}</div>
+                <div class="scan-status-text ${scan.status}">${statusText}${processingTime}</div>
+                <div class="scan-user">${scan.userName}</div>
+            `;
+
+            historyList.appendChild(listItem);
+        });
+
+        // Scan-Counter aktualisieren
+        const scanCount = document.getElementById('scanCount');
+        const sessionScans = this.selectedSession ?
+            this.successfulScans.filter(s => s.sessionId === this.selectedSession.sessionId).length : 0;
+        scanCount.textContent = sessionScans;
+    }
+
+    updateQualityStatsDisplay() {
+        // Haupt-Statistiken
+        document.getElementById('totalBoxesStarted').textContent = this.qualityStats.totalBoxesStarted;
+        document.getElementById('totalBoxesCompleted').textContent = this.qualityStats.totalBoxesCompleted;
+        document.getElementById('duplicateAttempts').textContent = this.qualityStats.duplicateAttempts;
+
+        // Fortschritt berechnen
+        const inProgress = this.qualityStats.totalBoxesStarted - this.qualityStats.totalBoxesCompleted;
+        document.getElementById('boxesInProgress').textContent = inProgress;
+
+        // Completion Rate
+        const completionRate = this.qualityStats.totalBoxesStarted > 0 ?
+            (this.qualityStats.totalBoxesCompleted / this.qualityStats.totalBoxesStarted * 100).toFixed(1) : 0;
+        document.getElementById('completionRate').textContent = `${completionRate}%`;
+
+        // Durchschnittliche Bearbeitungszeit
+        const avgTime = this.qualityStats.averageProcessingTime;
+        document.getElementById('averageProcessingTime').textContent =
+            avgTime > 0 ? this.formatDuration(avgTime) : '-';
+    }
+
+    // ===== SESSION MANAGEMENT =====
+
+    handleSessionStarted(sessionData) {
+        this.activeSessions.set(sessionData.userId, sessionData);
+        this.updateActiveUsersList();
+        this.updateSystemInfo();
+
+        // UI von Login zu Workspace wechseln
+        this.switchToWorkspace();
+
+        // Qualitätskontrolle-spezifisch: Session automatisch auswählen wenn keine ausgewählt
+        if (!this.selectedSession) {
+            this.selectUser(sessionData.userId);
+        }
+
+        this.showNotification('success', 'Anmeldung erfolgreich', `${sessionData.userName} ist jetzt angemeldet`);
+    }
+
+    // UI-Umschaltung zwischen Login und Workspace
+    switchToWorkspace() {
+        const loginSection = document.getElementById('loginSection');
+        const workspace = document.getElementById('workspace');
+
+        if (loginSection && workspace) {
+            loginSection.style.display = 'none';
+            workspace.style.display = 'grid';
+            console.log('✅ UI zu Workspace gewechselt');
+        }
+    }
+
+    switchToLogin() {
+        const loginSection = document.getElementById('loginSection');
+        const workspace = document.getElementById('workspace');
+
+        if (loginSection && workspace) {
+            loginSection.style.display = 'flex';
+            workspace.style.display = 'none';
+            console.log('✅ UI zu Login gewechselt');
+        }
+    }
+
+    handleSessionEnded(data) {
+        this.activeSessions.delete(data.userId);
+
+        // Falls die ausgewählte Session beendet wurde
+        if (this.selectedSession && this.selectedSession.sessionId === data.sessionId) {
+            // Scanner stoppen
+            this.stopQRScanner();
+
+            // Session-Auswahl zurücksetzen
+            this.selectedSession = null;
+            this.updateSelectedUserPanel();
+        }
+
+        this.updateActiveUsersList();
+        this.updateSystemInfo();
+
+        // Wenn keine aktiven Sessions mehr vorhanden sind, zurück zum Login
+        if (this.activeSessions.size === 0) {
+            this.switchToLogin();
+        }
+
+        this.showNotification('info', 'Abmeldung', `${data.userName} wurde abgemeldet`);
+    }
+
+    updateActiveSessions(sessions) {
+        this.activeSessions.clear();
+        sessions.forEach(session => {
+            this.activeSessions.set(session.userId, session);
+        });
+
+        this.updateActiveUsersList();
+        this.updateSystemInfo();
+
+        // UI-Zustand basierend auf aktiven Sessions setzen
+        if (this.activeSessions.size > 0) {
+            this.switchToWorkspace();
+
+            // Wenn noch keine Session ausgewählt ist, erste Session auswählen
+            if (!this.selectedSession && sessions.length > 0) {
+                this.selectUser(sessions[0].userId);
             }
+        } else {
+            this.switchToLogin();
         }
     }
 
-    // ===== UI UPDATES =====
-    updateSystemStatus(status, message) {
-        const statusDot = document.querySelector('.status-dot');
-        const statusText = document.querySelector('.status-text');
+    updateActiveUsersList() {
+        const usersList = document.getElementById('activeUsersList');
+        const userCount = document.getElementById('activeUserCount');
 
-        statusDot.className = `status-dot ${status}`;
-        statusText.textContent = message;
+        usersList.innerHTML = '';
+        userCount.textContent = this.activeSessions.size;
+
+        if (this.activeSessions.size === 0) {
+            usersList.innerHTML = `
+                <div class="no-users-message">
+                    <p>Keine aktiven Mitarbeiter</p>
+                    <p>RFID-Tag scannen zum Anmelden</p>
+                </div>
+            `;
+            return;
+        }
+
+        this.activeSessions.forEach((session, userId) => {
+            const userCard = document.createElement('div');
+            userCard.className = `user-card ${this.selectedSession?.userId === userId ? 'selected' : ''}`;
+            userCard.dataset.userId = userId;
+
+            const duration = Date.now() - session.startTime;
+            const sessionScans = this.successfulScans.filter(s => s.sessionId === session.sessionId).length;
+
+            userCard.innerHTML = `
+                <div class="user-info">
+                    <div class="user-avatar">👤</div>
+                    <div class="user-details">
+                        <div class="user-name">${session.userName}</div>
+                        <div class="user-session-time">${this.formatDuration(duration)}</div>
+                        <div class="user-scan-count">${sessionScans} Scans</div>
+                    </div>
+                    <button class="user-logout-btn" title="Abmelden">🔓</button>
+                </div>
+            `;
+
+            usersList.appendChild(userCard);
+        });
     }
 
-    updateInstructionText(text) {
-        document.getElementById('instructionText').textContent = `💡 ${text}`;
+    selectUser(userId) {
+        const session = this.activeSessions.get(userId);
+        if (!session) {
+            console.error('Session nicht gefunden:', userId);
+            return;
+        }
+
+        console.log('👤 Benutzer ausgewählt:', session.userName);
+
+        // Scanner stoppen falls aktiv
+        if (this.scannerActive) {
+            this.stopQRScanner();
+        }
+
+        this.selectedSession = session;
+        this.updateSelectedUserPanel();
+        this.updateActiveUsersList();
+        this.updateScanHistoryDisplay();
+
+        this.showNotification('info', 'Benutzer ausgewählt', `${session.userName} für QR-Scanning aktiv`);
+    }
+
+    updateSelectedUserPanel() {
+        const panel = document.getElementById('selectedUserPanel');
+        const userName = document.getElementById('selectedUserName');
+        const sessionTime = document.getElementById('selectedSessionTime');
+        const sessionScans = document.getElementById('selectedSessionScans');
+        const scannerUserInfo = document.getElementById('scannerUserInfo');
+
+        if (!this.selectedSession) {
+            panel.style.display = 'none';
+            scannerUserInfo.textContent = 'Wählen Sie einen Mitarbeiter aus';
+            return;
+        }
+
+        panel.style.display = 'block';
+        userName.textContent = this.selectedSession.userName;
+
+        const duration = Date.now() - this.selectedSession.startTime;
+        sessionTime.textContent = this.formatDuration(duration);
+
+        const scans = this.successfulScans.filter(s => s.sessionId === this.selectedSession.sessionId).length;
+        sessionScans.textContent = scans;
+
+        scannerUserInfo.textContent = `Scanner bereit für ${this.selectedSession.userName}`;
+    }
+
+    updateSessionTimer(data) {
+        if (this.selectedSession && this.selectedSession.sessionId === data.sessionId) {
+            const sessionTime = document.getElementById('selectedSessionTime');
+            sessionTime.textContent = data.formattedDuration;
+        }
+
+        // Benutzer-Liste aktualisieren
+        this.updateActiveUsersList();
+    }
+
+    async logoutUser(sessionId) {
+        try {
+            const result = await window.electronAPI.invoke('sessions:end-session', sessionId);
+            if (result) {
+                this.showNotification('success', 'Abmeldung', 'Benutzer erfolgreich abgemeldet');
+            } else {
+                this.showNotification('error', 'Abmeldung fehlgeschlagen', 'Session konnte nicht beendet werden');
+            }
+        } catch (error) {
+            console.error('Logout-Fehler:', error);
+            this.showNotification('error', 'Logout-Fehler', error.message);
+        }
+    }
+
+    // ===== RFID SIMULATION =====
+    async simulateRFIDTag(tagId) {
+        try {
+            console.log(`🧪 Simuliere RFID-Tag: ${tagId}`);
+            const result = await window.electronAPI.invoke('rfid:simulate-tag', tagId);
+
+            if (result.success) {
+                const action = result.action === 'login' ? 'Angemeldet' : 'Abgemeldet';
+                this.showNotification('success', 'RFID-Simulation', `${action}: ${result.user.Name}`);
+            } else {
+                this.showNotification('error', 'RFID-Simulation', result.reason || 'Unbekannter Fehler');
+            }
+        } catch (error) {
+            console.error('RFID-Simulation Fehler:', error);
+            this.showNotification('error', 'RFID-Simulation', error.message);
+        }
+    }
+
+    // ===== QUALITÄTSKONTROLLE-SPEZIFISCHE FUNKTIONEN =====
+
+    async resetQualityStats() {
+        try {
+            const result = await window.electronAPI.invoke('quality:reset-stats');
+            if (result) {
+                this.qualityStats = {
+                    totalBoxesStarted: 0,
+                    totalBoxesCompleted: 0,
+                    duplicateAttempts: 0,
+                    averageProcessingTime: 0,
+                    activeSessions: this.activeSessions.size
+                };
+                this.updateQualityStatsDisplay();
+                this.showNotification('success', 'Statistiken zurückgesetzt', 'Alle Qualitätskontrolle-Statistiken wurden zurückgesetzt');
+            }
+        } catch (error) {
+            console.error('Fehler beim Zurücksetzen der Statistiken:', error);
+            this.showNotification('error', 'Fehler', 'Statistiken konnten nicht zurückgesetzt werden');
+        }
+    }
+
+    startQualityStatsUpdate() {
+        setInterval(async () => {
+            try {
+                const stats = await window.electronAPI.invoke('quality:get-stats');
+                this.qualityStats = stats;
+                this.updateQualityStatsDisplay();
+            } catch (error) {
+                console.error('Fehler beim Aktualisieren der Qualitätskontrolle-Statistiken:', error);
+            }
+        }, 5000); // Alle 5 Sekunden aktualisieren
+    }
+
+    // ===== VISUAL FEEDBACK =====
+
+    showScanSuccess(title, message, type = 'success') {
+        // Erfolgs-Overlay anzeigen
+        this.showOverlay(title, message, type, 2000);
+
+        // Audio-Feedback
+        this.playSuccessSound();
+
+        // Visueller Erfolgs-Effekt
+        document.body.classList.add('scan-success');
+        setTimeout(() => {
+            document.body.classList.remove('scan-success');
+        }, 1000);
+    }
+
+    showScanError(title, message, type = 'error') {
+        // Fehler-Overlay anzeigen
+        this.showOverlay(title, message, type, 3000);
+
+        // Audio-Feedback
+        this.playErrorSound();
+
+        // Visueller Fehler-Effekt
+        document.body.classList.add('scan-error');
+        setTimeout(() => {
+            document.body.classList.remove('scan-error');
+        }, 1000);
+    }
+
+    showOverlay(title, message, type, duration = 2000) {
+        const overlay = document.createElement('div');
+        overlay.className = `scan-overlay ${type}`;
+        overlay.innerHTML = `
+            <div class="overlay-content">
+                <div class="overlay-title">${title}</div>
+                <div class="overlay-message">${message}</div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        // Automatisch entfernen
+        setTimeout(() => {
+            overlay.remove();
+        }, duration);
+    }
+
+    playSuccessSound() {
+        try {
+            const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmseAiyJ0/TSfCkHKHvJ7+OZSA4PW6/n77BdGAg+ltryxnkpBSl+0fPTgjMKFGS+8OScTgwOUarm7LFBF0BoouTdqWUdBj6T2/LMeiMGLYTK7+CSPwsXZaHv5ZtLDQ1Qp+XxsmMdCTmB0vTZcicFKHzN8Nw=');
+            audio.volume = 0.3;
+            audio.play().catch(() => {}); // Fehler ignorieren
+        } catch (error) {
+            // Audio-Fehler ignorieren
+        }
+    }
+
+    playErrorSound() {
+        try {
+            const audio = new Audio('data:audio/wav;base64,UklGRuoCAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YdoCAAC4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4');
+            audio.volume = 0.2;
+            audio.play().catch(() => {}); // Fehler ignorieren
+        } catch (error) {
+            // Audio-Fehler ignorieren
+        }
+    }
+
+    // ===== UTILITY FUNCTIONS =====
+
+    formatDuration(milliseconds) {
+        const seconds = Math.floor(milliseconds / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+
+        if (hours > 0) {
+            return `${hours}:${String(minutes % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+        } else {
+            return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+        }
+    }
+
+    showNotification(type, title, message) {
+        console.log(`📢 ${type.toUpperCase()}: ${title} - ${message}`);
+
+        // Notification-Element erstellen
+        const notification = document.createElement('div');
+        notification.className = `notification ${type}`;
+        notification.innerHTML = `
+            <div class="notification-content">
+                <div class="notification-title">${title}</div>
+                <div class="notification-message">${message}</div>
+            </div>
+        `;
+
+        // Zur Seite hinzufügen
+        document.body.appendChild(notification);
+
+        // Nach 4 Sekunden entfernen
+        setTimeout(() => {
+            notification.remove();
+        }, 4000);
     }
 
     startClockUpdate() {
         const updateClock = () => {
             const now = new Date();
-
-            // Korrekte deutsche Zeitformatierung mit expliziter Zeitzone
-            try {
-                const timeOptions = {
-                    timeZone: 'Europe/Berlin',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: false
-                };
-
-                const dateOptions = {
-                    timeZone: 'Europe/Berlin',
-                    day: '2-digit',
-                    month: '2-digit',
-                    year: 'numeric'
-                };
-
-                document.getElementById('currentTime').textContent =
-                    now.toLocaleTimeString('de-DE', timeOptions);
-                document.getElementById('dateText').textContent =
-                    now.toLocaleDateString('de-DE', dateOptions);
-
-            } catch (error) {
-                console.error('Fehler bei Zeitformatierung:', error);
-                // Fallback zu einfacher Formatierung
-                document.getElementById('currentTime').textContent =
-                    now.toLocaleTimeString('de-DE');
-                document.getElementById('dateText').textContent =
-                    now.toLocaleDateString('de-DE');
+            const timeString = now.toLocaleTimeString('de-DE');
+            const clockElement = document.getElementById('currentTime');
+            if (clockElement) {
+                clockElement.textContent = timeString;
             }
         };
 
         updateClock();
         setInterval(updateClock, 1000);
-
-        // Periodische Bereinigung alter Scans
-        setInterval(() => {
-            this.cleanupOldScans();
-        }, 30000); // Alle 30 Sekunden
     }
 
     async updateSystemInfo() {
         try {
-            const systemInfo = await window.electronAPI.app.getSystemInfo();
-            document.getElementById('versionText').textContent = `v${systemInfo.version}`;
+            const status = await window.electronAPI.invoke('system:get-status');
+
+            const statusElement = document.getElementById('systemStatus');
+            const statusText = statusElement.querySelector('.status-text');
+            const statusDot = statusElement.querySelector('.status-dot');
+
+            if (status.database && status.rfid) {
+                statusText.textContent = 'System bereit';
+                statusDot.className = 'status-dot online';
+            } else if (status.database) {
+                statusText.textContent = 'RFID nicht verfügbar';
+                statusDot.className = 'status-dot warning';
+            } else {
+                statusText.textContent = 'System-Fehler';
+                statusDot.className = 'status-dot offline';
+            }
+
+            // Qualitätskontrolle-Statistiken aktualisieren
+            if (status.qualityStats) {
+                this.qualityStats = status.qualityStats;
+                this.updateQualityStatsDisplay();
+            }
+
         } catch (error) {
-            console.error('System-Info laden fehlgeschlagen:', error);
+            console.error('Fehler beim Aktualisieren der System-Info:', error);
         }
     }
 
-    // ===== NOTIFICATIONS & MODALS =====
-    showNotification(type, title, message, duration = 4000) {
-        const notifications = document.getElementById('notifications');
+    startPeriodicSessionUpdate() {
+        setInterval(async () => {
+            try {
+                const sessions = await window.electronAPI.invoke('sessions:get-active');
+                this.updateActiveSessions(sessions);
 
-        const notification = document.createElement('div');
-        notification.className = `notification ${type}`;
+                // Selected session aktualisieren
+                if (this.selectedSession) {
+                    const updatedSession = sessions.find(s => s.sessionId === this.selectedSession.sessionId);
+                    if (updatedSession) {
+                        this.selectedSession = updatedSession;
+                        this.updateSelectedUserPanel();
+                    } else {
+                        // Session nicht mehr aktiv
+                        this.selectedSession = null;
+                        this.updateSelectedUserPanel();
+                        this.stopQRScanner();
+                    }
+                }
 
-        const icons = {
-            success: '✅',
-            error: '❌',
-            warning: '⚠️',
-            info: 'ℹ️'
-        };
-
-        notification.innerHTML = `
-            <div class="notification-icon">${icons[type] || 'ℹ️'}</div>
-            <div class="notification-content">
-                <div class="notification-title">${title}</div>
-                <div class="notification-text">${message}</div>
-            </div>
-        `;
-
-        notifications.appendChild(notification);
-
-        // Auto-Remove
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.remove();
+            } catch (error) {
+                console.error('Fehler beim periodischen Session-Update:', error);
             }
-        }, duration);
-    }
-
-    showErrorModal(title, message) {
-        const modal = document.getElementById('errorModal');
-        const titleElement = document.querySelector('#errorModal .modal-title .icon');
-        const messageElement = document.getElementById('errorMessage');
-
-        titleElement.nextSibling.textContent = title;
-        messageElement.textContent = message;
-
-        this.showModal('errorModal');
-    }
-
-    showModal(modalId) {
-        const modal = document.getElementById(modalId);
-        modal.classList.add('show');
-    }
-
-    hideModal(modalId) {
-        const modal = document.getElementById(modalId);
-        modal.classList.remove('show');
-    }
-
-    // ===== DEBUG-FUNKTIONEN FÜR ENTWICKLERKONSOLE =====
-
-    // Für Entwicklerkonsole - Session-Status prüfen
-    async debugSessionStatus() {
-        const activeSessions = await window.electronAPI.session.getAllActive();
-        const systemStatus = await window.electronAPI.system.getStatus();
-
-        console.log('=== SESSION DEBUG INFO ===');
-        console.log('Frontend Active Sessions:', this.activeSessions);
-        console.log('Backend Active Sessions:', activeSessions);
-        console.log('System Status:', systemStatus);
-        console.log('Session Timers:', this.sessionTimers);
-        console.log('QR Scanned Codes:', this.sessionScannedCodes);
-        console.log('Selected Session:', this.selectedSession);
-    }
-
-    // Für Entwicklerkonsole - RFID simulieren
-    async simulateRFID(tagId) {
-        console.log(`🧪 Simuliere RFID-Tag: ${tagId}`);
-        const result = await window.electronAPI.rfid.simulateTag(tagId);
-        console.log('Simulation Ergebnis:', result);
-        return result;
-    }
-
-    // Für Entwicklerkonsole - QR-Code simulieren
-    async simulateQR(qrData) {
-        console.log(`🧪 Simuliere QR-Code: ${qrData}`);
-        await this.handleQRCodeDetected(qrData);
-    }
-
-    // Für Entwicklerkonsole - Session-Management testen
-    async testSessionWorkflow() {
-        console.log('🧪 Teste Session-Workflow...');
-
-        // Simuliere RFID-Scan (erste Anmeldung)
-        await this.simulateRFID('A02062AB');
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Simuliere QR-Scan
-        await this.simulateQR('TEST^QR^CODE^123');
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Simuliere RFID-Scan (Session beenden + neue starten)
-        await this.simulateRFID('A02062AB');
-
-        console.log('🧪 Session-Workflow Test abgeschlossen');
+        }, 2000); // Alle 2 Sekunden
     }
 }
 
-// ===== APP INITIALIZATION =====
+// App initialisieren wenn DOM geladen ist
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('🏁 DOM geladen, starte Wareneinlagerung-App...');
-    window.wareneinlagerungApp = new WareneinlagerungApp();
+    new QualitaetskontrolleApp();
 });
-
-// Cleanup beim Fenster schließen
-window.addEventListener('beforeunload', () => {
-    if (window.wareneinlagerungApp && window.wareneinlagerungApp.scannerActive) {
-        window.wareneinlagerungApp.stopQRScanner();
-    }
-});
-
-// Global verfügbare Funktionen
-window.app = {
-    showNotification: (type, title, message) => {
-        if (window.wareneinlagerungApp) {
-            window.wareneinlagerungApp.showNotification(type, title, message);
-        }
-    },
-
-    selectUser: (userId) => {
-        if (window.wareneinlagerungApp) {
-            window.wareneinlagerungApp.selectUser(userId);
-        }
-    },
-
-    restartSession: (userId, sessionId) => {
-        if (window.wareneinlagerungApp) {
-            window.wareneinlagerungApp.showSessionRestartModal(userId, sessionId);
-        }
-    }
-};
-
-// ===== GLOBAL DEBUG-FUNKTIONEN =====
-window.debug = {
-    // Session-Status prüfen
-    sessions: () => window.wareneinlagerungApp?.debugSessionStatus(),
-
-    // RFID simulieren
-    rfid: (tagId) => window.wareneinlagerungApp?.simulateRFID(tagId),
-
-    // QR-Code simulieren
-    qr: (qrData) => window.wareneinlagerungApp?.simulateQR(qrData),
-
-    // Session-Workflow testen
-    test: () => window.wareneinlagerungApp?.testSessionWorkflow()
-};
