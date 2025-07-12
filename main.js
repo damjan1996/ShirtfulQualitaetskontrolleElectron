@@ -28,7 +28,7 @@ try {
     console.log('💡 App läuft ohne RFID-Support');
 }
 
-class WareneinlagerungMainApp {
+class QualitaetskontrolleMainApp {
     constructor() {
         this.mainWindow = null;
         this.rfidListener = null;
@@ -42,9 +42,13 @@ class WareneinlagerungMainApp {
             lastError: null
         };
 
-        // NEUE DATENSTRUKTUR: Parallele Sessions für mehrere Benutzer
+        // QUALITÄTSKONTROLLE: Sessions für zweimaliges Scannen
         this.activeSessions = new Map(); // userId -> sessionData
         this.activeSessionTimers = new Map(); // sessionId -> timerInterval
+
+        // NEUE STRUKTUR: QR-Code Status-Tracking für Qualitätskontrolle
+        this.qrCodeStates = new Map(); // qrCode -> { status: 'first_scan' | 'complete', sessionId, firstScanTime }
+        this.completedQRCodes = new Set(); // QR-Codes die bereits beide Scans haben
 
         // QR-Scan Rate Limiting (pro Session)
         this.qrScanRateLimit = new Map(); // sessionId -> scanTimes[]
@@ -63,84 +67,58 @@ class WareneinlagerungMainApp {
         this.lastRFIDScanTime = 0;
         this.rfidScanCooldown = 2000; // 2 Sekunden zwischen RFID-Scans
 
-        // SessionType Fallback-Konfiguration
-        this.sessionTypePriority = ['Wareneinlagerung', 'Wareneinlagerung'];
+        // Session-Type Priorität für Qualitätskontrolle
+        this.sessionTypePriority = ['Qualitätskontrolle', 'QUALITAETSKONTROLLE'];
 
-        this.initializeApp();
+        // Setup completion tracking
+        this.setupCompleted = false;
     }
 
-    initializeApp() {
-        // ===== ERWEITERTE HARDWARE-BESCHLEUNIGUNG ANPASSUNGEN =====
+    // ===== INITIALIZATION =====
+    async initialize() {
+        console.log('🚀 Starte Qualitätskontrolle-Anwendung...');
 
-        // Basis GPU-Fixes
-        app.commandLine.appendSwitch('--disable-gpu-process-crash-limit');
-        app.commandLine.appendSwitch('--disable-gpu-sandbox');
-        app.commandLine.appendSwitch('--disable-software-rasterizer');
-        app.commandLine.appendSwitch('--disable-features', 'VizDisplayCompositor');
-
-        // ===== ERWEITERTE FIXES FÜR GPU-CONTEXT-PROBLEME =====
-
-        // WebGL und GPU-Context Probleme beheben
-        app.commandLine.appendSwitch('--disable-gl-error-limit');
-        app.commandLine.appendSwitch('--disable-gl-extensions');
-        app.commandLine.appendSwitch('--disable-accelerated-video-decode');
-        app.commandLine.appendSwitch('--disable-accelerated-video-encode');
-
-        // GPU-Process Abstürze verhindern
-        app.commandLine.appendSwitch('--disable-gpu-memory-buffer-video-frames');
-        app.commandLine.appendSwitch('--disable-gpu-memory-buffer-compositor-resources');
-
-        // Virtualisierung und Shared Context Probleme
-        app.commandLine.appendSwitch('--disable-shared-gpu');
-        app.commandLine.appendSwitch('--disable-gpu-process-for-dx12-vulkan-info-collection');
-
-        // Für Windows: Umfassende GPU-Probleme vermeiden
-        if (process.platform === 'win32') {
-            app.commandLine.appendSwitch('--disable-gpu');
-            app.commandLine.appendSwitch('--disable-gpu-compositing');
-
-            // ===== ZUSÄTZLICHE WINDOWS-SPEZIFISCHE FIXES =====
-            app.commandLine.appendSwitch('--disable-d3d11');
-            app.commandLine.appendSwitch('--disable-angle-d3d11');
-            app.commandLine.appendSwitch('--force-cpu-draw');
-            app.commandLine.appendSwitch('--disable-direct-composition');
-
-            // Falls Hardware-Alt ist
-            app.commandLine.appendSwitch('--disable-features', 'VizDisplayCompositor,VizHitTestSurfaceLayer');
-            app.commandLine.appendSwitch('--use-gl', 'swiftshader'); // Software-Renderer erzwingen
-        }
-
-        console.log('🔧 GPU-Optimierungen angewendet');
-
-        // App bereit
+        // App-Event-Listener
         app.whenReady().then(() => {
             this.createMainWindow();
             this.initializeComponents();
-
-            app.on('activate', () => {
-                if (BrowserWindow.getAllWindows().length === 0) {
-                    this.createMainWindow();
-                }
-            });
         });
 
-        // App-Events
         app.on('window-all-closed', () => {
-            this.cleanup();
             if (process.platform !== 'darwin') {
+                this.cleanup().then(() => {
+                    app.quit();
+                });
+            }
+        });
+
+        app.on('activate', () => {
+            if (BrowserWindow.getAllWindows().length === 0) {
+                this.createMainWindow();
+            }
+        });
+
+        app.on('before-quit', async (event) => {
+            if (!this.cleanupStarted) {
+                event.preventDefault();
+                this.cleanupStarted = true;
+                await this.cleanup();
                 app.quit();
             }
         });
 
-        app.on('before-quit', () => {
-            this.cleanup();
-        });
-
-        // IPC-Handler einrichten
-        this.setupIPCHandlers();
+        // IPC-Handlers registrieren
+        this.registerIPCHandlers();
     }
 
     createMainWindow() {
+        // Bestehende Fenster schließen
+        if (this.mainWindow) {
+            this.mainWindow.close();
+            this.mainWindow = null;
+        }
+
+        const isDev = process.env.NODE_ENV === 'development';
         const windowWidth = parseInt(process.env.UI_WINDOW_WIDTH) || 1400;
         const windowHeight = parseInt(process.env.UI_WINDOW_HEIGHT) || 900;
 
@@ -148,83 +126,47 @@ class WareneinlagerungMainApp {
             width: windowWidth,
             height: windowHeight,
             minWidth: 1200,
-            minHeight: 700,
+            minHeight: 800,
+            show: false,
+            icon: path.join(__dirname, 'assets', 'icon.png'),
             webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
-                preload: path.join(__dirname, 'preload.js'),
                 enableRemoteModule: false,
-                webSecurity: true,
-
-                // ===== ZUSÄTZLICHE WEBPREFERENCES FÜR GPU-STABILITÄT =====
-                hardwareAcceleration: false,  // Hardware-Beschleunigung deaktivieren
-                webgl: false,                  // WebGL deaktivieren wenn nicht benötigt
-                experimentalFeatures: false,   // Experimentelle Features deaktivieren
-
-                // GPU-Problem-Workarounds
-                disableBlinkFeatures: 'Accelerated2dCanvas,AcceleratedSmallCanvases',
-                enableBlinkFeatures: '',
-
-                // Sicherheit
+                preload: path.join(__dirname, 'preload.js'),
+                webSecurity: true, // Sicherheit aktiviert
                 allowRunningInsecureContent: false,
-                safeDialogs: true
+                experimentalFeatures: false
             },
-
-            // ===== WINDOW-SPEZIFISCHE GPU-OPTIMIERUNGEN =====
-            show: false, // Erst nach ready anzeigen
-            title: 'RFID Wareneinlagerung - Shirtful',
-            autoHideMenuBar: true,
-            frame: true,
-            titleBarStyle: 'default',
-
-            // Windows-spezifische Optionen
-            ...(process.platform === 'win32' && {
-                icon: path.join(__dirname, 'assets/icon.ico')
-            })
+            title: 'Qualitätskontrolle RFID QR - Shirtful'
         });
 
-        // Renderer laden
-        this.mainWindow.loadFile('renderer/index.html');
+        // HTML-Datei laden
+        this.mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-        // Window erst nach vollständiger Initialisierung anzeigen
+        // Fenster anzeigen wenn bereit
         this.mainWindow.once('ready-to-show', () => {
             this.mainWindow.show();
-            console.log('✅ Hauptfenster erfolgreich geladen (GPU-optimiert)');
 
-            // Development Tools
-            if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
+            if (isDev) {
                 this.mainWindow.webContents.openDevTools();
             }
+
+            console.log('✅ Hauptfenster erfolgreich geladen');
         });
 
-        // Fenster geschlossen
-        this.mainWindow.on('closed', () => {
-            this.mainWindow = null;
-        });
+        // Fehlerbehandlung
+        this.mainWindow.on('unresponsive', () => {
+            console.warn('⚠️ Hauptfenster antwortet nicht');
+            dialog.showErrorBox(
+                'Anwendung antwortet nicht',
+                'Die Anwendung ist nicht mehr reaktionsfähig. Sie wird neu gestartet.'
+            );
 
-        // Prevent navigation away from the app
-        this.mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
-            const parsedUrl = new URL(navigationUrl);
-            if (parsedUrl.origin !== 'file://') {
-                event.preventDefault();
-            }
-        });
-
-        // WebContents-Fehler abfangen
-        this.mainWindow.webContents.on('render-process-gone', (event, details) => {
-            console.error('Renderer-Prozess abgestürzt:', details);
-
-            if (details.reason !== 'clean-exit') {
-                dialog.showErrorBox(
-                    'Anwendungsfehler',
-                    'Die Anwendung ist unerwartet beendet worden. Sie wird neu gestartet.'
-                );
-
-                // Neustart nach kurzer Verzögerung
-                setTimeout(() => {
-                    this.createMainWindow();
-                }, 1000);
-            }
+            // Neustart nach kurzer Verzögerung
+            setTimeout(() => {
+                this.createMainWindow();
+            }, 1000);
         });
     }
 
@@ -281,10 +223,6 @@ class WareneinlagerungMainApp {
         }
     }
 
-    /**
-     * NEUE FUNKTION: SessionTypes Setup ausführen
-     * Stellt sicher, dass alle SessionTypes in der Datenbank vorhanden sind
-     */
     async setupSessionTypes() {
         try {
             console.log('🔧 Initialisiere SessionTypes...');
@@ -312,528 +250,411 @@ class WareneinlagerungMainApp {
                 console.error('❌ SessionTypes Setup fehlgeschlagen');
 
                 // Weiter ausführen, aber mit Warnung
-                console.warn('⚠️ System läuft möglicherweise eingeschränkt ohne SessionTypes');
+                console.warn('⚠️ App läuft ohne vollständiges SessionTypes-Setup');
             }
 
         } catch (error) {
             this.systemStatus.sessionTypesSetup = false;
-            this.systemStatus.lastError = `SessionTypes Setup: ${error.message}`;
-            console.error('❌ Fehler beim SessionTypes Setup:', error);
-
-            // Nicht kritisch genug um das System zu stoppen
-            console.warn('⚠️ System startet ohne SessionTypes Setup');
+            this.systemStatus.lastError = `SessionTypes: ${error.message}`;
+            console.error('❌ SessionTypes Setup Fehler:', error);
         }
     }
 
-    /**
-     * Aktualisiert die SessionType-Priorität basierend auf verfügbaren Types
-     * @param {Array} availableSessionTypes - Verfügbare SessionTypes aus der DB
-     */
-    updateSessionTypePriority(availableSessionTypes) {
-        const availableTypeNames = availableSessionTypes.map(type => type.TypeName);
+    updateSessionTypePriority(sessionTypes) {
+        if (!sessionTypes || sessionTypes.length === 0) return;
 
-        // Filtere nur verfügbare SessionTypes und behalte die Prioritätsreihenfolge bei
-        this.sessionTypePriority = this.sessionTypePriority.filter(typeName =>
-            availableTypeNames.includes(typeName)
+        // Verfügbare SessionType-Namen sammeln
+        const availableTypes = sessionTypes.map(type => type.TypeName);
+
+        // Priorität basierend auf verfügbaren Types setzen
+        this.sessionTypePriority = availableTypes.filter(type =>
+            type.includes('Qualitätskontrolle') || type.includes('QUALITAETSKONTROLLE')
         );
 
-        // Füge weitere verfügbare Types hinzu, falls sie nicht in der Prioritätsliste sind
-        availableTypeNames.forEach(typeName => {
-            if (!this.sessionTypePriority.includes(typeName)) {
-                this.sessionTypePriority.push(typeName);
-            }
-        });
-
-        console.log(`🔧 SessionType-Priorität aktualisiert: [${this.sessionTypePriority.join(', ')}]`);
-    }
-
-    async loadDecodingStats() {
-        try {
-            if (!this.dbClient || !this.systemStatus.database) return;
-
-            const stats = await this.dbClient.getQRScanStats();
-            if (stats) {
-                this.decodingStats = {
-                    totalScans: stats.TotalScans || 0,
-                    successfulDecodes: stats.DecodedScans || 0,
-                    withAuftrag: stats.ScansWithAuftrag || 0,
-                    withPaket: stats.ScansWithPaket || 0,
-                    withKunde: stats.ScansWithKunde || 0,
-                    decodingSuccessRate: stats.DecodingSuccessRate || 0
-                };
-
-                console.log('📋 QR-Code Dekodierung Statistiken geladen:', this.decodingStats);
-            }
-        } catch (error) {
-            console.error('Fehler beim Laden der Dekodierung-Statistiken:', error);
+        // Fallback falls kein spezifischer Type gefunden
+        if (this.sessionTypePriority.length === 0) {
+            this.sessionTypePriority = availableTypes.slice(0, 1); // Ersten verfügbaren Type nehmen
         }
+
+        console.log('📋 SessionType-Priorität aktualisiert:', this.sessionTypePriority);
     }
 
     async initializeRFID() {
         try {
-            console.log('🏷️ Initialisiere RFID-Listener...');
+            if (SimpleRFIDListener) {
+                console.log('🏷️ Initialisiere RFID-Listener...');
 
-            if (!SimpleRFIDListener) {
-                throw new Error('Simple RFID-Listener nicht verfügbar');
-            }
+                this.rfidListener = new SimpleRFIDListener({
+                    debug: process.env.NODE_ENV === 'development',
+                    minScanInterval: parseInt(process.env.RFID_MIN_SCAN_INTERVAL) || 1000,
+                    inputTimeout: parseInt(process.env.RFID_INPUT_TIMEOUT) || 500,
+                    maxBufferLength: parseInt(process.env.RFID_MAX_BUFFER_LENGTH) || 20
+                });
 
-            this.rfidListener = new SimpleRFIDListener((tagId) => {
-                this.handleRFIDScan(tagId);
-            });
+                // RFID-Event-Handler
+                this.rfidListener.on('tag-scanned', this.handleRFIDScan.bind(this));
+                this.rfidListener.on('error', (error) => {
+                    console.error('RFID-Fehler:', error);
+                    this.systemStatus.rfid = false;
+                });
 
-            const started = await this.rfidListener.start();
+                await this.rfidListener.start();
 
-            if (started) {
                 this.systemStatus.rfid = true;
                 console.log('✅ RFID-Listener erfolgreich gestartet');
+
             } else {
-                throw new Error('RFID-Listener konnte nicht gestartet werden');
+                console.warn('⚠️ RFID-Listener nicht verfügbar - App läuft ohne RFID-Support');
+                this.systemStatus.rfid = false;
             }
 
         } catch (error) {
+            console.error('❌ RFID-Initialisierung fehlgeschlagen:', error);
             this.systemStatus.rfid = false;
             this.systemStatus.lastError = `RFID: ${error.message}`;
-
-            console.error('❌ RFID-Initialisierung fehlgeschlagen:', error);
-            console.log('💡 RFID-Alternativen:');
-            console.log('   1. Tags manuell in der UI simulieren');
-            console.log('   2. Entwickler-Console für Tests verwenden');
-            console.log('   3. Hardware später konfigurieren');
-
-            // RFID ist nicht kritisch - App kann ohne laufen
         }
     }
 
-    /**
-     * KORRIGIERTE HILFSFUNKTION: Session mit Fallback erstellen
-     * Versucht verschiedene SessionTypes in Prioritätsreihenfolge
-     * @param {number} userId - Benutzer ID
-     * @param {Array} sessionTypePriority - Prioritätsliste der SessionTypes (optional)
-     * @param {boolean} closeExistingSessions - Bestehende Sessions beenden (default: true)
-     * @returns {Object} - { session, sessionTypeName, fallbackUsed }
-     */
-    async createSessionWithFallback(userId, sessionTypePriority = null, closeExistingSessions = true) {
-        const typesToTry = sessionTypePriority || this.sessionTypePriority;
-
-        if (typesToTry.length === 0) {
-            throw new Error('Keine SessionTypes verfügbar');
-        }
-
-        let lastError = null;
-
-        for (const sessionType of typesToTry) {
-            try {
-                console.log(`🔄 Versuche SessionType: ${sessionType} (closeExisting: ${closeExistingSessions})`);
-
-                // ===== KRITISCH: closeExistingSessions Parameter übergeben =====
-                const session = await this.dbClient.createSession(userId, sessionType, closeExistingSessions);
-
-                if (session) {
-                    const fallbackUsed = sessionType !== typesToTry[0];
-                    console.log(`✅ Session erfolgreich erstellt mit SessionType: ${sessionType}${fallbackUsed ? ' (Fallback)' : ''}`);
-
-                    return {
-                        session,
-                        sessionTypeName: sessionType,
-                        fallbackUsed
-                    };
-                }
-            } catch (error) {
-                console.warn(`⚠️ SessionType '${sessionType}' nicht verfügbar: ${error.message}`);
-                lastError = error;
-                continue;
+    async loadDecodingStats() {
+        try {
+            // Prüfen ob dbClient und die Methode verfügbar sind
+            if (!this.dbClient || typeof this.dbClient.getDecodingStats !== 'function') {
+                console.warn('⚠️ DatabaseClient oder getDecodingStats-Methode nicht verfügbar');
+                return;
             }
-        }
 
-        // Wenn alle SessionTypes fehlschlagen
-        throw new Error(`Alle SessionTypes fehlgeschlagen. Letzter Fehler: ${lastError?.message || 'Unbekannt'}`);
+            // QR-Code Dekodierung Statistiken aus Datenbank laden
+            const stats = await this.dbClient.getDecodingStats();
+
+            if (stats) {
+                this.decodingStats = {
+                    totalScans: stats.totalScans || 0,
+                    successfulDecodes: stats.successfulDecodes || 0,
+                    withAuftrag: stats.withAuftrag || 0,
+                    withPaket: stats.withPaket || 0,
+                    withKunde: stats.withKunde || 0
+                };
+
+                console.log('📊 Dekodierung-Statistiken geladen:', this.decodingStats);
+            }
+
+        } catch (error) {
+            console.warn('⚠️ Dekodierung-Statistiken laden fehlgeschlagen:', error.message);
+            // Nicht kritisch - weiter mit Standard-Statistiken
+        }
     }
 
-    setupIPCHandlers() {
-        // ===== DATENBANK OPERATIONEN =====
-        ipcMain.handle('db-query', async (event, query, params) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    throw new Error('Datenbank nicht verbunden');
-                }
-                return await this.dbClient.query(query, params);
-            } catch (error) {
-                console.error('DB Query Fehler:', error);
-                throw error;
-            }
-        });
-
-        ipcMain.handle('db-get-user-by-id', async (event, userId) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    return null;
-                }
-                return await this.dbClient.getUserById(userId);
-            } catch (error) {
-                console.error('Get User by ID Fehler:', error);
-                return null;
-            }
-        });
-
-        // ===== PARALLELE SESSION MANAGEMENT =====
-        ipcMain.handle('session-get-all-active', async (event) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    return [];
-                }
-
-                // Aktive Sessions aus Datenbank laden
-                const dbSessions = await this.dbClient.getActiveSessionsWithType();
-
-                // Mit lokalen Session-Daten anreichern
-                const enrichedSessions = dbSessions.map(session => {
-                    const localSession = this.activeSessions.get(session.UserID);
-                    return {
-                        ...session,
-                        StartTS: this.normalizeTimestamp(session.StartTS),
-                        localStartTime: localSession ? localSession.startTime : session.StartTS
-                    };
-                });
-
-                return enrichedSessions;
-            } catch (error) {
-                console.error('Fehler beim Abrufen aktiver Sessions:', error);
-                return [];
-            }
-        });
-
-        ipcMain.handle('session-create', async (event, userId) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    throw new Error('Datenbank nicht verbunden');
-                }
-
-                // Session mit Fallback erstellen
-                const { session, sessionTypeName, fallbackUsed } = await this.createSessionWithFallback(userId);
-
-                if (session) {
-                    // Lokale Session-Daten setzen/aktualisieren
-                    this.activeSessions.set(userId, {
-                        sessionId: session.ID,
-                        userId: userId,
-                        startTime: session.StartTS,
-                        lastActivity: new Date(),
-                        sessionType: sessionTypeName
-                    });
-
-                    // Session-Timer starten
-                    this.startSessionTimer(session.ID, userId);
-
-                    // Rate Limit für neue Session initialisieren
-                    this.qrScanRateLimit.set(session.ID, []);
-
-                    // Zeitstempel normalisieren für konsistente Übertragung
-                    const normalizedSession = {
-                        ...session,
-                        StartTS: this.normalizeTimestamp(session.StartTS),
-                        SessionTypeName: sessionTypeName,
-                        FallbackUsed: fallbackUsed
-                    };
-
-                    console.log(`Session erstellt für ${sessionTypeName}:`, normalizedSession);
-
-                    if (fallbackUsed) {
-                        console.warn(`⚠️ Fallback SessionType '${sessionTypeName}' verwendet`);
-                    }
-
-                    return normalizedSession;
-                }
-
-                return null;
-            } catch (error) {
-                console.error('Session Create Fehler:', error);
-                return null;
-            }
-        });
-
-        // ===== KORRIGIERTER SESSION-RESTART HANDLER =====
-        ipcMain.handle('session-restart', async (event, sessionId, userId) => {
-            try {
-                console.log(`🔄 Session-Restart Request für Session ${sessionId}, User ${userId}`);
-
-                // 1. Aktuelle Session beenden
-                const endSuccess = await this.dbClient.endSession(sessionId);
-
-                if (endSuccess) {
-                    // 2. Lokale Session-Daten entfernen
-                    this.activeSessions.delete(userId);
-                    this.stopSessionTimer(sessionId);
-                    this.qrScanRateLimit.delete(sessionId);
-
-                    // 3. Neue Session erstellen
-                    const { session, sessionTypeName, fallbackUsed } = await this.createSessionWithFallback(userId, null, false);
-
-                    if (session) {
-                        // 4. Lokale Session-Daten setzen
-                        this.activeSessions.set(userId, {
-                            sessionId: session.ID,
-                            userId: userId,
-                            startTime: new Date(session.StartTS),
-                            lastActivity: new Date(),
-                            sessionType: sessionTypeName
-                        });
-
-                        // 5. Session-Timer starten
-                        this.startSessionTimer(session.ID, userId);
-                        this.qrScanRateLimit.set(session.ID, []);
-
-                        console.log(`✅ Session-Restart erfolgreich: Alte Session ${sessionId} → Neue Session ${session.ID}`);
-
-                        // 6. Restart-Event senden
-                        this.sendToRenderer('session-restarted', {
-                            oldSessionId: sessionId,
-                            newSessionId: session.ID,
-                            userId: userId,
-                            sessionType: sessionTypeName,
-                            timestamp: new Date().toISOString()
-                        });
-
-                        return true;
-                    }
-                }
-
-                return false;
-            } catch (error) {
-                console.error('Session-Restart Fehler:', error);
-                return false;
-            }
-        });
-
-        ipcMain.handle('session-end', async (event, sessionId, userId) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    return false;
-                }
-
-                const success = await this.dbClient.endSession(sessionId);
-
-                if (success) {
-                    // Lokale Session-Daten entfernen
-                    this.activeSessions.delete(userId);
-
-                    // Session-Timer stoppen
-                    this.stopSessionTimer(sessionId);
-
-                    // Rate Limit für Session zurücksetzen
-                    this.qrScanRateLimit.delete(sessionId);
-
-                    console.log(`Session ${sessionId} für Benutzer ${userId} beendet`);
-                }
-
-                return success;
-            } catch (error) {
-                console.error('Session End Fehler:', error);
-                return false;
-            }
-        });
-
-        // ===== QR-CODE OPERATIONEN =====
-        ipcMain.handle('qr-scan-save', async (event, sessionId, payload) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    return {
-                        success: false,
-                        status: 'database_offline',
-                        message: 'Datenbank nicht verbunden',
-                        data: null,
-                        timestamp: new Date().toISOString()
-                    };
-                }
-
-                // Rate Limiting prüfen
-                if (!this.checkQRScanRateLimit(sessionId)) {
-                    return {
-                        success: false,
-                        status: 'rate_limit',
-                        message: 'Zu viele QR-Scans pro Minute - bitte warten Sie',
-                        data: null,
-                        timestamp: new Date().toISOString()
-                    };
-                }
-
-                // Payload bereinigen (BOM entfernen falls vorhanden)
-                const cleanPayload = payload.replace(/^\ufeff/, '');
-
-                // QR-Scan speichern
-                const result = await this.dbClient.saveQRScan(sessionId, cleanPayload);
-
-                // Rate Limit Counter aktualisieren bei erfolgreichen Scans
-                if (result.success) {
-                    this.updateQRScanRateLimit(sessionId);
-
-                    // Dekodierung-Statistiken aktualisieren
-                    await this.updateDecodingStats(result);
-
-                    // Session-Aktivität aktualisieren
-                    this.updateSessionActivity(sessionId);
-                }
-
-                console.log(`QR-Scan Ergebnis für Session ${sessionId}:`, {
-                    success: result.success,
-                    status: result.status,
-                    message: result.message,
-                    hasDecodedData: !!(result.data?.DecodedData)
-                });
-
-                return result;
-
-            } catch (error) {
-                console.error('QR Scan Save unerwarteter Fehler:', error);
-                return {
-                    success: false,
-                    status: 'error',
-                    message: `Unerwarteter Fehler: ${error.message}`,
-                    data: null,
-                    timestamp: new Date().toISOString()
-                };
-            }
-        });
-
-        // ===== QR-CODE DEKODIERUNG OPERATIONEN =====
-        ipcMain.handle('qr-get-decoded-scans', async (event, sessionId, limit = 50) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    return [];
-                }
-
-                const scans = await this.dbClient.getQRScansBySession(sessionId, limit);
-
-                // Nur Scans mit dekodierten Daten zurückgeben
-                return scans.filter(scan => scan.DecodedData && Object.keys(scan.DecodedData).length > 0);
-            } catch (error) {
-                console.error('Fehler beim Abrufen dekodierter QR-Scans:', error);
-                return [];
-            }
-        });
-
-        ipcMain.handle('qr-search-decoded', async (event, searchTerm, sessionId = null) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    return [];
-                }
-
-                return await this.dbClient.searchQRScans(searchTerm, sessionId, 20);
-            } catch (error) {
-                console.error('Fehler bei dekodierter QR-Code-Suche:', error);
-                return [];
-            }
-        });
-
-        ipcMain.handle('qr-get-decoding-stats', async (event, sessionId = null) => {
-            try {
-                if (!this.dbClient || !this.systemStatus.database) {
-                    return this.decodingStats;
-                }
-
-                const stats = await this.dbClient.getQRScanStats(sessionId);
-                return {
-                    ...this.decodingStats,
-                    ...stats,
-                    lastUpdated: new Date().toISOString()
-                };
-            } catch (error) {
-                console.error('Fehler beim Abrufen der Dekodierung-Statistiken:', error);
-                return this.decodingStats;
-            }
-        });
-
-        // ===== SYSTEM STATUS =====
-        ipcMain.handle('get-system-status', async (event) => {
+    // ===== IPC HANDLERS =====
+    registerIPCHandlers() {
+        // System-Status
+        ipcMain.handle('system:get-status', () => {
             return {
                 database: this.systemStatus.database,
                 rfid: this.systemStatus.rfid,
                 sessionTypesSetup: this.systemStatus.sessionTypesSetup,
                 lastError: this.systemStatus.lastError,
-                activeSessions: Array.from(this.activeSessions.values()),
-                activeSessionCount: this.activeSessions.size,
-                sessionTypePriority: this.sessionTypePriority,
-                uptime: Math.floor(process.uptime()),
                 timestamp: new Date().toISOString(),
-                qrScanStats: this.getQRScanStats(),
-                decodingStats: this.decodingStats
+                activeSessionCount: this.activeSessions.size,
+                completedQRCodes: this.completedQRCodes.size
             };
         });
 
-        ipcMain.handle('get-system-info', async (event) => {
-            return {
-                version: app.getVersion() || '1.0.0',
-                electronVersion: process.versions.electron,
-                nodeVersion: process.versions.node,
-                platform: process.platform,
-                arch: process.arch,
-                env: process.env.NODE_ENV || 'production',
-                type: 'wareneinlagerung',
-                features: {
-                    qrDecoding: true,
-                    parallelSessions: true,
-                    sessionEnd: true,
-                    sessionRestart: true, // Session-Restart als Session-Ende + Neue Session
-                    sessionTypeFallback: true,
-                    sessionTypesSetup: this.systemStatus.sessionTypesSetup,
-                    decodingFormats: ['caret_separated', 'pattern_matching', 'structured_data'],
-                    supportedFields: ['auftrags_nr', 'paket_nr', 'kunden_name']
-                }
-            };
+        // Session-Management
+        ipcMain.handle('session:get-all-active', () => {
+            const sessions = [];
+            for (const [userId, sessionData] of this.activeSessions.entries()) {
+                sessions.push({
+                    userId: userId,
+                    sessionId: sessionData.sessionId,
+                    userName: sessionData.userName,
+                    startTime: sessionData.startTime,
+                    duration: Date.now() - sessionData.startTime,
+                    firstScans: sessionData.firstScans || 0,
+                    completedScans: sessionData.completedScans || 0,
+                    totalScans: (sessionData.firstScans || 0) + (sessionData.completedScans || 0)
+                });
+            }
+            return sessions;
         });
 
-        // ===== RFID OPERATIONEN =====
-        ipcMain.handle('rfid-get-status', async (event) => {
-            return this.rfidListener ? this.rfidListener.getStatus() : {
-                listening: false,
-                type: 'not-available',
-                message: 'RFID-Listener nicht verfügbar'
-            };
-        });
-
-        ipcMain.handle('rfid-simulate-tag', async (event, tagId) => {
+        ipcMain.handle('session:end', async (event, sessionId) => {
             try {
-                if (!this.rfidListener) {
-                    // Direkte Simulation wenn kein Listener verfügbar
-                    console.log(`🧪 Direkte RFID-Simulation: ${tagId}`);
-                    await this.handleRFIDScan(tagId);
-                    return true;
-                }
-                return this.rfidListener.simulateTag(tagId);
+                return await this.endSession(sessionId);
             } catch (error) {
-                console.error('RFID Simulate Fehler:', error);
-                return false;
+                console.error('Session beenden fehlgeschlagen:', error);
+                return { success: false, error: error.message };
             }
         });
 
-        // ===== APP STEUERUNG =====
-        ipcMain.handle('app-minimize', () => {
-            if (this.mainWindow) {
-                this.mainWindow.minimize();
+        // RFID-Simulation für Tests
+        ipcMain.handle('rfid:simulate-tag', async (event, tagId) => {
+            console.log(`🧪 RFID-Simulation: ${tagId}`);
+            return await this.handleRFIDScan(tagId);
+        });
+
+        // QR-Code Handling
+        ipcMain.handle('qr:scan', async (event, qrData, sessionId) => {
+            try {
+                return await this.handleQRScan(qrData, sessionId);
+            } catch (error) {
+                console.error('QR-Scan Fehler:', error);
+                return {
+                    success: false,
+                    error: error.message,
+                    qrData: qrData
+                };
             }
         });
 
-        ipcMain.handle('app-close', () => {
-            app.quit();
+        // QR-Code Status abrufen
+        ipcMain.handle('qr:get-status', (event, qrCode) => {
+            const state = this.qrCodeStates.get(qrCode);
+            if (!state) {
+                return { status: 'not_found' };
+            }
+            return {
+                status: state.status,
+                sessionId: state.sessionId,
+                firstScanTime: state.firstScanTime,
+                isCompleted: this.completedQRCodes.has(qrCode)
+            };
         });
 
-        ipcMain.handle('app-restart', () => {
-            app.relaunch();
-            app.exit();
+        // Session-Statistiken
+        ipcMain.handle('stats:get-session', (event, sessionId) => {
+            return this.getSessionStats(sessionId);
+        });
+
+        // Globale Statistiken
+        ipcMain.handle('stats:get-global', () => {
+            return {
+                decodingStats: this.decodingStats,
+                activeSessionCount: this.activeSessions.size,
+                completedQRCodes: this.completedQRCodes.size,
+                totalQRStates: this.qrCodeStates.size
+            };
+        });
+
+        // Debugging
+        ipcMain.handle('debug:get-session-info', () => {
+            const sessionInfo = {};
+            for (const [userId, sessionData] of this.activeSessions.entries()) {
+                sessionInfo[userId] = {
+                    sessionId: sessionData.sessionId,
+                    userName: sessionData.userName,
+                    startTime: sessionData.startTime,
+                    firstScans: sessionData.firstScans || 0,
+                    completedScans: sessionData.completedScans || 0
+                };
+            }
+            return {
+                activeSessions: sessionInfo,
+                qrCodeStates: Object.fromEntries(this.qrCodeStates),
+                completedQRCodes: Array.from(this.completedQRCodes)
+            };
         });
     }
 
-    // ===== SESSION TIMER MANAGEMENT =====
-    startSessionTimer(sessionId, userId) {
-        // Bestehenden Timer stoppen falls vorhanden
-        this.stopSessionTimer(sessionId);
+    // ===== RFID HANDLING =====
+    async handleRFIDScan(tagId) {
+        try {
+            // Rate-Limiting für RFID-Scans
+            const now = Date.now();
+            if (now - this.lastRFIDScanTime < this.rfidScanCooldown) {
+                return {
+                    success: false,
+                    error: 'RFID-Scan zu schnell - bitte warten',
+                    cooldownRemaining: this.rfidScanCooldown - (now - this.lastRFIDScanTime)
+                };
+            }
+            this.lastRFIDScanTime = now;
 
-        // Neuen Timer starten
+            console.log(`🏷️ RFID-Tag gescannt: ${tagId}`);
+
+            // Benutzer in Datenbank suchen
+            const user = await this.dbClient.getUserByEPC(tagId);
+            if (!user) {
+                console.warn(`⚠️ Unbekannter RFID-Tag: ${tagId}`);
+                return {
+                    success: false,
+                    error: 'Unbekannter RFID-Tag',
+                    tagId: tagId
+                };
+            }
+
+            // Prüfen ob Benutzer bereits aktive Session hat
+            const existingSession = this.activeSessions.get(user.ID);
+
+            if (existingSession) {
+                // Bestehende Session beenden
+                console.log(`🔚 Beende Session für Benutzer ${user.Name} (ID: ${user.ID})`);
+
+                const result = await this.endSession(existingSession.sessionId);
+                if (result.success) {
+                    // Neue Session starten
+                    return await this.startSession(user);
+                } else {
+                    return {
+                        success: false,
+                        error: 'Fehler beim Beenden der vorherigen Session'
+                    };
+                }
+            } else {
+                // Neue Session starten
+                return await this.startSession(user);
+            }
+
+        } catch (error) {
+            console.error('❌ RFID-Handling Fehler:', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    // ===== SESSION MANAGEMENT =====
+    async startSession(user) {
+        try {
+            console.log(`🎬 Starte Session für Benutzer: ${user.Name} (ID: ${user.ID})`);
+
+            // SessionType bestimmen (priorität: Qualitätskontrolle)
+            const sessionTypes = await this.dbClient.getSessionTypes();
+            let sessionType = null;
+
+            // Qualitätskontrolle-SessionType finden
+            for (const priorityType of this.sessionTypePriority) {
+                sessionType = sessionTypes.find(type => type.TypeName === priorityType);
+                if (sessionType) break;
+            }
+
+            if (!sessionType) {
+                console.warn('⚠️ Kein passender SessionType gefunden, verwende ersten verfügbaren');
+                sessionType = sessionTypes[0];
+            }
+
+            if (!sessionType) {
+                throw new Error('Keine SessionTypes verfügbar');
+            }
+
+            console.log(`📋 Verwende SessionType: ${sessionType.TypeName}`);
+
+            // Session in Datenbank erstellen
+            const sessionId = await this.dbClient.startSession(user.ID, sessionType.ID);
+
+            // Session lokal registrieren
+            const sessionData = {
+                sessionId: sessionId,
+                userId: user.ID,
+                userName: user.Name,
+                startTime: Date.now(),
+                sessionType: sessionType.TypeName,
+                firstScans: 0,
+                completedScans: 0
+            };
+
+            this.activeSessions.set(user.ID, sessionData);
+
+            // Session-Timer starten
+            this.startSessionTimer(sessionId);
+
+            // QR-Scan Rate-Limiting initialisieren
+            this.qrScanRateLimit.set(sessionId, []);
+
+            console.log(`✅ Session ${sessionId} erfolgreich gestartet für ${user.Name}`);
+
+            // Frontend benachrichtigen
+            this.sendToRenderer('session-started', {
+                sessionId: sessionId,
+                userId: user.ID,
+                userName: user.Name,
+                startTime: sessionData.startTime,
+                sessionType: sessionType.TypeName
+            });
+
+            return {
+                success: true,
+                sessionId: sessionId,
+                userId: user.ID,
+                userName: user.Name,
+                sessionType: sessionType.TypeName
+            };
+
+        } catch (error) {
+            console.error('❌ Session-Start Fehler:', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    async endSession(sessionId) {
+        try {
+            console.log(`🔚 Beende Session: ${sessionId}`);
+
+            // Session lokal finden
+            let sessionUserId = null;
+            for (const [userId, sessionData] of this.activeSessions.entries()) {
+                if (sessionData.sessionId === sessionId) {
+                    sessionUserId = userId;
+                    break;
+                }
+            }
+
+            if (sessionUserId === null) {
+                console.warn(`⚠️ Session ${sessionId} nicht in lokalen Sessions gefunden`);
+                return { success: false, error: 'Session nicht gefunden' };
+            }
+
+            const sessionData = this.activeSessions.get(sessionUserId);
+
+            // Session in Datenbank beenden
+            const endResult = await this.dbClient.endSession(sessionId);
+
+            if (endResult) {
+                // Session-Timer stoppen
+                this.stopSessionTimer(sessionId);
+
+                // Lokale Session-Daten entfernen
+                this.activeSessions.delete(sessionUserId);
+                this.qrScanRateLimit.delete(sessionId);
+
+                console.log(`✅ Session ${sessionId} erfolgreich beendet für Benutzer ${sessionData.userName}`);
+
+                // Frontend benachrichtigen
+                this.sendToRenderer('session-ended', {
+                    sessionId: sessionId,
+                    userId: sessionUserId,
+                    userName: sessionData.userName,
+                    duration: Date.now() - sessionData.startTime,
+                    firstScans: sessionData.firstScans || 0,
+                    completedScans: sessionData.completedScans || 0
+                });
+
+                return { success: true };
+
+            } else {
+                console.error('❌ Session in Datenbank nicht beendet');
+                return { success: false, error: 'Datenbank-Fehler beim Beenden der Session' };
+            }
+
+        } catch (error) {
+            console.error('❌ Session-Ende Fehler:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    startSessionTimer(sessionId) {
+        // Timer für Live-Updates
         const timer = setInterval(() => {
-            this.updateSessionTimer(sessionId, userId);
-        }, 1000);
+            this.sendToRenderer('session-timer-update', {
+                sessionId: sessionId,
+                timestamp: Date.now()
+            });
+        }, 1000); // Jede Sekunde aktualisieren
 
         this.activeSessionTimers.set(sessionId, timer);
-        console.log(`Session-Timer gestartet für Session ${sessionId}`);
     }
 
     stopSessionTimer(sessionId) {
@@ -841,345 +662,259 @@ class WareneinlagerungMainApp {
         if (timer) {
             clearInterval(timer);
             this.activeSessionTimers.delete(sessionId);
-            console.log(`Session-Timer gestoppt für Session ${sessionId}`);
         }
     }
 
-    updateSessionTimer(sessionId, userId) {
-        const localSession = this.activeSessions.get(userId);
-        if (localSession) {
-            // Timer-Update an Frontend senden
-            this.sendToRenderer('session-timer-update', {
-                sessionId: sessionId,
-                userId: userId,
-                startTime: localSession.startTime,
-                timestamp: new Date().toISOString()
-            });
+    // ===== QR-CODE HANDLING FÜR QUALITÄTSKONTROLLE =====
+    async handleQRScan(qrData, sessionId) {
+        try {
+            console.log(`📸 QR-Code gescannt - Session ${sessionId}: ${qrData.substring(0, 50)}...`);
+
+            // Session-Daten abrufen
+            let sessionData = null;
+            for (const [userId, data] of this.activeSessions.entries()) {
+                if (data.sessionId === sessionId) {
+                    sessionData = data;
+                    break;
+                }
+            }
+
+            if (!sessionData) {
+                return {
+                    success: false,
+                    error: 'Ungültige Session-ID'
+                };
+            }
+
+            // Rate-Limiting prüfen
+            const rateLimitResult = this.checkQRScanRateLimit(sessionId);
+            if (!rateLimitResult.allowed) {
+                return {
+                    success: false,
+                    error: `Zu viele Scans - warten Sie ${rateLimitResult.waitTime}s`
+                };
+            }
+
+            // QR-Code Status prüfen
+            const currentState = this.qrCodeStates.get(qrData);
+
+            if (this.completedQRCodes.has(qrData)) {
+                // DRITTER SCAN - FEHLER!
+                return {
+                    success: false,
+                    error: 'Duplikat-Fehler: Karton bereits vollständig abgearbeitet',
+                    scanType: 'duplicate_error',
+                    qrData: qrData
+                };
+            }
+
+            if (!currentState) {
+                // ERSTER SCAN - Eingang der Bearbeitung
+                console.log(`🔸 Erster Scan (Eingang): ${qrData.substring(0, 30)}`);
+
+                // Status speichern
+                this.qrCodeStates.set(qrData, {
+                    status: 'first_scan',
+                    sessionId: sessionId,
+                    firstScanTime: Date.now(),
+                    userId: sessionData.userId
+                });
+
+                // Statistiken aktualisieren
+                sessionData.firstScans = (sessionData.firstScans || 0) + 1;
+
+                // In Datenbank speichern
+                await this.dbClient.saveQRScan(sessionId, qrData, {
+                    scanType: 'quality_check_start',
+                    sessionData: sessionData
+                });
+
+                // Dekodierung versuchen
+                const decodedData = await this.decodeQRCode(qrData);
+
+                return {
+                    success: true,
+                    scanType: 'first_scan',
+                    message: 'Qualitätskontrolle gestartet - scannen Sie denselben Code erneut zum Abschluss',
+                    qrData: qrData,
+                    decodedData: decodedData,
+                    sessionStats: {
+                        firstScans: sessionData.firstScans,
+                        completedScans: sessionData.completedScans || 0
+                    }
+                };
+
+            } else if (currentState.status === 'first_scan') {
+                // ZWEITER SCAN - Ausgang der Bearbeitung
+                console.log(`🔹 Zweiter Scan (Ausgang): ${qrData.substring(0, 30)}`);
+
+                // Status als komplett markieren
+                this.qrCodeStates.set(qrData, {
+                    ...currentState,
+                    status: 'complete',
+                    completedTime: Date.now()
+                });
+
+                this.completedQRCodes.add(qrData);
+
+                // Statistiken aktualisieren
+                sessionData.completedScans = (sessionData.completedScans || 0) + 1;
+
+                // In Datenbank speichern
+                await this.dbClient.saveQRScan(sessionId, qrData, {
+                    scanType: 'quality_check_complete',
+                    processingTime: Date.now() - currentState.firstScanTime,
+                    sessionData: sessionData
+                });
+
+                // WICHTIG: Session nach zweitem Scan automatisch beenden
+                console.log(`🎯 Qualitätskontrolle abgeschlossen - beende Session ${sessionId}`);
+
+                const sessionEndResult = await this.endSession(sessionId);
+
+                // Sofort neue Session für denselben Benutzer starten
+                let newSessionInfo = null;
+                if (sessionEndResult.success) {
+                    const user = await this.dbClient.getUserByID(sessionData.userId);
+                    if (user) {
+                        const newSessionResult = await this.startSession(user);
+                        if (newSessionResult.success) {
+                            newSessionInfo = {
+                                newSessionId: newSessionResult.sessionId,
+                                newSessionStarted: true
+                            };
+                        }
+                    }
+                }
+
+                // Dekodierung versuchen
+                const decodedData = await this.decodeQRCode(qrData);
+
+                return {
+                    success: true,
+                    scanType: 'second_scan',
+                    message: 'Qualitätskontrolle abgeschlossen! Neue Session gestartet.',
+                    qrData: qrData,
+                    decodedData: decodedData,
+                    processingTime: Date.now() - currentState.firstScanTime,
+                    sessionCompleted: true,
+                    sessionStats: {
+                        firstScans: sessionData.firstScans,
+                        completedScans: sessionData.completedScans
+                    },
+                    newSession: newSessionInfo
+                };
+
+            } else {
+                // Unerwarteter Status
+                return {
+                    success: false,
+                    error: 'Unerwarteter QR-Code Status',
+                    qrData: qrData
+                };
+            }
+
+        } catch (error) {
+            console.error('❌ QR-Scan Handling Fehler:', error);
+            return {
+                success: false,
+                error: error.message,
+                qrData: qrData
+            };
         }
     }
 
-    updateSessionActivity(sessionId) {
-        // Finde zugehörige Session und aktualisiere Aktivität
-        for (const [userId, sessionData] of this.activeSessions.entries()) {
-            if (sessionData.sessionId === sessionId) {
-                sessionData.lastActivity = new Date();
+    checkQRScanRateLimit(sessionId) {
+        const now = Date.now();
+        const scans = this.qrScanRateLimit.get(sessionId) || [];
+
+        // Alte Scans entfernen (älter als 1 Minute)
+        const recentScans = scans.filter(time => now - time < 60000);
+
+        if (recentScans.length >= this.maxQRScansPerMinute) {
+            const oldestScan = Math.min(...recentScans);
+            const waitTime = Math.ceil((60000 - (now - oldestScan)) / 1000);
+
+            return {
+                allowed: false,
+                waitTime: waitTime
+            };
+        }
+
+        // Scan-Zeit hinzufügen
+        recentScans.push(now);
+        this.qrScanRateLimit.set(sessionId, recentScans);
+
+        return { allowed: true };
+    }
+
+    async decodeQRCode(qrData) {
+        try {
+            // QR-Code-Dekodierung delegieren an DatabaseUtils
+            const decoded = await this.dbClient.decodeQRCode(qrData);
+
+            // Globale Statistiken aktualisieren
+            this.decodingStats.totalScans++;
+            if (decoded && decoded.fields && decoded.fields.length > 0) {
+                this.decodingStats.successfulDecodes++;
+
+                // Spezifische Felder zählen
+                decoded.fields.forEach(field => {
+                    if (field.type === 'auftrag') this.decodingStats.withAuftrag++;
+                    if (field.type === 'paket') this.decodingStats.withPaket++;
+                    if (field.type === 'kunde') this.decodingStats.withKunde++;
+                });
+            }
+
+            return decoded;
+
+        } catch (error) {
+            console.warn('⚠️ QR-Code Dekodierung fehlgeschlagen:', error);
+            return {
+                success: false,
+                error: error.message,
+                raw: qrData
+            };
+        }
+    }
+
+    // ===== STATISTICS =====
+    getSessionStats(sessionId) {
+        // Session-spezifische Statistiken
+        let sessionData = null;
+        for (const [userId, data] of this.activeSessions.entries()) {
+            if (data.sessionId === sessionId) {
+                sessionData = data;
                 break;
             }
         }
-    }
 
-    // ===== KORRIGIERTE RFID-VERARBEITUNG: SESSION BEENDEN + NEUE SESSION =====
-    async handleRFIDScan(tagId) {
+        if (!sessionData) {
+            return { error: 'Session nicht gefunden' };
+        }
+
+        // Rate-Limiting-Informationen
+        const rateLimitData = this.qrScanRateLimit.get(sessionId) || [];
         const now = Date.now();
+        const recentScans = rateLimitData.filter(time => now - time < 60000);
 
-        // Cooldown für RFID-Scans prüfen
-        if (now - this.lastRFIDScanTime < this.rfidScanCooldown) {
-            console.log(`🔄 RFID-Scan zu schnell, ignoriert: ${tagId} (${now - this.lastRFIDScanTime}ms < ${this.rfidScanCooldown}ms)`);
-            return;
-        }
-        this.lastRFIDScanTime = now;
-
-        console.log(`🏷️ RFID-Tag gescannt: ${tagId}`);
-
-        try {
-            if (!this.systemStatus.database) {
-                throw new Error('Datenbank nicht verbunden - RFID-Scan kann nicht verarbeitet werden');
+        const stats = {
+            sessionId: sessionId,
+            userId: sessionData.userId,
+            userName: sessionData.userName,
+            startTime: sessionData.startTime,
+            duration: now - sessionData.startTime,
+            firstScans: sessionData.firstScans || 0,
+            completedScans: sessionData.completedScans || 0,
+            totalScans: (sessionData.firstScans || 0) + (sessionData.completedScans || 0),
+            rateLimitInfo: {
+                scansInLastMinute: recentScans.length,
+                maxScansPerMinute: this.maxQRScansPerMinute,
+                nextScanAllowedIn: recentScans.length >= this.maxQRScansPerMinute ?
+                    Math.ceil((60000 - (now - Math.min(...recentScans))) / 1000) : 0,
+                lastScanTime: recentScans.length > 0 ? Math.max(...recentScans) : null
             }
-
-            // Benutzer anhand EPC finden
-            const user = await this.dbClient.getUserByEPC(tagId);
-
-            if (!user) {
-                this.sendToRenderer('rfid-scan-error', {
-                    tagId,
-                    message: `Unbekannter RFID-Tag: ${tagId}`,
-                    timestamp: new Date().toISOString()
-                });
-                return;
-            }
-
-            console.log(`👤 Benutzer gefunden: ${user.BenutzerName} (ID: ${user.ID})`);
-
-            // Prüfen ob Benutzer bereits eine aktive Session hat
-            const existingSession = this.activeSessions.get(user.ID);
-
-            if (existingSession) {
-                // ===== KORRIGIERTE LOGIK: SESSION BEENDEN + NEUE SESSION STARTEN =====
-                console.log(`📝 Beende aktuelle Session für ${user.BenutzerName} (Session ${existingSession.sessionId})`);
-
-                // 1. Aktuelle Session in Datenbank korrekt beenden
-                const endResult = await this.dbClient.query(`
-                    UPDATE Sessions
-                    SET EndTS = SYSDATETIME(), Active = 0
-                    WHERE ID = ? AND UserID = ? AND Active = 1
-                `, [existingSession.sessionId, user.ID]);
-
-                if (endResult && endResult.rowsAffected && endResult.rowsAffected[0] > 0) {
-                    // 2. Arbeitszeit berechnen
-                    const duration = Date.now() - existingSession.startTime.getTime();
-
-                    // 3. Session-Timer stoppen
-                    this.stopSessionTimer(existingSession.sessionId);
-
-                    // 4. Session aus lokaler Verwaltung entfernen
-                    this.activeSessions.delete(user.ID);
-
-                    // 5. Rate Limit für Session zurücksetzen
-                    this.qrScanRateLimit.delete(existingSession.sessionId);
-
-                    // 6. Frontend über Session-Ende informieren
-                    this.sendToRenderer('session-ended', {
-                        user,
-                        sessionId: existingSession.sessionId,
-                        sessionType: existingSession.sessionType || 'Unbekannt',
-                        endTime: new Date().toISOString(),
-                        duration: duration,
-                        source: 'rfid_scan',
-                        durationFormatted: this.formatDuration(duration)
-                    });
-
-                    console.log(`✅ Session ${existingSession.sessionId} erfolgreich beendet (Dauer: ${Math.round(duration / 1000)}s)`);
-
-                    // 7. Sofort neue Session erstellen
-                    await this.createNewSessionForUser(user);
-                } else {
-                    console.error('❌ Fehler beim Beenden der Session - keine Zeilen betroffen');
-                    this.sendToRenderer('rfid-scan-error', {
-                        tagId,
-                        message: 'Fehler beim Beenden der aktuellen Session',
-                        timestamp: new Date().toISOString()
-                    });
-                }
-
-            } else {
-                // ===== ERSTE ANMELDUNG: NEUE SESSION ERSTELLEN =====
-                console.log(`🔑 Erste Anmeldung für ${user.BenutzerName}...`);
-                await this.createNewSessionForUser(user);
-            }
-
-        } catch (error) {
-            console.error('RFID-Verarbeitung Fehler:', error);
-            this.sendToRenderer('rfid-scan-error', {
-                tagId,
-                message: error.message,
-                timestamp: new Date().toISOString()
-            });
-        }
-    }
-
-    // ===== KORRIGIERTE HILFSFUNKTION: SESSION ERSTELLEN OHNE BESTEHENDE ZU BEENDEN =====
-    async createNewSessionForUser(user) {
-        try {
-            console.log(`🆕 Erstelle neue Session für ${user.BenutzerName}...`);
-
-            // ===== KRITISCH: closeExistingSessions = false =====
-            // Da wir die Session bereits manuell beendet haben
-            const { session, sessionTypeName, fallbackUsed } = await this.createSessionWithFallback(
-                user.ID,
-                null,           // sessionTypePriority default
-                false           // closeExistingSessions = false !!!
-            );
-
-            if (session) {
-                // Lokale Session-Daten setzen
-                this.activeSessions.set(user.ID, {
-                    sessionId: session.ID,
-                    userId: user.ID,
-                    startTime: new Date(session.StartTS),
-                    lastActivity: new Date(),
-                    sessionType: sessionTypeName
-                });
-
-                // Session-Timer starten (beginnt bei 0)
-                this.startSessionTimer(session.ID, user.ID);
-
-                // Rate Limit für neue Session initialisieren
-                this.qrScanRateLimit.set(session.ID, []);
-
-                // Session-Daten mit normalisiertem Zeitstempel senden
-                const normalizedSession = {
-                    ...session,
-                    StartTS: this.normalizeTimestamp(session.StartTS)
-                };
-
-                // Login-Event senden
-                this.sendToRenderer('user-login', {
-                    user,
-                    session: normalizedSession,
-                    sessionType: sessionTypeName,
-                    fallbackUsed: fallbackUsed,
-                    timestamp: new Date().toISOString(),
-                    source: 'rfid_scan',
-                    isNewSession: true
-                });
-
-                console.log(`✅ Neue Session erstellt für ${user.BenutzerName} (Session ${session.ID}, Type: ${sessionTypeName})`);
-
-                if (fallbackUsed) {
-                    console.warn(`⚠️ Fallback SessionType '${sessionTypeName}' verwendet`);
-
-                    // Warnung an Renderer senden
-                    this.sendToRenderer('session-fallback-warning', {
-                        user,
-                        sessionType: sessionTypeName,
-                        primaryType: this.sessionTypePriority[0],
-                        message: `Fallback SessionType '${sessionTypeName}' verwendet`,
-                        timestamp: new Date().toISOString()
-                    });
-                }
-
-            } else {
-                throw new Error('Session konnte nicht erstellt werden');
-            }
-
-        } catch (error) {
-            console.error('Neue Session Fehler:', error);
-            this.sendToRenderer('rfid-scan-error', {
-                tagId: 'unknown',
-                message: `Fehler beim Erstellen einer neuen Session: ${error.message}`,
-                timestamp: new Date().toISOString()
-            });
-        }
-    }
-
-    // ===== HILFSFUNKTION: DAUER FORMATIEREN =====
-    formatDuration(milliseconds) {
-        const seconds = Math.floor(milliseconds / 1000);
-        const minutes = Math.floor(seconds / 60);
-        const hours = Math.floor(minutes / 60);
-
-        if (hours > 0) {
-            return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-        } else if (minutes > 0) {
-            return `${minutes}m ${seconds % 60}s`;
-        } else {
-            return `${seconds}s`;
-        }
-    }
-
-    // ===== QR-CODE DEKODIERUNG STATISTIKEN =====
-    async updateDecodingStats(scanResult) {
-        try {
-            if (!scanResult.success || !scanResult.data) return;
-
-            this.decodingStats.totalScans++;
-
-            const decodedData = scanResult.data.DecodedData;
-            if (decodedData) {
-                this.decodingStats.successfulDecodes++;
-
-                if (decodedData.auftrags_nr && decodedData.auftrags_nr.trim()) {
-                    this.decodingStats.withAuftrag++;
-                }
-
-                if (decodedData.paket_nr && decodedData.paket_nr.trim()) {
-                    this.decodingStats.withPaket++;
-                }
-
-                if (decodedData.kunden_name && decodedData.kunden_name.trim()) {
-                    this.decodingStats.withKunde++;
-                }
-
-                // Success Rate berechnen
-                this.decodingStats.decodingSuccessRate = Math.round(
-                    (this.decodingStats.successfulDecodes / this.decodingStats.totalScans) * 100
-                );
-
-                console.log(`📊 Dekodierung-Statistiken aktualisiert:`, {
-                    total: this.decodingStats.totalScans,
-                    decoded: this.decodingStats.successfulDecodes,
-                    rate: this.decodingStats.decodingSuccessRate + '%',
-                    auftrag: this.decodingStats.withAuftrag,
-                    paket: this.decodingStats.withPaket,
-                    kunde: this.decodingStats.withKunde
-                });
-
-                // Statistiken an Renderer senden
-                this.sendToRenderer('decoding-stats-updated', {
-                    stats: this.decodingStats,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        } catch (error) {
-            console.error('Fehler beim Aktualisieren der Dekodierung-Statistiken:', error);
-        }
-    }
-
-    // ===== ZEITSTEMPEL NORMALISIERUNG =====
-    normalizeTimestamp(timestamp) {
-        try {
-            let date;
-
-            if (timestamp instanceof Date) {
-                date = timestamp;
-            } else if (typeof timestamp === 'string') {
-                date = new Date(timestamp);
-            } else {
-                date = new Date(timestamp);
-            }
-
-            // Prüfe auf gültiges Datum
-            if (isNaN(date.getTime())) {
-                console.warn('Ungültiger Zeitstempel für Normalisierung:', timestamp);
-                date = new Date(); // Fallback auf aktuelle Zeit
-            }
-
-            // ISO-String für konsistente Übertragung
-            return date.toISOString();
-
-        } catch (error) {
-            console.error('Fehler bei Zeitstempel-Normalisierung:', error, timestamp);
-            return new Date().toISOString(); // Fallback
-        }
-    }
-
-    // ===== QR-SCAN RATE LIMITING =====
-    checkQRScanRateLimit(sessionId) {
-        const now = Date.now();
-        const oneMinute = 60 * 1000;
-
-        if (!this.qrScanRateLimit.has(sessionId)) {
-            this.qrScanRateLimit.set(sessionId, []);
-        }
-
-        const scanTimes = this.qrScanRateLimit.get(sessionId);
-
-        // Entferne Scans älter als 1 Minute
-        const recentScans = scanTimes.filter(time => now - time < oneMinute);
-        this.qrScanRateLimit.set(sessionId, recentScans);
-
-        // Prüfe Limit
-        return recentScans.length < this.maxQRScansPerMinute;
-    }
-
-    updateQRScanRateLimit(sessionId) {
-        const now = Date.now();
-
-        if (!this.qrScanRateLimit.has(sessionId)) {
-            this.qrScanRateLimit.set(sessionId, []);
-        }
-
-        const scanTimes = this.qrScanRateLimit.get(sessionId);
-        scanTimes.push(now);
-
-        // Halte nur die letzten Scans
-        if (scanTimes.length > this.maxQRScansPerMinute) {
-            scanTimes.shift();
-        }
-    }
-
-    getQRScanStats() {
-        const stats = {};
-        const now = Date.now();
-        const oneMinute = 60 * 1000;
-
-        for (const [sessionId, scanTimes] of this.qrScanRateLimit.entries()) {
-            const recentScans = scanTimes.filter(time => now - time < oneMinute);
-            stats[sessionId] = {
-                scansPerMinute: recentScans.length,
-                lastScan: scanTimes.length > 0 ? Math.max(...scanTimes) : null
-            };
-        }
+        };
 
         return stats;
     }
@@ -1200,7 +935,8 @@ class WareneinlagerungMainApp {
             lastError: this.systemStatus.lastError,
             timestamp: new Date().toISOString(),
             decodingStats: this.decodingStats,
-            activeSessionCount: this.activeSessions.size
+            activeSessionCount: this.activeSessions.size,
+            completedQRCodes: this.completedQRCodes.size
         });
     }
 
@@ -1228,6 +964,8 @@ class WareneinlagerungMainApp {
             this.activeSessions.clear();
             this.activeSessionTimers.clear();
             this.qrScanRateLimit.clear();
+            this.qrCodeStates.clear();
+            this.completedQRCodes.clear();
 
             // Dekodierung-Statistiken zurücksetzen
             this.decodingStats = {
@@ -1259,50 +997,24 @@ class WareneinlagerungMainApp {
             console.error('❌ Cleanup-Fehler:', error);
         }
     }
-
-    // ===== ERROR HANDLING =====
-    handleGlobalError(error) {
-        console.error('Globaler Anwendungsfehler:', error);
-
-        this.sendToRenderer('system-error', {
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
-    }
 }
 
-// ===== ERROR HANDLING =====
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
+// ===== APP STARTUP =====
+const app_instance = new QualitaetskontrolleMainApp();
+app_instance.initialize().catch(error => {
+    console.error('❌ App-Initialisierung fehlgeschlagen:', error);
+    process.exit(1);
+});
 
-    // Versuche die App sauber zu beenden
-    if (app) {
-        app.quit();
-    } else {
-        process.exit(1);
-    }
+// Global Error Handlers
+process.on('uncaughtException', (error) => {
+    console.error('💥 Uncaught Exception:', error);
+    dialog.showErrorBox('Kritischer Fehler', `Unbehandelter Fehler: ${error.message}`);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('💥 Unhandled Rejection:', reason);
+    console.error('Promise:', promise);
 });
 
-// ===== APP INSTANCE =====
-const wareneinlagerungApp = new WareneinlagerungMainApp();
-
-// Prevent multiple instances
-const gotTheLock = app.requestSingleInstanceLock();
-
-if (!gotTheLock) {
-    app.quit();
-} else {
-    app.on('second-instance', (event, commandLine, workingDirectory) => {
-        // Someone tried to run a second instance, focus our window instead
-        if (wareneinlagerungApp.mainWindow) {
-            if (wareneinlagerungApp.mainWindow.isMinimized()) {
-                wareneinlagerungApp.mainWindow.restore();
-            }
-            wareneinlagerungApp.mainWindow.focus();
-        }
-    });
-}
+module.exports = QualitaetskontrolleMainApp;

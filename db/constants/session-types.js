@@ -1,26 +1,36 @@
 /**
- * SessionType Constants and Helper Functions
- * Defines standard session types and provides helper functions for session management
+ * SessionType Constants and Setup Functions für Qualitätskontrolle
+ * Definiert SessionTypes und stellt Setup-Funktionen bereit
  */
 
 // ===== SESSIONTYPE CONSTANTS =====
 
 /**
- * Standard SessionTypes für die Anwendung
+ * Standard SessionTypes für die Qualitätskontrolle-Anwendung
  */
 const SESSION_TYPES = {
-    WARENEINLAGERUNG: 'Wareneinlagerung',  // Hauptfunktion der Anwendung
-    Wareneinlagerung: 'Wareneinlagerung',          // Alternative/Legacy
     QUALITAETSKONTROLLE: 'Qualitätskontrolle',
+    WARENEINLAGERUNG: 'Wareneinlagerung',
     KOMMISSIONIERUNG: 'Kommissionierung',
     INVENTUR: 'Inventur',
     WARTUNG: 'Wartung'
 };
 
 /**
- * SessionType Konfigurationen mit Metadaten
+ * SessionType Konfigurationen mit Metadaten für Qualitätskontrolle
  */
 const SESSION_TYPE_CONFIG = {
+    [SESSION_TYPES.QUALITAETSKONTROLLE]: {
+        id: SESSION_TYPES.QUALITAETSKONTROLLE,
+        name: 'Qualitätskontrolle',
+        description: 'Qualitätsprüfung und -kontrolle',
+        icon: '🔍',
+        color: 'orange',
+        defaultDuration: 240, // 4 Stunden in Minuten
+        allowedQRTypes: ['decoded_qr', 'barcode', 'alphanumeric'],
+        priority: 1, // Höchste Priorität für Qualitätskontrolle
+        scanLogic: 'dual_scan' // Zweimaliges Scannen
+    },
     [SESSION_TYPES.WARENEINLAGERUNG]: {
         id: SESSION_TYPES.WARENEINLAGERUNG,
         name: 'Wareneinlagerung',
@@ -29,37 +39,17 @@ const SESSION_TYPE_CONFIG = {
         color: 'blue',
         defaultDuration: 480, // 8 Stunden in Minuten
         allowedQRTypes: ['decoded_qr', 'caret_separated', 'star_separated'],
-        priority: 1
-    },
-    [SESSION_TYPES.Wareneinlagerung]: {
-        id: SESSION_TYPES.Wareneinlagerung,
-        name: 'Wareneinlagerung',
-        description: 'Eingehende Waren scannen und verarbeiten - Legacy',
-        icon: '📥',
-        color: 'lightblue',
-        defaultDuration: 480, // 8 Stunden in Minuten
-        allowedQRTypes: ['decoded_qr', 'caret_separated', 'star_separated'],
         priority: 2
-    },
-    [SESSION_TYPES.QUALITAETSKONTROLLE]: {
-        id: SESSION_TYPES.QUALITAETSKONTROLLE,
-        name: 'Qualitätskontrolle',
-        description: 'Qualitätsprüfung von Waren und Produkten',
-        icon: '🔍',
-        color: 'orange',
-        defaultDuration: 240, // 4 Stunden in Minuten
-        allowedQRTypes: ['decoded_qr', 'barcode', 'alphanumeric'],
-        priority: 3
     },
     [SESSION_TYPES.KOMMISSIONIERUNG]: {
         id: SESSION_TYPES.KOMMISSIONIERUNG,
         name: 'Kommissionierung',
-        description: 'Zusammenstellung von Bestellungen',
+        description: 'Warenzusammenstellung und Versand',
         icon: '📋',
         color: 'green',
         defaultDuration: 480, // 8 Stunden in Minuten
         allowedQRTypes: ['decoded_qr', 'caret_separated'],
-        priority: 4
+        priority: 3
     },
     [SESSION_TYPES.INVENTUR]: {
         id: SESSION_TYPES.INVENTUR,
@@ -69,328 +59,243 @@ const SESSION_TYPE_CONFIG = {
         color: 'purple',
         defaultDuration: 360, // 6 Stunden in Minuten
         allowedQRTypes: ['decoded_qr', 'barcode', 'alphanumeric'],
-        priority: 5
+        priority: 4
     },
     [SESSION_TYPES.WARTUNG]: {
         id: SESSION_TYPES.WARTUNG,
         name: 'Wartung',
-        description: 'Wartung und Instandhaltung',
+        description: 'Wartungsarbeiten und Instandhaltung',
         icon: '🔧',
         color: 'red',
         defaultDuration: 120, // 2 Stunden in Minuten
-        allowedQRTypes: ['decoded_qr', 'text', 'url'],
-        priority: 6
+        allowedQRTypes: ['alphanumeric', 'barcode'],
+        priority: 5
     }
 };
 
 // ===== HELPER FUNCTIONS =====
 
 /**
- * Helper-Funktion zum Erstellen einer Wareneinlagerung-Session
- * @param {Object} dbClient - Datenbankverbindung (muss sessions module haben)
- * @param {number} userId - Benutzer-ID
- * @returns {Object|null} - Neue Session oder null
+ * Gibt SessionType-Konfiguration zurück
  */
-async function createWareneinlagerungSession(dbClient, userId) {
-    if (!dbClient.sessions) {
-        throw new Error('DatabaseClient muss sessions module haben');
-    }
-    return await dbClient.sessions.createSession(userId, SESSION_TYPES.WARENEINLAGERUNG);
+function getSessionTypeConfig(typeName) {
+    return SESSION_TYPE_CONFIG[typeName] || null;
 }
 
 /**
- * Helper-Funktion zum Abrufen der SessionType-ID für Wareneinlagerung
- * @param {Object} dbClient - Datenbankverbindung (muss sessions module haben)
- * @returns {number|null} - SessionType ID oder null
+ * Gibt alle verfügbaren SessionTypes zurück, sortiert nach Priorität
  */
-async function getWareneinlagerungSessionTypeId(dbClient) {
+function getAllSessionTypes() {
+    return Object.values(SESSION_TYPE_CONFIG)
+        .sort((a, b) => a.priority - b.priority);
+}
+
+/**
+ * Gibt SessionTypes für Qualitätskontrolle zurück (priorisiert)
+ */
+function getQualityControlSessionTypes() {
+    return [
+        SESSION_TYPE_CONFIG[SESSION_TYPES.QUALITAETSKONTROLLE],
+        SESSION_TYPE_CONFIG[SESSION_TYPES.WARENEINLAGERUNG],
+        SESSION_TYPE_CONFIG[SESSION_TYPES.INVENTUR]
+    ].filter(Boolean);
+}
+
+/**
+ * Prüft ob ein SessionType für zweimaliges Scannen konfiguriert ist
+ */
+function isDualScanType(typeName) {
+    const config = getSessionTypeConfig(typeName);
+    return config && config.scanLogic === 'dual_scan';
+}
+
+// ===== DATABASE SETUP FUNCTIONS =====
+
+/**
+ * Hauptfunktion: SessionTypes für Qualitätskontrolle einrichten
+ */
+async function setupSessionTypes(dbClient) {
     try {
-        if (!dbClient.sessions) {
-            throw new Error('DatabaseClient muss sessions module haben');
+        console.log('🔧 Richte SessionTypes für Qualitätskontrolle ein...');
+
+        let createdCount = 0;
+        const sessionTypes = getAllSessionTypes();
+
+        // Einzelne SessionTypes einrichten
+        for (const sessionType of sessionTypes) {
+            try {
+                const typeId = await dbClient.ensureScannerType(sessionType.name);
+
+                if (typeId) {
+                    // Priorität setzen (falls unterstützt)
+                    await dbClient.setScannerTypePriority(sessionType.name, sessionType.priority);
+                    createdCount++;
+                } else {
+                    console.warn(`⚠️ SessionType '${sessionType.name}' konnte nicht erstellt werden`);
+                }
+            } catch (error) {
+                console.error(`❌ Fehler beim Einrichten von SessionType '${sessionType.name}':`, error);
+            }
         }
 
-        const types = await dbClient.sessions.getSessionTypes();
-        const wareneinlagerung = types.find(type => type.TypeName === SESSION_TYPES.WARENEINLAGERUNG);
-        return wareneinlagerung ? wareneinlagerung.ID : null;
+        console.log(`✅ SessionTypes Setup abgeschlossen. ${createdCount} neue SessionTypes erstellt.`);
+
+        // Priorität für Qualitätskontrolle setzen
+        await setPriorityForQualityControl(dbClient);
+
+        return createdCount > 0;
+
     } catch (error) {
-        console.error('Fehler beim Abrufen der Wareneinlagerung SessionType ID:', error);
-        return null;
+        console.error('❌ SessionTypes Setup fehlgeschlagen:', error);
+        return false;
     }
 }
 
 /**
- * Legacy: Helper-Funktion zum Erstellen einer Wareneinlagerung-Session
- * @param {Object} dbClient - Datenbankverbindung (muss sessions module haben)
- * @param {number} userId - Benutzer-ID
- * @returns {Object|null} - Neue Session oder null
+ * Setzt Priorität für Qualitätskontrolle-SessionType
  */
-async function createWareneinlagerungSession(dbClient, userId) {
-    if (!dbClient.sessions) {
-        throw new Error('DatabaseClient muss sessions module haben');
-    }
-    return await dbClient.sessions.createSession(userId, SESSION_TYPES.Wareneinlagerung);
-}
-
-/**
- * Legacy: Helper-Funktion zum Abrufen der SessionType-ID für Wareneinlagerung
- * @param {Object} dbClient - Datenbankverbindung (muss sessions module haben)
- * @returns {number|null} - SessionType ID oder null
- */
-async function getWareneinlagerungSessionTypeId(dbClient) {
+async function setPriorityForQualityControl(dbClient) {
     try {
-        if (!dbClient.sessions) {
-            throw new Error('DatabaseClient muss sessions module haben');
+        const qualityControlConfig = SESSION_TYPE_CONFIG[SESSION_TYPES.QUALITAETSKONTROLLE];
+        const success = await dbClient.setScannerTypePriority(
+            qualityControlConfig.name,
+            qualityControlConfig.priority
+        );
+
+        if (success) {
+            console.log(`📊 Priorität für '${qualityControlConfig.name}' auf ${qualityControlConfig.priority} gesetzt`);
         }
 
-        const types = await dbClient.sessions.getSessionTypes();
-        const Wareneinlagerung = types.find(type => type.TypeName === SESSION_TYPES.Wareneinlagerung);
-        return Wareneinlagerung ? Wareneinlagerung.ID : null;
+        return success;
     } catch (error) {
-        console.error('Fehler beim Abrufen der Wareneinlagerung SessionType ID:', error);
-        return null;
+        console.error('❌ Priorität für Qualitätskontrolle setzen fehlgeschlagen:', error);
+        return false;
     }
 }
 
 /**
- * Abrufen der Konfiguration für einen SessionType
- * @param {string} sessionTypeName - Name des SessionTypes
- * @returns {Object|null} - SessionType Konfiguration oder null
+ * Erstellt SessionTypes-View in der Datenbank (falls nicht vorhanden)
  */
-function getSessionTypeConfig(sessionTypeName) {
-    return SESSION_TYPE_CONFIG[sessionTypeName] || null;
-}
-
-/**
- * Alle verfügbaren SessionType Konfigurationen abrufen
- * @returns {Array} - Array von SessionType Konfigurationen
- */
-function getAllSessionTypeConfigs() {
-    return Object.values(SESSION_TYPE_CONFIG).sort((a, b) => a.priority - b.priority);
-}
-
-/**
- * Prüfen ob ein QR-Code-Typ für einen SessionType erlaubt ist
- * @param {string} sessionTypeName - Name des SessionTypes
- * @param {string} qrType - QR-Code-Typ
- * @returns {boolean} - True wenn erlaubt, false wenn nicht
- */
-function isQRTypeAllowedForSession(sessionTypeName, qrType) {
-    const config = getSessionTypeConfig(sessionTypeName);
-    return config ? config.allowedQRTypes.includes(qrType) : true;
-}
-
-/**
- * Standardmäßige Session-Dauer für einen SessionType abrufen
- * @param {string} sessionTypeName - Name des SessionTypes
- * @returns {number} - Dauer in Minuten
- */
-function getDefaultSessionDuration(sessionTypeName) {
-    const config = getSessionTypeConfig(sessionTypeName);
-    return config ? config.defaultDuration : 480; // 8 Stunden als Fallback
-}
-
-/**
- * SessionType-spezifische Validierung für QR-Scans
- * @param {string} sessionTypeName - Name des SessionTypes
- * @param {Object} qrData - QR-Code Daten
- * @returns {Object} - Validierungsergebnis { isValid: boolean, message?: string }
- */
-function validateQRForSessionType(sessionTypeName, qrData) {
-    const config = getSessionTypeConfig(sessionTypeName);
-
-    if (!config) {
-        return { isValid: true }; // Keine Konfiguration = alle QR-Codes erlaubt
-    }
-
-    // QR-Typ validieren falls vorhanden
-    if (qrData.type && !config.allowedQRTypes.includes(qrData.type)) {
-        return {
-            isValid: false,
-            message: `QR-Code-Typ '${qrData.type}' nicht erlaubt für ${sessionTypeName}`
-        };
-    }
-
-    return { isValid: true };
-}
-
-/**
- * SessionType-Icon für UI abrufen
- * @param {string} sessionTypeName - Name des SessionTypes
- * @returns {string} - Icon
- */
-function getSessionTypeIcon(sessionTypeName) {
-    const config = getSessionTypeConfig(sessionTypeName);
-    return config ? config.icon : '📄';
-}
-
-/**
- * SessionType-Farbe für UI abrufen
- * @param {string} sessionTypeName - Name des SessionTypes
- * @returns {string} - Farbe
- */
-function getSessionTypeColor(sessionTypeName) {
-    const config = getSessionTypeConfig(sessionTypeName);
-    return config ? config.color : 'gray';
-}
-
-/**
- * Erstelle Session-spezifische Statistik-Filter
- * @param {string} sessionTypeName - Name des SessionTypes
- * @returns {Object} - Filter-Konfiguration für Statistiken
- */
-function getSessionTypeStatsFilter(sessionTypeName) {
-    const config = getSessionTypeConfig(sessionTypeName);
-
-    if (!config) {
-        return { allowedQRTypes: [] };
-    }
-
-    return {
-        sessionType: sessionTypeName,
-        allowedQRTypes: config.allowedQRTypes,
-        expectedDuration: config.defaultDuration,
-        priority: config.priority
-    };
-}
-
-// ===== MIGRATION HELPERS =====
-
-/**
- * Hilfsfunktion zum Erstellen der SessionTypes Tabelle (für Setup)
- * @param {Object} dbConnection - Datenbankverbindung
- * @returns {boolean} - Success
- */
-async function createSessionTypesTable(dbConnection) {
+async function createSessionTypesView(dbClient) {
     try {
-        await dbConnection.query(`
-            IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SessionTypes')
-            BEGIN
-                CREATE TABLE dbo.SessionTypes (
-                    ID INT IDENTITY(1,1) PRIMARY KEY,
-                    TypeName NVARCHAR(100) NOT NULL UNIQUE,
-                    Description NVARCHAR(500),
-                    IsActive BIT NOT NULL DEFAULT 1,
-                    CreatedTS DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
-                    UpdatedTS DATETIME2 NOT NULL DEFAULT SYSDATETIME()
-                )
-            END
+        console.log('🗄️ Prüfe SessionTypes-View...');
+
+        // Zuerst prüfen ob View bereits existiert
+        const checkResult = await dbClient.query(`
+            SELECT COUNT(*) as viewExists
+            FROM sys.views 
+            WHERE name = 'SessionTypes'
         `);
 
-        console.log('[INFO] SessionTypes Tabelle erstellt oder bereits vorhanden');
+        if (checkResult.recordset[0].viewExists > 0) {
+            console.log('✅ SessionTypes-View bereits vorhanden');
+            return true;
+        }
+
+        console.log('🗄️ Erstelle SessionTypes-View...');
+
+        const createViewSQL = `
+            CREATE VIEW SessionTypes AS
+            SELECT 
+                ID,
+                Bezeichnung as TypeName,
+                CASE Bezeichnung
+                    WHEN 'Qualitätskontrolle' THEN 'Qualitätsprüfung und -kontrolle'
+                    WHEN 'Wareneinlagerung' THEN 'Eingehende Waren scannen und einlagern - Hauptfunktion'
+                    WHEN 'Kommissionierung' THEN 'Warenzusammenstellung und Versand'
+                    WHEN 'Inventur' THEN 'Bestandserfassung und Inventur'
+                    WHEN 'Wartung' THEN 'Wartungsarbeiten und Instandhaltung'
+                    ELSE 'Scan-Typ: ' + Bezeichnung
+                END as Description,
+                CASE 
+                    WHEN xStatus = 0 THEN 1 
+                    ELSE 0 
+                END as IsActive,
+                xStatus as Priority,
+                xDatum as CreatedAt
+            FROM ScannTyp
+        `;
+
+        await dbClient.query(createViewSQL);
+        console.log('✅ SessionTypes-View erfolgreich erstellt');
         return true;
+
     } catch (error) {
-        console.error('[ERROR] Fehler beim Erstellen der SessionTypes Tabelle:', error);
+        console.warn('⚠️ SessionTypes-View erstellen fehlgeschlagen (nicht kritisch):', error.message);
         return false;
     }
 }
 
 /**
- * Hilfsfunktion zum Einfügen der Standard-SessionTypes
- * @param {Object} dbConnection - Datenbankverbindung
- * @returns {boolean} - Success
+ * Validiert vorhandene SessionTypes
  */
-async function insertDefaultSessionTypes(dbConnection) {
+async function validateSessionTypes(dbClient) {
     try {
-        // WICHTIG: Definiere die SessionTypes explizit in der richtigen Reihenfolge
-        const sessionTypesToInsert = [
-            {
-                name: 'Wareneinlagerung',
-                description: 'Eingehende Waren scannen und einlagern - Hauptfunktion'
-            },
-            {
-                name: 'Wareneinlagerung',
-                description: 'Eingehende Waren scannen und verarbeiten - Legacy'
-            },
-            {
-                name: 'Qualitätskontrolle',
-                description: 'Qualitätsprüfung von Waren und Produkten'
-            },
-            {
-                name: 'Kommissionierung',
-                description: 'Zusammenstellung von Bestellungen'
-            },
-            {
-                name: 'Inventur',
-                description: 'Bestandserfassung und Inventur'
-            },
-            {
-                name: 'Wartung',
-                description: 'Wartung und Instandhaltung'
-            }
-        ];
+        const sessionTypes = await dbClient.getSessionTypes();
 
-        for (const sessionType of sessionTypesToInsert) {
-            // Prüfe ob SessionType bereits existiert
-            const existingResult = await dbConnection.query(`
-                SELECT COUNT(*) as count FROM dbo.SessionTypes WHERE TypeName = ?
-            `, [sessionType.name]);
+        console.log(`📋 Verfügbare SessionTypes (${sessionTypes.length}):`);
+        sessionTypes.forEach(type => {
+            const config = getSessionTypeConfig(type.TypeName);
+            const icon = config ? config.icon : '📄';
+            console.log(`   - ${type.TypeName}: ${type.Description}`);
+        });
 
-            if (existingResult.recordset[0].count === 0) {
-                // SessionType einfügen
-                await dbConnection.query(`
-                    INSERT INTO dbo.SessionTypes (TypeName, Description, IsActive)
-                    VALUES (?, ?, 1)
-                `, [sessionType.name, sessionType.description]);
+        // Prüfen ob Qualitätskontrolle verfügbar
+        const hasQualityControl = sessionTypes.some(type =>
+            type.TypeName.includes('Qualitätskontrolle') ||
+            type.TypeName.includes('QUALITAETSKONTROLLE')
+        );
 
-                console.log(`[INFO] SessionType '${sessionType.name}' eingefügt`);
-            } else {
-                console.log(`[INFO] SessionType '${sessionType.name}' bereits vorhanden`);
-            }
+        if (!hasQualityControl) {
+            console.warn('⚠️ Qualitätskontrolle-SessionType nicht gefunden');
         }
 
-        return true;
+        return sessionTypes;
+
     } catch (error) {
-        console.error('[ERROR] Fehler beim Einfügen der Standard-SessionTypes:', error);
-        return false;
+        console.error('❌ SessionTypes validieren fehlgeschlagen:', error);
+        return [];
     }
 }
 
 /**
- * Vollständige SessionTypes Setup-Funktion
- * @param {Object} dbConnection - Datenbankverbindung
- * @returns {boolean} - Success
+ * Führt komplettes SessionTypes-Setup durch
  */
-async function setupSessionTypes(dbConnection) {
+async function initializeSessionTypesForQualityControl(dbClient) {
     try {
-        console.log('[INFO] 🔧 Setup der SessionTypes wird gestartet...');
+        console.log('🚀 Initialisiere SessionTypes für Qualitätskontrolle...');
 
-        const tableCreated = await createSessionTypesTable(dbConnection);
-        if (!tableCreated) {
-            return false;
+        // 1. SessionTypes-View erstellen
+        await createSessionTypesView(dbClient);
+
+        // 2. SessionTypes einrichten
+        const setupSuccess = await setupSessionTypes(dbClient);
+
+        // 3. SessionTypes validieren
+        const sessionTypes = await validateSessionTypes(dbClient);
+
+        // 4. Qualitätskontrolle-spezifische Konfiguration
+        if (sessionTypes.length > 0) {
+            await setPriorityForQualityControl(dbClient);
         }
 
-        const typesInserted = await insertDefaultSessionTypes(dbConnection);
-        if (!typesInserted) {
-            return false;
-        }
+        console.log('✅ SessionTypes für Qualitätskontrolle initialisiert');
+        return {
+            success: setupSuccess,
+            sessionTypes: sessionTypes,
+            qualityControlAvailable: sessionTypes.some(type =>
+                type.TypeName.includes('Qualitätskontrolle')
+            )
+        };
 
-        // Verify that Wareneinlagerung was inserted
-        try {
-            const verifyResult = await dbConnection.query(`
-                SELECT COUNT(*) as count FROM dbo.SessionTypes 
-                WHERE TypeName = 'Wareneinlagerung' AND IsActive = 1
-            `);
-
-            if (verifyResult.recordset[0].count === 0) {
-                console.log('[WARN] ⚠️ Wareneinlagerung SessionType nicht gefunden - füge direkt hinzu...');
-
-                // Direkt einfügen als Fallback
-                await dbConnection.query(`
-                    INSERT INTO dbo.SessionTypes (TypeName, Description, IsActive)
-                    VALUES ('Wareneinlagerung', 'Eingehende Waren scannen und einlagern - Hauptfunktion', 1)
-                `);
-
-                console.log('[SUCCESS] ✅ Wareneinlagerung SessionType direkt eingefügt');
-            }
-        } catch (verifyError) {
-            console.error('[ERROR] Fehler beim Verifizieren von Wareneinlagerung SessionType:', verifyError);
-        }
-
-        console.log('[SUCCESS] ✅ SessionTypes Setup erfolgreich abgeschlossen');
-        return true;
     } catch (error) {
-        console.error('[ERROR] Fehler beim SessionTypes Setup:', error);
-        return false;
+        console.error('❌ SessionTypes-Initialisierung fehlgeschlagen:', error);
+        return {
+            success: false,
+            sessionTypes: [],
+            qualityControlAvailable: false,
+            error: error.message
+        };
     }
 }
 
@@ -400,26 +305,19 @@ module.exports = {
     SESSION_TYPES,
     SESSION_TYPE_CONFIG,
 
-    // Helper Functions (Primary)
-    createWareneinlagerungSession,
-    getWareneinlagerungSessionTypeId,
-
-    // Helper Functions (Legacy)
-    createWareneinlagerungSession,
-    getWareneinlagerungSessionTypeId,
-
-    // General Helper Functions
+    // Helper Functions
     getSessionTypeConfig,
-    getAllSessionTypeConfigs,
-    isQRTypeAllowedForSession,
-    getDefaultSessionDuration,
-    validateQRForSessionType,
-    getSessionTypeIcon,
-    getSessionTypeColor,
-    getSessionTypeStatsFilter,
+    getAllSessionTypes,
+    getQualityControlSessionTypes,
+    isDualScanType,
 
-    // Migration Helpers
-    createSessionTypesTable,
-    insertDefaultSessionTypes,
-    setupSessionTypes
+    // Setup Functions
+    setupSessionTypes,
+    createSessionTypesView,
+    validateSessionTypes,
+    initializeSessionTypesForQualityControl,
+    setPriorityForQualityControl,
+
+    // Main Export
+    setupSessionTypes: initializeSessionTypesForQualityControl
 };

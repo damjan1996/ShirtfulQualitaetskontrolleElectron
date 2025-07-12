@@ -1,902 +1,316 @@
+/**
+ * Preload Script für Qualitätskontrolle RFID QR Scanner
+ * Sichere Bridge zwischen Main-Process und Renderer-Process
+ * Speziell angepasst für zweimaliges Scannen und automatischen Session-Abschluss
+ */
+
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Sichere API für Renderer Process - Wareneinlagerung
+// ===== CORE API =====
 contextBridge.exposeInMainWorld('electronAPI', {
-    // ===== DATENBANK OPERATIONEN =====
-    db: {
-        query: (query, params) => ipcRenderer.invoke('db-query', query, params),
-        getUserByEPC: (tagId) => ipcRenderer.invoke('db-get-user-by-epc', tagId),
-        getUserById: (userId) => ipcRenderer.invoke('db-get-user-by-id', userId)
-    },
-
-    // ===== PARALLELES SESSION MANAGEMENT =====
-    session: {
-        // Alle aktiven Sessions abrufen
-        getAllActive: () => ipcRenderer.invoke('session-get-all-active'),
-
-        // Neue Session erstellen (ohne bestehende zu beenden)
-        create: (userId) => ipcRenderer.invoke('session-create', userId),
-
-        // Session neu starten (Timer zurücksetzen)
-        restart: (sessionId, userId) => ipcRenderer.invoke('session-restart', sessionId, userId),
-
-        // Spezifische Session beenden
-        end: (sessionId, userId) => ipcRenderer.invoke('session-end', sessionId, userId)
-    },
-
-    // ===== QR-CODE OPERATIONEN MIT DEKODIERUNG =====
-    qr: {
-        saveScan: (sessionId, payload) => ipcRenderer.invoke('qr-scan-save', sessionId, payload),
-        getDecodedScans: (sessionId, limit) => ipcRenderer.invoke('qr-get-decoded-scans', sessionId, limit),
-        searchDecoded: (searchTerm, sessionId) => ipcRenderer.invoke('qr-search-decoded', searchTerm, sessionId),
-        getDecodingStats: (sessionId) => ipcRenderer.invoke('qr-get-decoding-stats', sessionId)
-    },
-
-    // ===== RFID OPERATIONEN =====
-    rfid: {
-        getStatus: () => ipcRenderer.invoke('rfid-get-status'),
-        simulateTag: (tagId) => ipcRenderer.invoke('rfid-simulate-tag', tagId)
-    },
-
-    // ===== SYSTEM STATUS =====
+    // ===== SYSTEM =====
     system: {
-        getStatus: () => ipcRenderer.invoke('get-system-status'),
-        getInfo: () => ipcRenderer.invoke('get-system-info')
+        getStatus: () => ipcRenderer.invoke('system:get-status'),
+        onReady: (callback) => ipcRenderer.on('system-ready', callback),
+        removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
     },
 
-    // ===== APP STEUERUNG =====
-    app: {
-        minimize: () => ipcRenderer.invoke('app-minimize'),
-        close: () => ipcRenderer.invoke('app-close'),
-        restart: () => ipcRenderer.invoke('app-restart'),
-        getSystemInfo: () => ipcRenderer.invoke('get-system-info')
-    },
+    // ===== SESSION MANAGEMENT =====
+    session: {
+        getAllActive: () => ipcRenderer.invoke('session:get-all-active'),
+        end: (sessionId) => ipcRenderer.invoke('session:end', sessionId),
 
-    // ===== EVENT LISTENERS - WARENEINLAGERUNG =====
-    on: (channel, callback) => {
-        const validChannels = [
-            'system-ready',
-            'system-error',
-            'user-login',           // Neuer Benutzer loggt sich ein
-            'user-logout',          // Benutzer loggt sich aus
-            'session-ended',        // NEU: Session wurde beendet (RFID-Rescan)
-            'session-restarted',    // Session wurde neu gestartet (DEPRECATED)
-            'session-timer-update', // Timer-Updates für Sessions
-            'rfid-scan-error',
-            'qr-scan-detected',
-            'decoding-stats-updated'
-        ];
+        // Event Listeners für Session-Updates
+        onSessionStarted: (callback) => ipcRenderer.on('session-started', callback),
+        onSessionEnded: (callback) => ipcRenderer.on('session-ended', callback),
+        onSessionTimerUpdate: (callback) => ipcRenderer.on('session-timer-update', callback),
 
-        if (validChannels.includes(channel)) {
-            ipcRenderer.removeAllListeners(channel);
-            ipcRenderer.on(channel, (event, data) => callback(data));
+        // Cleanup
+        removeSessionListeners: () => {
+            ipcRenderer.removeAllListeners('session-started');
+            ipcRenderer.removeAllListeners('session-ended');
+            ipcRenderer.removeAllListeners('session-timer-update');
         }
     },
 
-    off: (channel) => {
-        ipcRenderer.removeAllListeners(channel);
+    // ===== RFID =====
+    rfid: {
+        simulateTag: (tagId) => ipcRenderer.invoke('rfid:simulate-tag', tagId),
+
+        // Event Listeners
+        onTagScanned: (callback) => ipcRenderer.on('rfid-tag-scanned', callback),
+        removeRFIDListeners: () => ipcRenderer.removeAllListeners('rfid-tag-scanned')
     },
 
-    once: (channel, callback) => {
-        const validChannels = [
-            'system-ready',
-            'system-error',
-            'user-login',
-            'user-logout',
-            'session-ended',        // NEU: Session wurde beendet
-            'session-restarted',
-            'session-timer-update',
-            'rfid-scan-error',
-            'qr-scan-detected',
-            'decoding-stats-updated'
-        ];
+    // ===== QR-CODE HANDLING (Qualitätskontrolle-spezifisch) =====
+    qr: {
+        scan: (qrData, sessionId) => ipcRenderer.invoke('qr:scan', qrData, sessionId),
+        getStatus: (qrCode) => ipcRenderer.invoke('qr:get-status', qrCode),
 
-        if (validChannels.includes(channel)) {
-            ipcRenderer.once(channel, (event, data) => callback(data));
+        // Event Listeners für QR-Updates
+        onScanResult: (callback) => ipcRenderer.on('qr-scan-result', callback),
+        removeQRListeners: () => ipcRenderer.removeAllListeners('qr-scan-result')
+    },
+
+    // ===== STATISTIKEN =====
+    stats: {
+        getSession: (sessionId) => ipcRenderer.invoke('stats:get-session', sessionId),
+        getGlobal: () => ipcRenderer.invoke('stats:get-global'),
+
+        // Event Listeners
+        onStatsUpdate: (callback) => ipcRenderer.on('stats-update', callback),
+        removeStatsListeners: () => ipcRenderer.removeAllListeners('stats-update')
+    },
+
+    // ===== DEBUGGING & ENTWICKLUNG =====
+    debug: {
+        getSessionInfo: () => ipcRenderer.invoke('debug:get-session-info'),
+        log: (level, message, data) => ipcRenderer.invoke('debug:log', level, message, data)
+    },
+
+    // ===== ALLGEMEINE EVENT-BEHANDLUNG =====
+    events: {
+        // Globale Event-Listener für alle Updates
+        onUpdate: (callback) => {
+            ipcRenderer.on('system-ready', callback);
+            ipcRenderer.on('session-started', callback);
+            ipcRenderer.on('session-ended', callback);
+            ipcRenderer.on('session-timer-update', callback);
+            ipcRenderer.on('qr-scan-result', callback);
+            ipcRenderer.on('stats-update', callback);
+        },
+
+        // Alle Event-Listener entfernen
+        removeAllListeners: () => {
+            ipcRenderer.removeAllListeners('system-ready');
+            ipcRenderer.removeAllListeners('session-started');
+            ipcRenderer.removeAllListeners('session-ended');
+            ipcRenderer.removeAllListeners('session-timer-update');
+            ipcRenderer.removeAllListeners('rfid-tag-scanned');
+            ipcRenderer.removeAllListeners('qr-scan-result');
+            ipcRenderer.removeAllListeners('stats-update');
         }
     }
 });
 
-// ===== KAMERA API =====
-contextBridge.exposeInMainWorld('cameraAPI', {
-    getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
-    getDevices: () => navigator.mediaDevices.enumerateDevices(),
-
-    checkPermissions: async () => {
-        try {
-            const result = await navigator.permissions.query({ name: 'camera' });
-            return result.state;
-        } catch (error) {
-            return 'unknown';
-        }
-    },
-
-    getSupportedConstraints: () => navigator.mediaDevices.getSupportedConstraints(),
-
-    stopStream: (stream) => {
-        if (stream && stream.getTracks) {
-            stream.getTracks().forEach(track => track.stop());
-        }
-    }
-});
-
-// ===== ERWEITERTE UTILITY FUNKTIONEN FÜR WARENEINLAGERUNG =====
-contextBridge.exposeInMainWorld('utils', {
-    // ===== ZEIT & DATUM FORMATIERUNG =====
-    formatDuration: (seconds) => {
-        if (typeof seconds !== 'number' || seconds < 0) return '00:00:00';
-
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        const secs = Math.floor(seconds % 60);
-
-        return [hours, minutes, secs]
-            .map(v => v.toString().padStart(2, '0'))
-            .join(':');
-    },
-
-    formatTimestamp: (timestamp, format = 'datetime') => {
-        try {
-            const date = new Date(timestamp);
-
-            // Prüfe auf gültiges Datum
-            if (isNaN(date.getTime())) {
-                return 'Ungültiges Datum';
+// ===== QUALITÄTSKONTROLLE UTILITIES =====
+contextBridge.exposeInMainWorld('qualityUtils', {
+    // ===== QR-CODE STATUS UTILITIES =====
+    formatScanType: (scanType) => {
+        const types = {
+            'first_scan': {
+                icon: '🔸',
+                title: 'Eingang der Bearbeitung',
+                description: 'Qualitätskontrolle gestartet',
+                color: 'blue',
+                nextAction: 'Scannen Sie denselben Code erneut zum Abschluss'
+            },
+            'second_scan': {
+                icon: '🔹',
+                title: 'Ausgang der Bearbeitung',
+                description: 'Qualitätskontrolle abgeschlossen',
+                color: 'green',
+                nextAction: 'Neue Session automatisch gestartet'
+            },
+            'duplicate_error': {
+                icon: '❌',
+                title: 'Duplikat-Fehler',
+                description: 'Karton bereits vollständig abgearbeitet',
+                color: 'red',
+                nextAction: 'Neuen Karton scannen'
             }
-
-            const options = {
-                timeZone: 'Europe/Berlin', // Deutsche Zeitzone
-            };
-
-            switch (format) {
-                case 'time':
-                    return date.toLocaleTimeString('de-DE', {
-                        ...options,
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                        hour12: false
-                    });
-
-                case 'date':
-                    return date.toLocaleDateString('de-DE', {
-                        ...options,
-                        year: 'numeric',
-                        month: '2-digit',
-                        day: '2-digit'
-                    });
-
-                case 'datetime':
-                    return date.toLocaleString('de-DE', {
-                        ...options,
-                        year: 'numeric',
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit'
-                    });
-
-                case 'short':
-                    return date.toLocaleString('de-DE', {
-                        ...options,
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    });
-
-                case 'relative':
-                    return this.getRelativeTime(date);
-
-                case 'iso':
-                    return date.toISOString();
-
-                default:
-                    return date.toLocaleString('de-DE', options);
-            }
-        } catch (error) {
-            console.error('Fehler bei Zeitformatierung:', error);
-            return 'Formatfehler';
-        }
-    },
-
-    getRelativeTime: (date) => {
-        try {
-            const now = new Date();
-            const diffMs = now - new Date(date);
-            const diffSecs = Math.floor(diffMs / 1000);
-            const diffMins = Math.floor(diffSecs / 60);
-            const diffHours = Math.floor(diffMins / 60);
-            const diffDays = Math.floor(diffHours / 24);
-
-            if (diffSecs < 5) return 'gerade eben';
-            if (diffSecs < 60) return `vor ${diffSecs} Sekunde${diffSecs !== 1 ? 'n' : ''}`;
-            if (diffMins < 60) return `vor ${diffMins} Minute${diffMins !== 1 ? 'n' : ''}`;
-            if (diffHours < 24) return `vor ${diffHours} Stunde${diffHours !== 1 ? 'n' : ''}`;
-            if (diffDays < 7) return `vor ${diffDays} Tag${diffDays !== 1 ? 'en' : ''}`;
-
-            return new Date(date).toLocaleDateString('de-DE');
-        } catch (error) {
-            return 'Unbekannt';
-        }
-    },
-
-    getCurrentTimestamp: () => new Date().toISOString(),
-
-    // ===== SESSION DURATION BERECHNUNG =====
-    calculateSessionDuration: (startTime) => {
-        try {
-            const start = new Date(startTime);
-            const now = new Date();
-
-            if (isNaN(start.getTime())) {
-                return 0;
-            }
-
-            const diffMs = now.getTime() - start.getTime();
-            return Math.max(0, Math.floor(diffMs / 1000));
-        } catch (error) {
-            console.error('Fehler bei Session-Duration-Berechnung:', error);
-            return 0;
-        }
-    },
-
-    // ===== RFID TAG VALIDIERUNG =====
-    validateTagId: (tagId) => {
-        if (!tagId || typeof tagId !== 'string') return false;
-
-        const cleaned = tagId.trim().toUpperCase();
-
-        // Prüfe Länge (8-12 Hex-Zeichen sind typisch)
-        if (cleaned.length < 8 || cleaned.length > 12) return false;
-
-        // Prüfe Hex-Format
-        if (!/^[0-9A-F]+$/.test(cleaned)) return false;
-
-        // Prüfe ob konvertierbar und nicht Null
-        try {
-            const decimal = parseInt(cleaned, 16);
-            return decimal > 0;
-        } catch (error) {
-            return false;
-        }
-    },
-
-    // ===== QR-CODE DEKODIERUNG UND VERARBEITUNG =====
-
-    /**
-     * Dekodiert QR-Code Daten basierend auf der Backend-Logik
-     * @param {string} data - Rohe QR-Code Daten
-     * @returns {Object} - Dekodierte Informationen
-     */
-    decodeQRData: (data) => {
-        const result = {
-            auftrags_nr: "",
-            paket_nr: "",
-            kunden_name: "",
-            original_data: data,
-            format_type: "unknown"
         };
 
-        if (!data || typeof data !== 'string') {
-            return result;
-        }
+        return types[scanType] || {
+            icon: '📄',
+            title: 'Unbekannter Scan-Typ',
+            description: 'Status unbekannt',
+            color: 'gray',
+            nextAction: 'Kontaktieren Sie den Administrator'
+        };
+    },
 
-        try {
-            // Spezielles durch ^ getrenntes Format (hat höchste Priorität)
-            if (data.includes('^')) {
-                const parts = data.split('^');
+    // ===== ZEITBERECHNUNG =====
+    formatDuration: (milliseconds) => {
+        if (!milliseconds || milliseconds < 0) return '00:00:00';
 
-                // Wir benötigen mindestens 4 Teile für Auftragsnummer und Paketnummer
-                if (parts.length >= 4) {
-                    result.format_type = "caret_separated";
+        const totalSeconds = Math.floor(milliseconds / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
 
-                    // Auftragsnummer ist im zweiten Feld (Index 1)
-                    result.auftrags_nr = parts[1] || "";
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    },
 
-                    // Paketnummer ist im vierten Feld (Index 3)
-                    result.paket_nr = parts[3] || "";
+    formatProcessingTime: (milliseconds) => {
+        if (!milliseconds || milliseconds < 0) return '0s';
 
-                    // Falls verfügbar, Kundennummer oder ID im dritten Feld (Index 2)
-                    if (parts.length > 2 && parts[2]) {
-                        result.kunden_name = `Kunden-ID: ${parts[2]}`;
-                    }
+        const totalSeconds = Math.floor(milliseconds / 1000);
 
-                    return result;
-                }
-            }
-
-            result.format_type = "pattern_matching";
-
-            // Versuch, die Auftragsnummer zu extrahieren
-            // Basierend auf den Beispielbildern, Muster "NL-XXXXXXX" oder ähnlich
-            const auftragsNrMatch = data.match(/[A-Z]{2}-\d+/);
-            if (auftragsNrMatch) {
-                result.auftrags_nr = auftragsNrMatch[0];
-            }
-
-            // Versuch, die Paketnummer zu extrahieren
-            // Langer numerischer Code, wie in den Beispielbildern
-            const paketNrMatch = data.match(/\d{10,}/);
-            if (paketNrMatch) {
-                result.paket_nr = paketNrMatch[0];
-            }
-
-            // Versuch, den Kundennamen zu extrahieren
-            if (data.includes("KUNDENNAME:")) {
-                const parts = data.split("KUNDENNAME:");
-                if (parts.length > 1) {
-                    let kundenName = parts[1].trim();
-                    // Bis zum nächsten Schlüsselwort oder Ende nehmen
-                    const endMarkers = ["PAKET-NR", "AUFTRAG", "\n"];
-                    for (const marker of endMarkers) {
-                        if (kundenName.includes(marker)) {
-                            kundenName = kundenName.split(marker)[0].trim();
-                            break;
-                        }
-                    }
-                    result.kunden_name = kundenName;
-                }
-            }
-
-            // Zusätzliche Suche für andere Formate
-            // Nach "Referenz: XXX" oder ähnlichen Patterns suchen
-            if (!result.auftrags_nr) {
-                const referenzMatch = data.match(/Referenz:\s+([A-Z0-9-]+)/);
-                if (referenzMatch) {
-                    result.auftrags_nr = referenzMatch[1];
-                }
-            }
-
-            // Nach "Tracking: XXX" oder ähnlichen Patterns suchen
-            if (!result.paket_nr) {
-                const trackingMatch = data.match(/Tracking:\s+(\d+)/);
-                if (trackingMatch) {
-                    result.paket_nr = trackingMatch[1];
-                }
-            }
-
-            return result;
-
-        } catch (error) {
-            console.error('Fehler beim Dekodieren der QR-Code Daten:', error);
-            result.format_type = "error";
-            return result;
+        if (totalSeconds < 60) {
+            return `${totalSeconds}s`;
+        } else if (totalSeconds < 3600) {
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${minutes}m ${seconds}s`;
+        } else {
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            return `${hours}h ${minutes}m`;
         }
     },
 
-    /**
-     * Erstellt eine benutzerfreundliche Anzeige für dekodierte QR-Codes
-     * @param {Object} decoded - Dekodierte QR-Code Daten
-     * @returns {Object} - Formatierte Anzeige-Informationen
-     */
-    formatDecodedData: (decoded) => {
-        if (!decoded || typeof decoded !== 'object') {
+    getCurrentTime: () => {
+        return new Date().toLocaleTimeString('de-DE', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+    },
+
+    getCurrentDate: () => {
+        return new Date().toLocaleDateString('de-DE', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        });
+    },
+
+    // ===== SESSION-STATISTIKEN =====
+    calculateSessionProgress: (sessionStats) => {
+        if (!sessionStats) return null;
+
+        const total = sessionStats.firstScans + sessionStats.completedScans;
+        const completed = sessionStats.completedScans;
+        const inProgress = sessionStats.firstScans - sessionStats.completedScans;
+
+        return {
+            total: total,
+            completed: completed,
+            inProgress: Math.max(0, inProgress),
+            completionRate: total > 0 ? Math.round((completed / total) * 100) : 0
+        };
+    },
+
+    // ===== QR-CODE DEKODIERUNG =====
+    formatDecodedData: (decodedData) => {
+        if (!decodedData || !decodedData.fields) {
             return {
                 hasData: false,
-                icon: '📄',
-                title: 'Unstrukturierte Daten',
-                fields: [],
-                summary: 'Keine dekodierten Daten verfügbar'
+                summary: 'Rohdaten',
+                fields: []
             };
-        }
-
-        const { auftrags_nr, paket_nr, kunden_name, format_type } = decoded;
-        const fields = [];
-
-        // Auftragsnummer
-        if (auftrags_nr && auftrags_nr.trim()) {
-            fields.push({
-                label: 'Auftrag',
-                value: auftrags_nr.trim(),
-                type: 'auftrag',
-                icon: '📋'
-            });
-        }
-
-        // Paketnummer
-        if (paket_nr && paket_nr.trim()) {
-            fields.push({
-                label: 'Paket',
-                value: paket_nr.trim(),
-                type: 'paket',
-                icon: '📦'
-            });
-        }
-
-        // Kundenname/ID
-        if (kunden_name && kunden_name.trim()) {
-            fields.push({
-                label: 'Kunde',
-                value: kunden_name.trim(),
-                type: 'kunde',
-                icon: '👤'
-            });
-        }
-
-        // Icon und Titel basierend auf verfügbaren Daten
-        let icon = '📄';
-        let title = 'Paketdaten';
-        let quality = 'minimal';
-
-        if (auftrags_nr && paket_nr) {
-            icon = '📦';
-            title = 'Vollständige Paketinformationen';
-            quality = 'complete';
-        } else if (auftrags_nr || paket_nr) {
-            icon = '📋';
-            title = 'Teilweise Paketinformationen';
-            quality = 'partial';
-        } else if (kunden_name) {
-            icon = '👤';
-            title = 'Kundeninformationen';
-            quality = 'customer';
-        } else {
-            icon = '📄';
-            title = 'Unstrukturierte Daten';
-            quality = 'minimal';
-        }
-
-        // Zusammenfassung erstellen
-        const parts = [];
-        if (auftrags_nr) parts.push(`Auftrag: ${auftrags_nr}`);
-        if (paket_nr) parts.push(`Paket: ${paket_nr}`);
-        if (kunden_name) parts.push(kunden_name);
-
-        const summary = parts.length > 0 ? parts.join(' • ') : 'Keine strukturierten Daten erkannt';
-
-        return {
-            hasData: fields.length > 0,
-            icon: icon,
-            title: title,
-            fields: fields,
-            summary: summary,
-            quality: quality,
-            formatType: format_type || 'unknown'
-        };
-    },
-
-    /**
-     * Validiert dekodierte QR-Code Daten
-     * @param {Object} decoded - Dekodierte Daten
-     * @returns {Object} - Validierungsergebnis
-     */
-    validateDecodedData: (decoded) => {
-        const validation = {
-            isValid: false,
-            hasAuftrag: false,
-            hasPaket: false,
-            hasKunde: false,
-            completeness: 0,
-            issues: []
-        };
-
-        if (!decoded || typeof decoded !== 'object') {
-            validation.issues.push('Keine dekodierten Daten vorhanden');
-            return validation;
-        }
-
-        const { auftrags_nr, paket_nr, kunden_name } = decoded;
-
-        // Auftragsnummer prüfen
-        if (auftrags_nr && auftrags_nr.trim()) {
-            validation.hasAuftrag = true;
-            // Validiere Format (z.B. NL-123456)
-            if (!/^[A-Z]{2}-\d+$/.test(auftrags_nr.trim())) {
-                validation.issues.push('Auftragsnummer hat ungewöhnliches Format');
-            }
-        }
-
-        // Paketnummer prüfen
-        if (paket_nr && paket_nr.trim()) {
-            validation.hasPaket = true;
-            // Validiere dass es numerisch ist und mindestens 10 Stellen hat
-            if (!/^\d{10,}$/.test(paket_nr.trim())) {
-                validation.issues.push('Paketnummer hat ungewöhnliches Format');
-            }
-        }
-
-        // Kundenname prüfen
-        if (kunden_name && kunden_name.trim()) {
-            validation.hasKunde = true;
-        }
-
-        // Vollständigkeit berechnen
-        let completenessScore = 0;
-        if (validation.hasAuftrag) completenessScore += 40;
-        if (validation.hasPaket) completenessScore += 40;
-        if (validation.hasKunde) completenessScore += 20;
-
-        validation.completeness = completenessScore;
-        validation.isValid = validation.hasAuftrag || validation.hasPaket;
-
-        return validation;
-    },
-
-    parseQRPayload: (payload) => {
-        if (!payload || typeof payload !== 'string') {
-            return { type: 'invalid', data: null, display: 'Ungültiger QR-Code' };
-        }
-
-        try {
-            // JSON-Format versuchen
-            const jsonData = JSON.parse(payload);
-            return {
-                type: 'json',
-                data: jsonData,
-                display: JSON.stringify(jsonData, null, 2),
-                preview: this.createJSONPreview(jsonData)
-            };
-        } catch (e) {
-            // Versuche QR-Code zu dekodieren
-            const decoded = this.decodeQRData(payload);
-            const formatted = this.formatDecodedData(decoded);
-
-            if (formatted.hasData) {
-                return {
-                    type: 'decoded_qr',
-                    data: decoded,
-                    display: formatted.summary,
-                    preview: formatted.title,
-                    formatted: formatted
-                };
-            }
-
-            // Key-Value Format versuchen (Format: key1:value1^key2:value2)
-            if (payload.includes('^') && payload.includes(':')) {
-                const parts = payload.split('^');
-                const data = {};
-                let valid = false;
-
-                parts.forEach(part => {
-                    if (part.includes(':')) {
-                        const [key, ...valueParts] = part.split(':');
-                        const value = valueParts.join(':'); // Für Werte mit ':'
-                        data[key.trim()] = value.trim();
-                        valid = true;
-                    }
-                });
-
-                if (valid) {
-                    const display = Object.entries(data)
-                        .map(([k, v]) => `${k}: ${v}`)
-                        .join('\n');
-                    return {
-                        type: 'keyvalue',
-                        data,
-                        display,
-                        preview: this.createKeyValuePreview(data)
-                    };
-                }
-            }
-
-            // Barcode-Format erkennen (EAN, UPC, etc.)
-            if (/^\d{8,14}$/.test(payload)) {
-                return {
-                    type: 'barcode',
-                    data: payload,
-                    display: payload,
-                    preview: `Barcode: ${payload}`
-                };
-            }
-
-            // URL-Format
-            if (payload.startsWith('http://') || payload.startsWith('https://')) {
-                return {
-                    type: 'url',
-                    data: payload,
-                    display: payload,
-                    preview: `URL: ${payload.length > 50 ? payload.substring(0, 50) + '...' : payload}`
-                };
-            }
-
-            // Plain Text
-            return {
-                type: 'text',
-                data: payload,
-                display: payload,
-                preview: payload.length > 100 ? payload.substring(0, 100) + '...' : payload
-            };
-        }
-    },
-
-    createJSONPreview: (jsonData) => {
-        try {
-            if (typeof jsonData === 'object') {
-                const keys = Object.keys(jsonData);
-                if (keys.length === 0) return 'Leeres JSON-Objekt';
-
-                const preview = keys.slice(0, 3).map(key => {
-                    const value = jsonData[key];
-                    const shortValue = typeof value === 'string' && value.length > 20
-                        ? value.substring(0, 20) + '...'
-                        : value;
-                    return `${key}: ${shortValue}`;
-                }).join(', ');
-
-                return keys.length > 3 ? `${preview}...` : preview;
-            }
-            return String(jsonData);
-        } catch (error) {
-            return 'JSON-Vorschau nicht verfügbar';
-        }
-    },
-
-    createKeyValuePreview: (data) => {
-        try {
-            const entries = Object.entries(data);
-            if (entries.length === 0) return 'Keine Daten';
-
-            const preview = entries.slice(0, 2).map(([key, value]) => {
-                const shortValue = value.length > 15 ? value.substring(0, 15) + '...' : value;
-                return `${key}: ${shortValue}`;
-            }).join(', ');
-
-            return entries.length > 2 ? `${preview}...` : preview;
-        } catch (error) {
-            return 'Vorschau nicht verfügbar';
-        }
-    },
-
-    // ===== SCAN RESULT HANDLING MIT DEKODIERUNG =====
-    formatScanResult: (result) => {
-        if (!result || typeof result !== 'object') {
-            return {
-                success: false,
-                message: 'Ungültiges Scan-Ergebnis',
-                status: 'error'
-            };
-        }
-
-        const { success, status, message, data, duplicateInfo } = result;
-
-        let formattedMessage = message || 'Unbekannter Status';
-        let displayType = status || 'unknown';
-        let decodedSummary = null;
-
-        // Dekodierte Daten extrahieren falls verfügbar
-        if (data && data.DecodedData) {
-            const formatted = this.formatDecodedData(data.DecodedData);
-            if (formatted.hasData) {
-                decodedSummary = formatted.summary;
-                // Nachricht mit dekodierten Daten erweitern
-                if (success) {
-                    formattedMessage = `${message} - ${formatted.summary}`;
-                }
-            }
-        }
-
-        // Status-spezifische Formatierung
-        switch (status) {
-            case 'duplicate_cache':
-            case 'duplicate_database':
-            case 'duplicate_transaction':
-                if (duplicateInfo && duplicateInfo.minutesAgo !== undefined) {
-                    formattedMessage = `Bereits vor ${duplicateInfo.minutesAgo} Minuten gescannt`;
-                } else if (duplicateInfo && duplicateInfo.count) {
-                    formattedMessage = `${duplicateInfo.count}x bereits gescannt`;
-                }
-                displayType = 'duplicate';
-                break;
-
-            case 'rate_limit':
-                formattedMessage = 'Zu viele Scans - kurz warten';
-                displayType = 'warning';
-                break;
-
-            case 'saved':
-                if (data && data.ID) {
-                    formattedMessage = `Erfolgreich gespeichert (ID: ${data.ID})`;
-                    if (decodedSummary) {
-                        formattedMessage += ` - ${decodedSummary}`;
-                    }
-                }
-                displayType = 'success';
-                break;
-
-            case 'error':
-            case 'database_offline':
-                displayType = 'error';
-                break;
-
-            case 'processing':
-                displayType = 'info';
-                break;
         }
 
         return {
-            success: success || false,
-            message: formattedMessage,
-            status: displayType,
-            data: data || null,
-            duplicateInfo: duplicateInfo || null,
-            decodedSummary: decodedSummary,
+            hasData: true,
+            summary: decodedData.summary || 'Dekodierte Daten',
+            fields: decodedData.fields,
+            quality: decodedData.quality || 'unknown',
+            type: decodedData.type || 'decoded_qr'
+        };
+    },
+
+    // ===== VALIDIERUNG =====
+    validateSessionId: (sessionId) => {
+        return sessionId && typeof sessionId === 'number' && sessionId > 0;
+    },
+
+    validateQRData: (qrData) => {
+        return qrData && typeof qrData === 'string' && qrData.trim().length > 0;
+    },
+
+    validateUserId: (userId) => {
+        return userId && typeof userId === 'number' && userId > 0;
+    }
+});
+
+// ===== UTILS (Wiederverwendbare Hilfsfunktionen) =====
+contextBridge.exposeInMainWorld('utils', {
+    // ===== LOGGING =====
+    log: (level, message, data = null) => {
+        const timestamp = new Date().toISOString();
+        const logEntry = {
+            timestamp,
+            level: level.toLowerCase(),
+            message,
+            data
+        };
+
+        // Browser-Console
+        const consoleMethod = level === 'error' ? 'error' :
+            level === 'warn' ? 'warn' : 'log';
+        console[consoleMethod](`[${timestamp}] [${level.toUpperCase()}] ${message}`, data || '');
+
+        // An Main-Process weiterleiten (für Datei-Logging)
+        try {
+            ipcRenderer.invoke('debug:log', level, message, data);
+        } catch (error) {
+            console.warn('Logging an Main-Process fehlgeschlagen:', error);
+        }
+
+        return logEntry;
+    },
+
+    // ===== FEHLERBEHANDLUNG =====
+    handleError: (error, context = 'Unknown') => {
+        const errorInfo = {
+            message: error?.message || error || 'Unbekannter Fehler',
+            stack: error?.stack,
+            context: context,
             timestamp: new Date().toISOString()
         };
+
+        console.error(`[${context}] Fehler:`, errorInfo);
+
+        // Error-Logging
+        try {
+            ipcRenderer.invoke('debug:log', 'error', `${context}: ${errorInfo.message}`, errorInfo);
+        } catch (logError) {
+            console.warn('Error-Logging fehlgeschlagen:', logError);
+        }
+
+        return errorInfo;
     },
 
-    // ===== PARALLELE SESSION UTILITIES =====
-    formatSessionInfo: (session) => {
-        if (!session) return null;
-
-        const duration = this.calculateSessionDuration(session.StartTS || session.localStartTime);
+    // ===== PERFORMANCE =====
+    performanceTimer: () => {
+        const start = performance.now();
 
         return {
-            id: session.ID,
-            userId: session.UserID,
-            userName: session.UserName || 'Unbekannt',
-            department: session.Department || '',
-            sessionType: session.SessionTypeName || 'Wareneinlagerung',
-            startTime: session.StartTS || session.localStartTime,
-            duration: duration,
-            durationFormatted: this.formatDuration(duration),
-            scanCount: session.ScanCount || 0,
-            isActive: session.Active === 1 || session.Active === true
+            start: start,
+            elapsed: () => performance.now() - start,
+            end: (label = 'Operation') => {
+                const elapsed = performance.now() - start;
+                console.log(`⏱️ ${label}: ${elapsed.toFixed(2)}ms`);
+                return elapsed;
+            }
         };
     },
 
-    groupSessionsByUser: (sessions) => {
-        const grouped = {};
+    // ===== ASYNC HELPERS =====
+    sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
 
-        sessions.forEach(session => {
-            const userId = session.UserID;
-            if (!grouped[userId]) {
-                grouped[userId] = {
-                    user: {
-                        id: userId,
-                        name: session.UserName || 'Unbekannt',
-                        department: session.Department || ''
-                    },
-                    sessions: []
-                };
-            }
-            grouped[userId].sessions.push(this.formatSessionInfo(session));
-        });
-
-        return grouped;
-    },
-
-    // ===== COPY TO CLIPBOARD FUNKTIONALITÄT =====
-    copyToClipboard: async (text) => {
-        try {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                await navigator.clipboard.writeText(text);
-                return true;
-            } else {
-                // Fallback für ältere Browser
-                const textArea = document.createElement('textarea');
-                textArea.value = text;
-                textArea.style.position = 'fixed';
-                textArea.style.left = '-999999px';
-                textArea.style.top = '-999999px';
-                document.body.appendChild(textArea);
-                textArea.focus();
-                textArea.select();
-
-                const result = document.execCommand('copy');
-                document.body.removeChild(textArea);
-                return result;
-            }
-        } catch (error) {
-            console.error('Clipboard-Fehler:', error);
-            return false;
-        }
-    },
-
-    // ===== ZAHLKONVERTIERUNG =====
-    hexToDecimal: (hex) => {
-        try {
-            const cleaned = hex.toString().replace(/[^0-9A-Fa-f]/g, '');
-            return parseInt(cleaned, 16);
-        } catch (error) {
-            return null;
-        }
-    },
-
-    decimalToHex: (decimal) => {
-        try {
-            return Number(decimal).toString(16).toUpperCase();
-        } catch (error) {
-            return null;
-        }
-    },
-
-    // ===== PERFORMANCE UTILITIES =====
-    debounce: (func, wait) => {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
+    debounce: (func, delay) => {
+        let timeoutId;
+        return (...args) => {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => func.apply(null, args), delay);
         };
     },
 
     throttle: (func, limit) => {
         let inThrottle;
-        return function(...args) {
+        return (...args) => {
             if (!inThrottle) {
-                func.apply(this, args);
+                func.apply(null, args);
                 inThrottle = true;
                 setTimeout(() => inThrottle = false, limit);
             }
         };
     },
 
-    // ===== DATENVERARBEITUNG =====
-    formatFileSize: (bytes) => {
-        if (bytes === 0) return '0 Bytes';
-
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    },
-
-    generateRandomTag: () => {
-        const chars = '0123456789ABCDEF';
-        let result = '';
-        for (let i = 0; i < 10; i++) {
-            result += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return result;
-    },
-
-    // ===== ERROR HANDLING =====
-    createErrorInfo: (error, context = null) => {
-        const errorInfo = {
-            message: error?.message || String(error),
-            stack: error?.stack,
-            name: error?.name,
-            code: error?.code,
-            context: context,
-            timestamp: new Date().toISOString(),
-            userAgent: navigator.userAgent,
-            url: window.location.href
-        };
-
-        // Zusätzliche Informationen für spezielle Fehler
-        if (error?.name === 'NotAllowedError') {
-            errorInfo.suggestion = 'Kamera-Berechtigung verweigert - in den Browsereinstellungen erlauben';
-        } else if (error?.name === 'NotFoundError') {
-            errorInfo.suggestion = 'Keine Kamera gefunden - USB-Kamera anschließen';
-        } else if (error?.name === 'OverconstrainedError') {
-            errorInfo.suggestion = 'Kamera-Einstellungen nicht unterstützt - andere Auflösung versuchen';
-        }
-
-        return errorInfo;
-    },
-
-    // ===== LOGGING =====
-    log: (level, message, data = null) => {
-        const timestamp = new Date().toISOString();
-        const logMessage = `[${timestamp}] ${level.toUpperCase()}: ${message}`;
-
-        switch (level.toLowerCase()) {
-            case 'error':
-                console.error(logMessage, data);
-                break;
-            case 'warn':
-                console.warn(logMessage, data);
-                break;
-            case 'info':
-                console.info(logMessage, data);
-                break;
-            case 'debug':
-                if (window.config && window.config.isDev()) {
-                    console.log(logMessage, data);
-                }
-                break;
-            default:
-                console.log(logMessage, data);
-        }
-    },
-
-    // ===== VALIDIERUNG =====
+    // ===== DATENVALIDIERUNG =====
     isValidEmail: (email) => {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         return emailRegex.test(email);
@@ -957,7 +371,7 @@ contextBridge.exposeInMainWorld('config', {
     theme: {
         get: () => {
             try {
-                return localStorage.getItem('wareneinlagerung-theme') || 'auto';
+                return localStorage.getItem('qualitaetskontrolle-theme') || 'auto';
             } catch {
                 return 'auto';
             }
@@ -965,7 +379,7 @@ contextBridge.exposeInMainWorld('config', {
 
         set: (theme) => {
             try {
-                localStorage.setItem('wareneinlagerung-theme', theme);
+                localStorage.setItem('qualitaetskontrolle-theme', theme);
                 document.body.className = document.body.className.replace(/theme-\w+/g, '');
 
                 if (theme === 'auto') {
@@ -992,88 +406,135 @@ contextBridge.exposeInMainWorld('config', {
     }
 });
 
-// ===== DIAGNOSTICS & ERROR HANDLING =====
-contextBridge.exposeInMainWorld('diagnostics', {
-    collectSystemInfo: async () => {
-        try {
-            const systemInfo = await window.electronAPI.system.getInfo();
-            const systemStatus = await window.electronAPI.system.getStatus();
-            const rfidStatus = await window.electronAPI.rfid.getStatus();
+// ===== QUALITÄTSKONTROLLE-SPEZIFISCHE ERROR HANDLING =====
+contextBridge.exposeInMainWorld('errorHandler', {
+    // Standard-Fehlerbehandlung für QR-Scan-Fehler
+    handleQRScanError: (error, qrData) => {
+        const errorTypes = {
+            'Duplikat-Fehler': {
+                type: 'duplicate',
+                icon: '❌',
+                title: 'Duplikat-Fehler',
+                suggestion: 'Dieser Karton wurde bereits vollständig abgearbeitet. Scannen Sie einen neuen Karton.'
+            },
+            'Session nicht gefunden': {
+                type: 'session',
+                icon: '⚠️',
+                title: 'Session-Fehler',
+                suggestion: 'Bitte melden Sie sich erneut mit Ihrem RFID-Tag an.'
+            },
+            'Zu viele Scans': {
+                type: 'rate_limit',
+                icon: '⏰',
+                title: 'Zu schnell',
+                suggestion: 'Warten Sie einen Moment, bevor Sie den nächsten Code scannen.'
+            }
+        };
 
-            return {
-                timestamp: new Date().toISOString(),
-                system: systemInfo,
-                status: systemStatus,
-                rfid: rfidStatus,
-                browser: {
-                    userAgent: navigator.userAgent,
-                    language: navigator.language,
-                    cookieEnabled: navigator.cookieEnabled,
-                    onLine: navigator.onLine
-                },
-                screen: {
-                    width: screen.width,
-                    height: screen.height,
-                    colorDepth: screen.colorDepth,
-                    pixelDepth: screen.pixelDepth
-                },
-                performance: performance.memory ? {
-                    used: Math.round(performance.memory.usedJSHeapSize / 1024 / 1024),
-                    total: Math.round(performance.memory.totalJSHeapSize / 1024 / 1024),
-                    limit: Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024)
-                } : null,
-                localStorage: (() => {
-                    try {
-                        return {
-                            available: typeof Storage !== 'undefined',
-                            theme: localStorage.getItem('wareneinlagerung-theme')
-                        };
-                    } catch {
-                        return { available: false };
-                    }
-                })()
-            };
-        } catch (error) {
-            return {
-                error: error.message,
-                timestamp: new Date().toISOString()
+        // Fehlertyp erkennen
+        const errorMessage = error?.message || error || '';
+        let errorInfo = null;
+
+        for (const [key, info] of Object.entries(errorTypes)) {
+            if (errorMessage.includes(key)) {
+                errorInfo = info;
+                break;
+            }
+        }
+
+        if (!errorInfo) {
+            errorInfo = {
+                type: 'unknown',
+                icon: '❓',
+                title: 'Unbekannter Fehler',
+                suggestion: 'Versuchen Sie es erneut oder kontaktieren Sie den Administrator.'
             };
         }
+
+        return {
+            ...errorInfo,
+            originalError: errorMessage,
+            qrData: qrData,
+            timestamp: new Date().toISOString()
+        };
     },
 
-    exportDiagnostics: async () => {
-        try {
-            const systemInfo = await diagnostics.collectSystemInfo();
-            const logs = window.logs || [];
+    // RFID-Fehlerbehandlung
+    handleRFIDError: (error, tagId) => {
+        const errorMessage = error?.message || error || '';
 
+        if (errorMessage.includes('Unbekannter RFID-Tag')) {
             return {
-                ...systemInfo,
-                logs: logs.slice(-100), // Letzte 100 Log-Einträge
-                exportTime: new Date().toISOString()
-            };
-        } catch (error) {
-            return {
-                error: error.message,
-                timestamp: new Date().toISOString()
+                type: 'unknown_tag',
+                icon: '🏷️',
+                title: 'Unbekannter RFID-Tag',
+                suggestion: 'Ihr RFID-Tag ist nicht registriert. Kontaktieren Sie den Administrator.',
+                tagId: tagId
             };
         }
+
+        if (errorMessage.includes('zu schnell')) {
+            return {
+                type: 'too_fast',
+                icon: '⏰',
+                title: 'Zu schnell gescannt',
+                suggestion: 'Warten Sie einen Moment und versuchen Sie es erneut.',
+                tagId: tagId
+            };
+        }
+
+        return {
+            type: 'unknown',
+            icon: '❓',
+            title: 'RFID-Fehler',
+            suggestion: 'Versuchen Sie es erneut oder kontaktieren Sie den Administrator.',
+            originalError: errorMessage,
+            tagId: tagId
+        };
+    },
+
+    // Session-Fehlerbehandlung
+    handleSessionError: (error, sessionContext) => {
+        const errorMessage = error?.message || error || '';
+
+        return {
+            type: 'session_error',
+            icon: '⚠️',
+            title: 'Session-Fehler',
+            suggestion: 'Melden Sie sich erneut mit Ihrem RFID-Tag an.',
+            originalError: errorMessage,
+            context: sessionContext,
+            timestamp: new Date().toISOString()
+        };
     }
 });
 
 // ===== INITIALIZATION =====
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Preload Script geladen, DOM bereit');
+    console.log('Preload Script geladen, DOM bereit für Qualitätskontrolle');
 
-    // Theme initialisieren
-    const savedTheme = localStorage.getItem('wareneinlagerung-theme') || 'auto';
-    config.theme.set(savedTheme);
+    // Theme initialisieren (mit Verzögerung da config erst nach DOM ready verfügbar ist)
+    setTimeout(() => {
+        try {
+            const savedTheme = localStorage.getItem('qualitaetskontrolle-theme') || 'auto';
+            if (typeof window.config !== 'undefined' && window.config.theme) {
+                window.config.theme.set(savedTheme);
+            }
+        } catch (error) {
+            console.warn('Theme-Initialisierung fehlgeschlagen:', error);
+        }
+    }, 100);
 
     // System Theme Changes verfolgen
     if (window.matchMedia) {
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-            const currentTheme = localStorage.getItem('wareneinlagerung-theme') || 'auto';
-            if (currentTheme === 'auto') {
-                config.theme.set('auto'); // Theme neu anwenden
+            try {
+                const currentTheme = localStorage.getItem('qualitaetskontrolle-theme') || 'auto';
+                if (currentTheme === 'auto' && typeof window.config !== 'undefined' && window.config.theme) {
+                    window.config.theme.set('auto'); // Theme neu anwenden
+                }
+            } catch (error) {
+                console.warn('Theme-Update fehlgeschlagen:', error);
             }
         });
     }
@@ -1129,7 +590,7 @@ document.addEventListener('DOMContentLoaded', () => {
         originalConsoleWarn.apply(console, args);
     };
 
-    console.log('✅ Preload Script erfolgreich initialisiert für Wareneinlagerung mit parallelen Sessions');
+    console.log('✅ Preload Script erfolgreich initialisiert für Qualitätskontrolle mit zweimaligem Scannen');
 });
 
-console.log('Preload Script für Wareneinlagerung mit parallelen Sessions geladen');
+console.log('Preload Script für Qualitätskontrolle mit automatischem Session-Management geladen');

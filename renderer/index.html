@@ -4,14 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="
-        default-src 'self' 'unsafe-inline' 'unsafe-eval';
-        script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com;
+        default-src 'self';
+        script-src 'self' 'unsafe-inline' https://unpkg.com;
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' blob: data: https:;
         media-src 'self' blob: data: mediastream:;
         connect-src 'self' blob: data:;
-        img-src 'self' blob: data: https:;
-        style-src 'self' 'unsafe-inline';
+        worker-src 'self' blob:;
+        object-src 'none';
+        base-uri 'self';
+        form-action 'none';
     ">
-    <title>RFID Wareneinlagerung - Shirtful</title>
+    <title>Qualitätskontrolle RFID QR - Shirtful</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -19,7 +23,7 @@
 <header class="main-header">
     <div class="header-content">
         <div class="company-info">
-            <h1 class="app-title">📦 Wareneinlagerung</h1>
+            <h1 class="app-title">🔍 Qualitätskontrolle</h1>
             <div class="company-name">Shirtful GmbH</div>
         </div>
 
@@ -46,245 +50,522 @@
                 Bereit zum Scannen...
             </div>
             <div class="login-info">
+                <h3>🔍 Qualitätskontrolle-Workflow:</h3>
+                <p>📥 <strong>Erster Scan:</strong> Eingang der Bearbeitung</p>
+                <p>📤 <strong>Zweiter Scan:</strong> Ausgang der Bearbeitung</p>
+                <p>🔄 <strong>Automatisch:</strong> Session-Ende nach zweitem Scan</p>
                 <p>💡 Mehrere Mitarbeiter können gleichzeitig arbeiten</p>
-                <p>🔄 Erneutes Scannen startet Ihre Session neu</p>
             </div>
         </div>
     </section>
 
     <!-- Arbeitsbereich (nur sichtbar wenn Benutzer angemeldet) -->
-    <section class="workspace" id="workspace" style="display: none;">
+    <section class="workspace" id="workspaceSection" style="display: none;">
 
-        <!-- Aktive Benutzer Sidebar -->
-        <div class="users-sidebar">
+        <!-- Benutzer-Sidebar -->
+        <aside class="users-sidebar" id="usersSidebar">
             <div class="sidebar-header">
-                <h3>👥 Aktive Mitarbeiter</h3>
-                <span class="user-count" id="activeUserCount">0</span>
+                <h3>🔍 Qualitätskontrolle</h3>
+                <div class="user-count" id="userCount">0</div>
             </div>
-            <div class="users-list" id="activeUsersList">
-                <!-- Dynamisch gefüllte Benutzer-Liste -->
+            <div class="users-list" id="usersList">
+                <div class="no-users">Keine aktiven Sessions</div>
             </div>
-        </div>
+        </aside>
 
         <!-- Hauptarbeitsbereich -->
-        <div class="main-work-area">
-            <!-- Ausgewählter Benutzer Info -->
-            <div class="selected-user-panel" id="selectedUserPanel" style="display: none;">
-                <div class="user-info">
-                    <div class="user-avatar">👤</div>
-                    <div class="user-details">
-                        <h3 class="user-name" id="selectedUserName">Kein Benutzer ausgewählt</h3>
-                        <div class="user-session-info">
-                            <span class="session-time" id="selectedSessionTime">00:00:00</span>
-                            <span class="session-scans">• <span id="selectedSessionScans">0</span> Scans</span>
-                        </div>
-                    </div>
-                    <div class="user-actions">
-                        <button class="logout-btn" id="selectedUserLogout" title="Abmelden">
-                            <span>🔓</span>
-                            Abmelden
-                        </button>
-                    </div>
-                </div>
-            </div>
+        <main class="main-work-area">
 
-            <!-- QR-Scanner Bereich -->
-            <div class="scanner-section">
+            <!-- Ausgewählter Benutzer Panel -->
+            <section class="selected-user-panel" id="selectedUserPanel">
+                <div class="no-selection">
+                    <div class="selection-icon">👤</div>
+                    <h3>Benutzer auswählen</h3>
+                    <p>Wählen Sie einen Benutzer für das QR-Code-Scanning aus</p>
+                </div>
+            </section>
+
+            <!-- QR-Code Scanner -->
+            <section class="scanner-section" id="scannerSection">
                 <div class="scanner-header">
                     <h3>📸 QR-Code Scanner</h3>
                     <div class="scanner-info-bar">
-                        <span id="scannerUserInfo">Wählen Sie einen Mitarbeiter aus</span>
-                    </div>
-                    <div class="scanner-controls">
-                        <button class="btn-primary" id="startScannerBtn">
-                            📹 Scanner starten
-                        </button>
-                        <button class="btn-secondary" id="stopScannerBtn" style="display: none;">
-                            ⏹️ Scanner stoppen
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Kamera-Vorschau -->
-                <div class="camera-container" id="cameraContainer">
-                    <video id="scannerVideo" autoplay playsinline muted></video>
-                    <div class="scanner-overlay">
-                        <div class="scanner-frame"></div>
-                        <div class="scan-target">
-                            <div class="corner tl"></div>
-                            <div class="corner tr"></div>
-                            <div class="corner bl"></div>
-                            <div class="corner br"></div>
+                        <div class="scanner-user-selected" id="scannerUserInfo">
+                            Wählen Sie zuerst einen Benutzer aus
                         </div>
                     </div>
-                    <div class="camera-status" id="cameraStatus">
-                        <div class="status-icon">📷</div>
-                        <div class="status-text">Klicken Sie "Scanner starten"</div>
-                    </div>
-                </div>
-                <canvas id="scannerCanvas" style="display: none;"></canvas>
-
-                <!-- Scanner-Info -->
-                <div class="scanner-info">
-                    <div class="info-row">
-                        <span class="info-label">Status:</span>
-                        <span class="info-value" id="scannerStatusText">Bereit</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Letzter Scan:</span>
-                        <span class="info-value" id="lastScanTime">-</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- QR-Scans Übersicht -->
-            <div class="recent-scans-section">
-                <div class="scans-header">
-                    <h3>📋 QR-Scans</h3>
-                    <div class="scans-controls">
-                        <button class="btn-secondary btn-small" id="clearScansBtn">🗑️ Leeren</button>
-                        <button class="btn-secondary btn-small" id="refreshScansBtn">🔄 Aktualisieren</button>
+                    <div class="scanner-controls">
+                        <button class="btn btn-primary" id="startScannerBtn">
+                            📷 Scanner starten
+                        </button>
+                        <button class="btn btn-secondary" id="stopScannerBtn" style="display: none;">
+                            🛑 Scanner stoppen
+                        </button>
                     </div>
                 </div>
 
-                <!-- Aktueller Scan -->
-                <div class="current-scan-display" id="currentScanDisplay" style="display: none;">
-                    <div class="current-scan-header">
-                        <span class="current-scan-time" id="currentScanTime">--:--:--</span>
-                        <span class="current-scan-status" id="currentScanStatus">
-                            <span class="status-icon">📄</span>
-                            <span class="status-text">Aktueller Scan</span>
-                        </span>
+                <div class="scanner-content">
+                    <div class="camera-container">
+                        <video id="qrVideo" autoplay muted playsinline></video>
+                        <canvas id="scannerCanvas" style="display: none;"></canvas>
+                        <div class="camera-overlay">
+                            <div class="scan-area">
+                                <div class="scan-corner top-left"></div>
+                                <div class="scan-corner top-right"></div>
+                                <div class="scan-corner bottom-left"></div>
+                                <div class="scan-corner bottom-right"></div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="current-scan-content" id="currentScanContent">Noch kein QR-Code gescannt</div>
-                    <div class="current-scan-message" id="currentScanMessage">Scannen Sie einen QR-Code</div>
-                </div>
 
-                <!-- Erfolgreich gescannte Pakete - Tabellenansicht -->
-                <div class="success-scans-table-container">
-                    <table class="success-scans-table" id="successScansTable">
-                        <thead>
-                        <tr>
-                            <th class="scan-time-col">Zeit</th>
-                            <th class="user-col">Mitarbeiter</th>
-                            <th class="auftrag-col">Auftrags-ID</th>
-                            <th class="kunde-col">Kunden-ID</th>
-                            <th class="paket-col">Paket-ID</th>
-                        </tr>
-                        </thead>
-                        <tbody id="successScansTableBody">
-                        <!-- Erfolgreiche Scans werden hier eingefügt -->
-                        </tbody>
-                    </table>
+                    <div class="scanner-status" id="scannerStatus">
+                        <div class="scanner-inactive">
+                            📸 Scanner bereit - wählen Sie einen Benutzer und klicken Sie "Scanner starten"
+                        </div>
+                    </div>
 
-                    <div class="empty-scans" id="emptySuccessScans">
-                        <div class="empty-icon">📦</div>
-                        <p>Noch keine Pakete erfolgreich gescannt</p>
+                    <!-- Qualitätskontrolle-spezifische Anleitung -->
+                    <div class="quality-workflow-info">
+                        <h4>🔍 Qualitätskontrolle-Workflow:</h4>
+                        <div class="workflow-steps">
+                            <div class="workflow-step">
+                                <div class="step-icon">🔸</div>
+                                <div class="step-content">
+                                    <div class="step-title">1. Erster Scan</div>
+                                    <div class="step-description">Scannen Sie den QR-Code am Beginn der Qualitätskontrolle</div>
+                                </div>
+                            </div>
+                            <div class="workflow-step">
+                                <div class="step-icon">🔹</div>
+                                <div class="step-content">
+                                    <div class="step-title">2. Zweiter Scan</div>
+                                    <div class="step-description">Scannen Sie denselben QR-Code nach Abschluss der Qualitätskontrolle</div>
+                                </div>
+                            </div>
+                            <div class="workflow-step">
+                                <div class="step-icon">✅</div>
+                                <div class="step-content">
+                                    <div class="step-title">3. Automatischer Abschluss</div>
+                                    <div class="step-description">Session wird automatisch beendet, neue Session startet</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </div>
+            </section>
+
+            <!-- Scan-Historie -->
+            <section class="scan-history-section" id="scanHistoryContainer" style="display: none;">
+                <div class="history-header">
+                    <h3>📋 Scan-Historie</h3>
+                    <div class="history-info">Letzte Qualitätskontroll-Scans</div>
+                </div>
+                <div class="history-content">
+                    <div class="scan-history-list" id="scanHistoryList">
+                        <!-- Dynamisch gefüllt via JavaScript -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Globale Statistiken -->
+            <section class="global-stats-section">
+                <div class="stats-header">
+                    <h3>📊 Statistiken</h3>
+                </div>
+                <div class="stats-content" id="globalStatsContainer">
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value">0</div>
+                            <div class="stat-label">Aktive Sessions</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">0</div>
+                            <div class="stat-label">Gesamt-Scans</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">0</div>
+                            <div class="stat-label">Abgeschlossen</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">0%</div>
+                            <div class="stat-label">Erfolgsrate</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
     </section>
 </main>
 
-<!-- Footer -->
-<footer class="main-footer">
-    <div class="footer-content">
-        <div class="footer-left">
-            <span id="instructionText">💡 RFID-Tag scannen = Anmelden • QR-Code scannen = Paket einlagern • Erneuter RFID-Scan = Session neu starten</span>
-        </div>
-        <div class="footer-right">
-            <span id="versionText">v1.0.0</span>
-            <span class="separator">•</span>
-            <span id="dateText">--.--.----</span>
-        </div>
-    </div>
-</footer>
-
-<!-- Benachrichtigungen -->
-<div class="notifications" id="notifications"></div>
-
-<!-- Error Modal -->
+<!-- Modals -->
 <div class="modal" id="errorModal">
     <div class="modal-content">
         <div class="modal-header">
             <h3 class="modal-title">
-                <span class="icon">⚠️</span>
+                <span class="icon">❌</span>
                 Fehler
             </h3>
-            <button class="modal-close" id="errorModalClose">✕</button>
+            <button class="modal-close" onclick="app.hideModal('errorModal')">&times;</button>
         </div>
         <div class="modal-body">
-            <div class="error-message" id="errorMessage"></div>
+            <p id="errorMessage">Ein Fehler ist aufgetreten.</p>
         </div>
         <div class="modal-footer">
-            <button class="btn-primary" id="errorModalOk">OK</button>
+            <button class="btn btn-primary" onclick="app.hideModal('errorModal')">OK</button>
         </div>
     </div>
 </div>
 
-<!-- Camera Permission Modal -->
-<div class="modal" id="cameraPermissionModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3 class="modal-title">
-                <span class="icon">📷</span>
-                Kamera-Berechtigung
-            </h3>
-        </div>
-        <div class="modal-body">
-            <p>Die Anwendung benötigt Zugriff auf Ihre Kamera für das QR-Code-Scanning.</p>
-            <p>Bitte erlauben Sie den Kamera-Zugriff im nächsten Dialog.</p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn-primary" id="grantCameraPermission">Kamera erlauben</button>
-            <button class="btn-secondary" id="cancelCameraPermission">Abbrechen</button>
-        </div>
-    </div>
-</div>
+<!-- Notifications Container -->
+<div id="notifications" class="notifications-container"></div>
 
-<!-- User Logout Confirmation Modal -->
-<div class="modal" id="logoutModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3 class="modal-title">
-                <span class="icon">🔓</span>
-                Mitarbeiter abmelden
-            </h3>
-            <button class="modal-close" id="logoutModalClose">✕</button>
-        </div>
-        <div class="modal-body">
-            <p>Möchten Sie <strong id="logoutUserName"></strong> wirklich abmelden?</p>
-            <p class="modal-warning">Die Session wird beendet und alle ungespeicherten Daten gehen verloren.</p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn-danger" id="confirmLogout">Ja, abmelden</button>
-            <button class="btn-secondary" id="cancelLogout">Abbrechen</button>
-        </div>
-    </div>
-</div>
-
-<!-- Session Restart Confirmation Modal -->
-<div class="modal" id="sessionRestartModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3 class="modal-title">
-                <span class="icon">🔄</span>
-                Session neu starten
-            </h3>
-            <button class="modal-close" id="sessionRestartModalClose">✕</button>
-        </div>
-        <div class="modal-body">
-            <p>Möchten Sie die Session von <strong id="restartUserName"></strong> neu starten?</p>
-            <p class="modal-info">Der Timer wird zurückgesetzt und die Session beginnt von vorne.</p>
-        </div>
-        <div class="modal-footer">
-            <button class="btn-primary" id="confirmSessionRestart">Ja, neu starten</button>
-            <button class="btn-secondary" id="cancelSessionRestart">Abbrechen</button>
-        </div>
-    </div>
-</div>
-
+<!-- Scripts -->
+<script>
+    // Quick-Fix für dragEvent-Fehler
+    window.dragEvent = null;
+</script>
+<script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="app.js"></script>
+
+<!-- Custom Styles für Qualitätskontrolle -->
+<style>
+    /* Qualitätskontrolle-spezifische Stile */
+    .quality-workflow-info {
+        background: var(--bg-tertiary);
+        border-radius: var(--radius-lg);
+        padding: var(--spacing-lg);
+        margin-top: var(--spacing-lg);
+        border-left: 4px solid var(--primary-color);
+    }
+
+    .quality-workflow-info h4 {
+        color: var(--primary-color);
+        margin-bottom: var(--spacing-md);
+        font-size: var(--font-size-lg);
+    }
+
+    .workflow-steps {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-md);
+    }
+
+    .workflow-step {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--spacing-md);
+        padding: var(--spacing-md);
+        background: var(--bg-secondary);
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border-color);
+    }
+
+    .step-icon {
+        font-size: var(--font-size-xl);
+        min-width: 40px;
+        text-align: center;
+    }
+
+    .step-content {
+        flex: 1;
+    }
+
+    .step-title {
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: var(--spacing-xs);
+    }
+
+    .step-description {
+        color: var(--text-secondary);
+        font-size: var(--font-size-sm);
+    }
+
+    /* Scan Success/Error Overlays */
+    .scan-success-overlay,
+    .scan-error-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        animation: fadeInOut 2s ease-in-out;
+    }
+
+    .scan-error-overlay {
+        animation: fadeInOut 3s ease-in-out;
+    }
+
+    .success-content,
+    .error-content {
+        background: white;
+        padding: var(--spacing-xl);
+        border-radius: var(--radius-xl);
+        text-align: center;
+        box-shadow: var(--shadow-xl);
+    }
+
+    .success-icon,
+    .error-icon {
+        font-size: 4rem;
+        margin-bottom: var(--spacing-md);
+    }
+
+    .success-message,
+    .error-message {
+        font-size: var(--font-size-xl);
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    @keyframes fadeInOut {
+        0%, 100% { opacity: 0; transform: scale(0.8); }
+        20%, 80% { opacity: 1; transform: scale(1); }
+    }
+
+    /* Scan-Historie Stile */
+    .scan-history-item {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        padding: var(--spacing-md);
+        margin-bottom: var(--spacing-sm);
+        transition: var(--transition);
+    }
+
+    .scan-history-item:hover {
+        box-shadow: var(--shadow-md);
+        transform: translateY(-1px);
+    }
+
+    .scan-header {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-sm);
+    }
+
+    .scan-icon {
+        font-size: var(--font-size-lg);
+    }
+
+    .scan-type {
+        font-weight: 600;
+        color: var(--text-primary);
+        flex: 1;
+    }
+
+    .scan-time {
+        color: var(--text-muted);
+        font-size: var(--font-size-sm);
+        font-family: 'Courier New', monospace;
+    }
+
+    .scan-content {
+        padding-left: var(--spacing-lg);
+    }
+
+    .scan-message {
+        color: var(--text-secondary);
+        margin-bottom: var(--spacing-sm);
+    }
+
+    .decoded-data {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--spacing-xs);
+        margin-bottom: var(--spacing-sm);
+    }
+
+    .field {
+        background: var(--bg-tertiary);
+        padding: var(--spacing-xs) var(--spacing-sm);
+        border-radius: var(--radius-sm);
+        font-size: var(--font-size-xs);
+        border: 1px solid var(--border-color);
+    }
+
+    .field-auftrag {
+        border-color: var(--auftrag-color);
+        background: rgba(99, 102, 241, 0.1);
+    }
+
+    .field-paket {
+        border-color: var(--paket-color);
+        background: rgba(16, 185, 129, 0.1);
+    }
+
+    .field-kunde {
+        border-color: var(--kunde-color);
+        background: rgba(139, 92, 246, 0.1);
+    }
+
+    .processing-time {
+        color: var(--text-muted);
+        font-size: var(--font-size-xs);
+        font-style: italic;
+    }
+
+    .decoded-data-info {
+        background: var(--decoded-bg);
+        border: 1px solid var(--decoded-border);
+        border-radius: var(--radius-md);
+        padding: var(--spacing-md);
+        margin-top: var(--spacing-md);
+    }
+
+    .decoded-header {
+        font-weight: 600;
+        margin-bottom: var(--spacing-sm);
+        color: var(--text-primary);
+    }
+
+    .decoded-fields {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--spacing-xs);
+    }
+
+    .decoded-field {
+        background: var(--bg-secondary);
+        padding: var(--spacing-xs) var(--spacing-sm);
+        border-radius: var(--radius-sm);
+        font-size: var(--font-size-sm);
+        border: 1px solid var(--border-color);
+    }
+
+    /* Notifications */
+    .notifications-container {
+        position: fixed;
+        top: var(--spacing-lg);
+        right: var(--spacing-lg);
+        z-index: 9999;
+        max-width: 400px;
+    }
+
+    .notification {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--spacing-md);
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        padding: var(--spacing-md);
+        margin-bottom: var(--spacing-sm);
+        box-shadow: var(--shadow-lg);
+        animation: slideInRight 0.3s ease-out;
+    }
+
+    .notification-success {
+        border-left: 4px solid var(--secondary-color);
+    }
+
+    .notification-error {
+        border-left: 4px solid var(--danger-color);
+    }
+
+    .notification-warning {
+        border-left: 4px solid var(--warning-color);
+    }
+
+    .notification-info {
+        border-left: 4px solid var(--info-color);
+    }
+
+    .notification-icon {
+        font-size: var(--font-size-lg);
+        min-width: 24px;
+    }
+
+    .notification-content {
+        flex: 1;
+    }
+
+    .notification-title {
+        font-weight: 600;
+        margin-bottom: var(--spacing-xs);
+        color: var(--text-primary);
+    }
+
+    .notification-text {
+        color: var(--text-secondary);
+        font-size: var(--font-size-sm);
+    }
+
+    @keyframes slideInRight {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+
+    /* Login-Info Anpassungen für Qualitätskontrolle */
+    .login-info h3 {
+        color: var(--primary-color);
+        margin-bottom: var(--spacing-md);
+        font-size: var(--font-size-lg);
+    }
+
+    .login-info p {
+        margin-bottom: var(--spacing-sm);
+        font-size: var(--font-size-sm);
+        line-height: 1.4;
+    }
+
+    .login-info p strong {
+        color: var(--text-primary);
+    }
+
+    /* Error Fallback */
+    .error-fallback {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        padding: var(--spacing-xl);
+        text-align: center;
+        background: var(--bg-primary);
+    }
+
+    .error-fallback h1 {
+        color: var(--danger-color);
+        margin-bottom: var(--spacing-lg);
+    }
+
+    .error-fallback pre {
+        background: var(--bg-tertiary);
+        padding: var(--spacing-md);
+        border-radius: var(--radius-md);
+        margin: var(--spacing-lg) 0;
+        max-width: 600px;
+        overflow: auto;
+    }
+
+    .error-fallback button {
+        background: var(--primary-color);
+        color: white;
+        border: none;
+        padding: var(--spacing-md) var(--spacing-lg);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        font-size: var(--font-size-base);
+    }
+
+    .error-fallback button:hover {
+        background: var(--info-color);
+    }
+</style>
+
 </body>
 </html>
