@@ -1,11 +1,10 @@
 // rfid/simple-rfid-listener.js
-// RFID-Listener für Qualitätskontrolle mit Doppel-Scan-System
-// Spezialisiert für automatische Session-Verwaltung und Session-Neustart
+// Einfacher RFID-Listener ohne native Dependencies
 
 const { globalShortcut } = require('electron');
 const EventEmitter = require('events');
 
-class QualityControlRFIDListener extends EventEmitter {
+class SimpleRFIDListener extends EventEmitter {
     constructor(callback = null) {
         super();
 
@@ -16,53 +15,35 @@ class QualityControlRFIDListener extends EventEmitter {
         this.lastScanTime = 0;
         this.shortcuts = [];
 
-        // Qualitätskontrolle-spezifische Konfiguration
+        // Konfiguration aus Environment oder Defaults
         this.inputTimeout = parseFloat(process.env.RFID_INPUT_TIMEOUT) || 500; // ms
         this.minScanInterval = parseFloat(process.env.RFID_MIN_SCAN_INTERVAL) || 1000; // ms
         this.maxBufferLength = parseInt(process.env.RFID_MAX_BUFFER_LENGTH) || 15;
 
-        // Session-Neustart Unterstützung für Qualitätskontrolle
-        this.sessionRestartEnabled = process.env.RFID_SESSION_RESTART_ENABLED === 'true';
-        this.lastUserTag = null;
-        this.lastUserScanTime = 0;
-        this.userSessionMap = new Map(); // tagId -> sessionInfo
-
-        // Statistiken für Qualitätskontrolle
+        // Statistiken
         this.stats = {
             totalScans: 0,
             validScans: 0,
             invalidScans: 0,
             duplicateScans: 0,
-            sessionStarts: 0,
-            sessionEnds: 0,
-            sessionRestarts: 0,
             startTime: new Date()
         };
 
-        // Qualitätskontrolle-spezifische Events
-        this.qualityControlEvents = {
-            sessionAutoRestart: 'qc-session-auto-restart',
-            duplicateUserScan: 'qc-duplicate-user-scan',
-            rapidSessionToggle: 'qc-rapid-session-toggle',
-            sessionEfficiencyWarning: 'qc-session-efficiency-warning'
-        };
-
-        console.log('🔍 Qualitätskontrolle RFID Listener initialisiert:', {
+        console.log('Simple RFID Listener initialisiert:', {
             inputTimeout: this.inputTimeout,
             minScanInterval: this.minScanInterval,
-            maxBufferLength: this.maxBufferLength,
-            sessionRestartEnabled: this.sessionRestartEnabled
+            maxBufferLength: this.maxBufferLength
         });
     }
 
     async start() {
         if (this.isListening) {
-            console.log('Qualitätskontrolle RFID Listener läuft bereits');
+            console.log('Simple RFID Listener läuft bereits');
             return true;
         }
 
         try {
-            console.log('🏷️ Starte Qualitätskontrolle RFID Listener...');
+            console.log('🏷️ Starte Simple RFID Listener...');
 
             // Bestehende Shortcuts entfernen
             this.stop();
@@ -122,16 +103,15 @@ class QualityControlRFIDListener extends EventEmitter {
             this.isListening = true;
             this.emit('started');
 
-            console.log(`✅ Qualitätskontrolle RFID Listener gestartet`);
+            console.log(`✅ Simple RFID Listener gestartet`);
             console.log(`   Registrierte Shortcuts: ${this.shortcuts.length}`);
             console.log(`   Hex-Zeichen: ${registeredCount}/16`);
             console.log(`   Enter-Taste: ${enterRegistered ? 'Ja' : 'Nein'}`);
-            console.log(`   Session-Neustart: ${this.sessionRestartEnabled ? 'Aktiviert' : 'Deaktiviert'}`);
 
             return true;
 
         } catch (error) {
-            console.error('❌ Qualitätskontrolle RFID Listener Start fehlgeschlagen:', error);
+            console.error('❌ Simple RFID Listener Start fehlgeschlagen:', error);
             this.emit('error', error);
             return false;
         }
@@ -142,7 +122,7 @@ class QualityControlRFIDListener extends EventEmitter {
             return;
         }
 
-        console.log('⏹️ Stoppe Qualitätskontrolle RFID Listener...');
+        console.log('⏹️ Stoppe Simple RFID Listener...');
 
         try {
             // Alle registrierten Shortcuts entfernen
@@ -163,10 +143,10 @@ class QualityControlRFIDListener extends EventEmitter {
             this.buffer = '';
             this.emit('stopped');
 
-            console.log(`✅ Qualitätskontrolle RFID Listener gestoppt (${unregisteredCount} Shortcuts entfernt)`);
+            console.log(`✅ Simple RFID Listener gestoppt (${unregisteredCount} Shortcuts entfernt)`);
 
         } catch (error) {
-            console.error('❌ Fehler beim Stoppen des Qualitätskontrolle RFID Listeners:', error);
+            console.error('❌ Fehler beim Stoppen des Simple RFID Listeners:', error);
         }
     }
 
@@ -190,9 +170,7 @@ class QualityControlRFIDListener extends EventEmitter {
             this.buffer = this.buffer.slice(-this.maxBufferLength);
         }
 
-        if (process.env.RFID_DEBUG === 'true') {
-            console.log(`RFID Input: '${char}' → Buffer: "${this.buffer}" (${this.buffer.length})`);
-        }
+        console.log(`RFID Input: '${char}' → Buffer: "${this.buffer}" (${this.buffer.length})`);
     }
 
     processTag() {
@@ -204,9 +182,8 @@ class QualityControlRFIDListener extends EventEmitter {
         const tagId = this.buffer.trim().toUpperCase();
         const originalBuffer = this.buffer;
         this.buffer = '';
-        const now = Date.now();
 
-        console.log(`🔍 Qualitätskontrolle RFID verarbeite Buffer: "${originalBuffer}" → Tag: "${tagId}"`);
+        console.log(`RFID verarbeite Buffer: "${originalBuffer}" → Tag: "${tagId}"`);
 
         // Statistiken aktualisieren
         this.stats.totalScans++;
@@ -220,6 +197,7 @@ class QualityControlRFIDListener extends EventEmitter {
         }
 
         // Scan-Intervall prüfen (Duplikat-Schutz)
+        const now = Date.now();
         if (now - this.lastScanTime < this.minScanInterval) {
             console.log(`❌ RFID Scan zu schnell (${now - this.lastScanTime}ms < ${this.minScanInterval}ms): ${tagId}`);
             this.stats.duplicateScans++;
@@ -227,13 +205,10 @@ class QualityControlRFIDListener extends EventEmitter {
             return;
         }
 
-        // Qualitätskontrolle-spezifische Session-Logik
-        this.handleQualityControlSession(tagId, now);
-
         this.lastScanTime = now;
         this.stats.validScans++;
 
-        console.log(`✅ Qualitätskontrolle RFID Tag erkannt: ${tagId}`);
+        console.log(`✅ RFID Tag erkannt: ${tagId}`);
 
         // Event emittieren
         this.emit('tag', tagId);
@@ -243,83 +218,9 @@ class QualityControlRFIDListener extends EventEmitter {
             try {
                 this.callback(tagId);
             } catch (error) {
-                console.error('Fehler im Qualitätskontrolle RFID-Callback:', error);
+                console.error('Fehler im RFID-Callback:', error);
                 this.emit('callback-error', { tagId, error });
             }
-        }
-    }
-
-    // ===== QUALITÄTSKONTROLLE-SPEZIFISCHE SESSION-LOGIK =====
-    handleQualityControlSession(tagId, now) {
-        if (!this.sessionRestartEnabled) {
-            return;
-        }
-
-        // Prüfe ob gleicher Benutzer erneut scannt
-        if (this.lastUserTag === tagId) {
-            const timeSinceLastScan = now - this.lastUserScanTime;
-
-            // Rapid-Toggle Erkennung (zu schnelle Session-Wechsel)
-            if (timeSinceLastScan < 5000) { // 5 Sekunden
-                console.log(`⚠️ Qualitätskontrolle: Rapid Session Toggle erkannt für ${tagId}`);
-                this.emit(this.qualityControlEvents.rapidSessionToggle, {
-                    tagId,
-                    timeSinceLastScan,
-                    timestamp: now
-                });
-                return;
-            }
-
-            // Session-Neustart für gleichen Benutzer
-            console.log(`🔄 Qualitätskontrolle: Session-Neustart für ${tagId}`);
-            this.stats.sessionRestarts++;
-            this.emit(this.qualityControlEvents.sessionAutoRestart, {
-                tagId,
-                previousScanTime: this.lastUserScanTime,
-                currentScanTime: now,
-                sessionDuration: timeSinceLastScan
-            });
-
-        } else {
-            // Neuer Benutzer oder Session-Ende für vorherigen Benutzer
-            if (this.lastUserTag) {
-                console.log(`🔚 Qualitätskontrolle: Session beendet für ${this.lastUserTag}`);
-                this.stats.sessionEnds++;
-
-                // Session-Effizienz prüfen
-                this.checkSessionEfficiency(this.lastUserTag, now);
-            }
-
-            console.log(`🔐 Qualitätskontrolle: Neue Session für ${tagId}`);
-            this.stats.sessionStarts++;
-        }
-
-        // Session-Info aktualisieren
-        this.userSessionMap.set(tagId, {
-            startTime: now,
-            lastScanTime: now,
-            scanCount: (this.userSessionMap.get(tagId)?.scanCount || 0) + 1
-        });
-
-        this.lastUserTag = tagId;
-        this.lastUserScanTime = now;
-    }
-
-    checkSessionEfficiency(tagId, endTime) {
-        const sessionInfo = this.userSessionMap.get(tagId);
-        if (!sessionInfo) return;
-
-        const sessionDuration = endTime - sessionInfo.startTime;
-        const minimumEfficiencyThreshold = 30000; // 30 Sekunden
-
-        if (sessionDuration < minimumEfficiencyThreshold) {
-            console.log(`⚠️ Qualitätskontrolle: Kurze Session-Dauer für ${tagId}: ${sessionDuration}ms`);
-            this.emit(this.qualityControlEvents.sessionEfficiencyWarning, {
-                tagId,
-                sessionDuration,
-                threshold: minimumEfficiencyThreshold,
-                scanCount: sessionInfo.scanCount
-            });
         }
     }
 
@@ -356,66 +257,6 @@ class QualityControlRFIDListener extends EventEmitter {
         }
     }
 
-    // ===== QUALITÄTSKONTROLLE-SPEZIFISCHE FUNKTIONEN =====
-
-    getQualityControlStats() {
-        const uptime = Date.now() - this.stats.startTime.getTime();
-        const sessionEfficiency = this.stats.sessionStarts > 0 ?
-            (this.stats.sessionEnds / this.stats.sessionStarts * 100) : 0;
-
-        return {
-            ...this.stats,
-            uptime: Math.floor(uptime / 1000),
-            scansPerMinute: this.stats.totalScans / (uptime / 60000) || 0,
-            successRate: this.stats.totalScans > 0 ?
-                (this.stats.validScans / this.stats.totalScans * 100) : 0,
-            sessionEfficiency: sessionEfficiency.toFixed(1),
-            activeUsers: this.userSessionMap.size,
-            averageSessionRestarts: this.stats.sessionRestarts / Math.max(this.stats.sessionStarts, 1)
-        };
-    }
-
-    getCurrentUserSessions() {
-        const now = Date.now();
-        const activeSessions = [];
-
-        for (const [tagId, sessionInfo] of this.userSessionMap.entries()) {
-            // Sessions als aktiv betrachten wenn letzter Scan < 1 Stunde
-            if (now - sessionInfo.lastScanTime < 3600000) {
-                activeSessions.push({
-                    tagId,
-                    startTime: sessionInfo.startTime,
-                    lastScanTime: sessionInfo.lastScanTime,
-                    duration: now - sessionInfo.startTime,
-                    scanCount: sessionInfo.scanCount,
-                    isActive: tagId === this.lastUserTag
-                });
-            }
-        }
-
-        return activeSessions;
-    }
-
-    forceSessionEnd(tagId = null) {
-        if (tagId) {
-            // Spezifische Session beenden
-            this.userSessionMap.delete(tagId);
-            if (this.lastUserTag === tagId) {
-                this.lastUserTag = null;
-                this.lastUserScanTime = 0;
-            }
-            console.log(`🔚 Qualitätskontrolle: Session für ${tagId} manuell beendet`);
-        } else {
-            // Alle Sessions beenden
-            this.userSessionMap.clear();
-            this.lastUserTag = null;
-            this.lastUserScanTime = 0;
-            console.log('🔚 Qualitätskontrolle: Alle Sessions manuell beendet');
-        }
-
-        this.emit('session-force-ended', { tagId: tagId || 'all', timestamp: Date.now() });
-    }
-
     // ===== UTILITY METHODS =====
     getStatus() {
         const uptime = Date.now() - this.stats.startTime.getTime();
@@ -426,16 +267,18 @@ class QualityControlRFIDListener extends EventEmitter {
             buffer: this.buffer,
             lastScanTime: this.lastScanTime,
             registeredShortcuts: this.shortcuts.length,
-            type: 'quality-control-rfid',
-            sessionRestartEnabled: this.sessionRestartEnabled,
-            lastUserTag: this.lastUserTag,
-            activeUsers: this.userSessionMap.size,
+            type: 'simple-keyboard',
             config: {
                 minScanInterval: this.minScanInterval,
                 inputTimeout: this.inputTimeout,
                 maxBufferLength: this.maxBufferLength
             },
-            qualityControlStats: this.getQualityControlStats()
+            stats: {
+                ...this.stats,
+                uptime: Math.floor(uptime / 1000),
+                scansPerMinute: this.stats.totalScans / (uptime / 60000) || 0,
+                successRate: this.stats.totalScans > 0 ? (this.stats.validScans / this.stats.totalScans * 100) : 0
+            }
         };
     }
 
@@ -450,11 +293,7 @@ class QualityControlRFIDListener extends EventEmitter {
         const oldInterval = this.minScanInterval;
         this.minScanInterval = Math.max(100, interval); // Minimum 100ms
         console.log(`RFID Scan-Intervall geändert: ${oldInterval}ms → ${this.minScanInterval}ms`);
-        this.emit('config-changed', {
-            setting: 'minScanInterval',
-            oldValue: oldInterval,
-            newValue: this.minScanInterval
-        });
+        this.emit('config-changed', { setting: 'minScanInterval', oldValue: oldInterval, newValue: this.minScanInterval });
     }
 
     resetStats() {
@@ -464,25 +303,20 @@ class QualityControlRFIDListener extends EventEmitter {
             validScans: 0,
             invalidScans: 0,
             duplicateScans: 0,
-            sessionStarts: 0,
-            sessionEnds: 0,
-            sessionRestarts: 0,
             startTime: new Date()
         };
-
-        // Session-Maps nicht zurücksetzen da sie aktive Sessions enthalten
-        console.log('🔍 Qualitätskontrolle RFID Statistiken zurückgesetzt');
+        console.log('RFID Statistiken zurückgesetzt');
         this.emit('stats-reset', { oldStats });
     }
 
     // ===== TEST & DEBUG METHODS =====
     simulateTag(tagId) {
         if (!this.validateTag(tagId)) {
-            console.error(`❌ Qualitätskontrolle RFID Simulation fehlgeschlagen - ungültige Tag-ID: "${tagId}"`);
+            console.error(`❌ RFID Simulation fehlgeschlagen - ungültige Tag-ID: "${tagId}"`);
             return false;
         }
 
-        console.log(`🧪 Qualitätskontrolle RFID Simulation: ${tagId}`);
+        console.log(`🧪 RFID Simulation: ${tagId}`);
 
         // Buffer setzen und verarbeiten
         this.buffer = tagId.toUpperCase();
@@ -492,44 +326,112 @@ class QualityControlRFIDListener extends EventEmitter {
     }
 
     simulateKeySequence(sequence) {
-        console.log(`🧪 Qualitätskontrolle RFID Tastatur-Simulation: "${sequence}"`);
+        console.log(`🧪 RFID Tastatur-Simulation: "${sequence}"`);
 
         // Sequenz Zeichen für Zeichen eingeben
-        for (let i = 0; i < sequence.length; i++) {
-            setTimeout(() => {
-                this.handleInput(sequence[i]);
-                if (i === sequence.length - 1) {
-                    // Nach letztem Zeichen Enter simulieren
-                    setTimeout(() => this.processTag(), 50);
+        for (const char of sequence) {
+            if (/[0-9A-Fa-f]/.test(char)) {
+                this.handleInput(char);
+            }
+        }
+
+        // Enter simulieren
+        this.processTag();
+    }
+
+    // ===== SHORTCUT MANAGEMENT =====
+    checkShortcutAvailability() {
+        const testShortcuts = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'Enter'];
+        const available = [];
+        const unavailable = [];
+
+        testShortcuts.forEach(shortcut => {
+            if (globalShortcut.isRegistered(shortcut)) {
+                if (this.shortcuts.includes(shortcut)) {
+                    available.push(shortcut);
+                } else {
+                    unavailable.push(shortcut + ' (von anderer App verwendet)');
                 }
-            }, i * 100);
+            } else {
+                available.push(shortcut);
+            }
+        });
+
+        return {
+            available,
+            unavailable,
+            allAvailable: unavailable.length === 0,
+            availabilityPercentage: Math.round((available.length / testShortcuts.length) * 100)
+        };
+    }
+
+    getRecommendations() {
+        const recommendations = [];
+        const status = this.getStatus();
+
+        if (!this.isListening) {
+            recommendations.push('RFID Listener ist nicht aktiv - starten Sie ihn mit start()');
         }
 
-        return true;
-    }
-
-    // ===== QUALITÄTSKONTROLLE EVENT HANDLERS =====
-    onQualityControlEvent(eventType, callback) {
-        if (Object.values(this.qualityControlEvents).includes(eventType)) {
-            this.on(eventType, callback);
-            return () => this.off(eventType, callback);
-        } else {
-            throw new Error(`Unbekannter Qualitätskontrolle Event-Typ: ${eventType}`);
+        if (this.shortcuts.length < 16) {
+            recommendations.push('Nicht alle benötigten Shortcuts verfügbar - schließen Sie andere Apps die globale Shortcuts verwenden');
         }
+
+        if (status.stats.successRate < 90 && status.stats.totalScans > 10) {
+            recommendations.push('Niedrige Erfolgsrate bei RFID-Scans - prüfen Sie Tag-Qualität und Eingabegeschwindigkeit');
+        }
+
+        if (status.stats.duplicateScans > status.stats.validScans * 0.1) {
+            recommendations.push('Viele Duplikat-Scans - erhöhen Sie RFID_MIN_SCAN_INTERVAL');
+        }
+
+        return recommendations;
     }
 
-    // Convenience-Methoden für spezifische QC-Events
-    onSessionAutoRestart(callback) {
-        return this.onQualityControlEvent(this.qualityControlEvents.sessionAutoRestart, callback);
+    // ===== DIAGNOSTICS =====
+    getDiagnostics() {
+        const shortcutCheck = this.checkShortcutAvailability();
+        const status = this.getStatus();
+
+        return {
+            timestamp: new Date().toISOString(),
+            status: status,
+            shortcutAvailability: shortcutCheck,
+            recommendations: this.getRecommendations(),
+            healthCheck: this.performHealthCheck()
+        };
     }
 
-    onRapidSessionToggle(callback) {
-        return this.onQualityControlEvent(this.qualityControlEvents.rapidSessionToggle, callback);
-    }
+    performHealthCheck() {
+        const issues = [];
+        const warnings = [];
 
-    onSessionEfficiencyWarning(callback) {
-        return this.onQualityControlEvent(this.qualityControlEvents.sessionEfficiencyWarning, callback);
+        // Kritische Prüfungen
+        if (!this.isListening) {
+            issues.push('Listener ist nicht aktiv');
+        }
+
+        if (this.shortcuts.length === 0) {
+            issues.push('Keine Shortcuts registriert');
+        }
+
+        // Warnungen
+        if (this.shortcuts.length < 16) {
+            warnings.push(`Nur ${this.shortcuts.length}/17 Shortcuts verfügbar`);
+        }
+
+        const stats = this.getStatus().stats;
+        if (stats.totalScans > 0 && stats.successRate < 80) {
+            warnings.push(`Niedrige Erfolgsrate: ${stats.successRate.toFixed(1)}%`);
+        }
+
+        return {
+            healthy: issues.length === 0,
+            issues: issues,
+            warnings: warnings,
+            score: issues.length === 0 ? (warnings.length === 0 ? 100 : 75) : 25
+        };
     }
 }
 
-module.exports = QualityControlRFIDListener;
+module.exports = SimpleRFIDListener;

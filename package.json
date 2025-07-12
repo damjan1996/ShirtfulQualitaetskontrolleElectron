@@ -1,21 +1,36 @@
 {
-  "name": "qualitaetskontrolle-rfid-qr",
+  "name": "wareneinlagerung-rfid-qr",
   "version": "1.0.0",
-  "description": "RFID QR Qualitätskontrolle - Doppel-Scan System für Shirtful",
+  "description": "RFID Login & QR Wareneinlagerung System für Shirtful - Multi-User parallele Sessions",
   "main": "main.js",
-  "homepage": "https://github.com/shirtful/qualitaetskontrolle-rfid-qr#readme",
   "scripts": {
     "start": "electron .",
-    "dev": "cross-env NODE_ENV=development electron .",
-    "debug": "cross-env NODE_ENV=development electron . --inspect=9229",
+    "dev": "electron . --debug",
+
+    "start:gpu-safe": "electron . --disable-gpu --disable-gpu-compositing --force-cpu-draw",
+
+    "start:minimal": "electron . --disable-gpu --disable-gpu-compositing --disable-accelerated-2d-canvas --disable-web-security",
+
+    "start:debug": "electron . --enable-logging --log-level=2",
+
+    "start:production": "cross-env NODE_ENV=production ELECTRON_DISABLE_HARDWARE_ACCELERATION=true electron .",
+
+    "test:gpu": "electron . --disable-gpu-sandbox --disable-features=VizDisplayCompositor --log-level=1",
+
     "test": "jest",
+    "test:unit": "jest tests/unit",
+    "test:integration": "jest tests/integrations",
+    "test:mocks": "jest tests/mocks",
+    "test:e2e": "jest tests/e2e",
     "test:watch": "jest --watch",
-    "test:quick": "jest --testNamePattern=\"Quick\"",
-    "test:db": "node scripts/test-database.js",
-    "test:rfid": "node scripts/test-rfid.js",
     "test:coverage": "jest --coverage",
-    "test:integration": "jest --testNamePattern=\"Integration\"",
-    "test:unit": "jest --testNamePattern=\"Unit\"",
+    "test:verbose": "jest --verbose",
+    "test:silent": "jest --silent",
+    "test:ci": "jest --ci --coverage --maxWorkers=2",
+    "test-quick": "node scripts/quick-test.js",
+    "test:debug": "node --inspect-brk ./node_modules/.bin/jest --runInBand",
+    "posttest": "npm run test:cleanup",
+    "test:cleanup": "node scripts/test-cleanup.js",
     "lint": "eslint . --ext .js",
     "lint:fix": "eslint . --ext .js --fix",
     "format": "prettier --write \"**/*.{js,json,md}\"",
@@ -40,13 +55,13 @@
     "electron",
     "rfid",
     "qr-code",
-    "qualitaetskontrolle",
-    "quality-control",
+    "warehouse",
+    "storage",
+    "wareneinlagerung",
     "scanner",
     "mssql",
     "multi-user",
-    "parallel-sessions",
-    "double-scan"
+    "parallel-sessions"
   ],
   "author": "Shirtful Development Team",
   "license": "UNLICENSED",
@@ -78,29 +93,24 @@
     "node": ">=16.0.0",
     "npm": ">=8.0.0"
   },
-  "qualitaetskontrolle": {
+  "wareneinlagerung": {
     "mode": "multi-user",
     "features": {
-      "doubleScanLogic": true,
-      "autoSessionEnd": true,
       "parallelSessions": true,
       "sessionRestart": true,
       "multiUserQRScanning": true,
       "rfidSessionManagement": true,
-      "duplicateDetection": true,
       "gpuOptimized": true
     },
     "limits": {
       "maxParallelSessions": 15,
       "maxUsersPerSession": 1,
-      "qrScanCooldown": 2000,
-      "maxScansPerBox": 2,
-      "duplicateErrorOnThirdScan": true
+      "qrScanCooldown": 2000
     }
   },
   "build": {
-    "appId": "com.shirtful.qualitaetskontrolle",
-    "productName": "Qualitätskontrolle RFID QR",
+    "appId": "com.shirtful.wareneinlagerung",
+    "productName": "Wareneinlagerung RFID QR",
     "directories": {
       "output": "dist"
     },
@@ -124,10 +134,10 @@
       "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
     ],
     "extraMetadata": {
-      "qualitaetskontrolle": {
+      "wareneinlagerung": {
         "version": "1.0.0",
         "mode": "multi-user",
-        "description": "Qualitätskontrolle mit Doppel-Scan-Logik - GPU optimiert"
+        "description": "Wareneinlagerung mit parallelen Sessions - GPU optimiert"
       }
     },
     "win": {
@@ -142,7 +152,7 @@
       "installerHeaderIcon": "assets/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Qualitätskontrolle RFID QR",
+      "shortcutName": "Wareneinlagerung RFID QR",
       "menuCategory": "Shirtful Tools"
     },
     "mac": {
@@ -157,17 +167,17 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/shirtful/qualitaetskontrolle-rfid-qr.git"
+    "url": "https://github.com/shirtful/wareneinlagerung-rfid-qr.git"
   },
   "bugs": {
-    "url": "https://github.com/shirtful/qualitaetskontrolle-rfid-qr/issues"
+    "url": "https://github.com/shirtful/wareneinlagerung-rfid-qr/issues"
   },
+  "homepage": "https://github.com/shirtful/wareneinlagerung-rfid-qr#readme",
   "config": {
-    "qualitaetskontrolle": {
+    "wareneinlagerung": {
       "defaultMode": "multi-user",
       "enableParallelSessions": true,
       "enableSessionRestart": true,
-      "enableDoubleScan": true,
       "maxConcurrentUsers": 15,
       "sessionTimeoutHours": 8,
       "autoLogoutDisabled": true,

@@ -1,11 +1,10 @@
 # =============================================================================
-# RFID QR Qualitätskontrolle - Electron Builder Konfiguration
-# Spezialisiert für Doppel-Scan-System und Multi-User-Betrieb
+# RFID QR Wareneinlagerung - Electron Builder Konfiguration
 # =============================================================================
 
 # App Metadaten
-appId: com.shirtful.rfid-qr-qualitaetskontrolle
-productName: "RFID QR Qualitätskontrolle"
+appId: com.shirtful.rfid-qr-Wareneinlagerung
+productName: "RFID QR Wareneinlagerung"
 copyright: "Copyright © 2024 Shirtful GmbH"
 
 # Verzeichnisse
@@ -40,10 +39,6 @@ extraResources:
     to: ".env.example"
   - from: "README.md"
     to: "README.md"
-  - from: "docs/qualitaetskontrolle-handbuch.pdf"
-    to: "docs/qualitaetskontrolle-handbuch.pdf"
-    filter:
-      - "**/*"
 
 # Kompressionslevel
 compression: normal
@@ -51,7 +46,7 @@ compression: normal
 # Auto-Update Konfiguration (optional für zukünftige Versionen)
 publish:
   provider: generic
-  url: "https://updates.shirtful.com/rfid-qr-qualitaetskontrolle/"
+  url: "https://updates.shirtful.com/rfid-qr-Wareneinlagerung/"
 
 # =============================================================================
 # WINDOWS KONFIGURATION
@@ -74,14 +69,6 @@ win:
   fileVersion: "1.0.0"
   productVersion: "1.0.0"
 
-  # Qualitätskontrolle-spezifische Metadaten
-  extraMetadata:
-    qualitaetskontrolle:
-      doubleScanSystem: true
-      autoSessionRestart: true
-      multiUserSupport: true
-      version: "1.0.0"
-
 # NSIS Installer Konfiguration
 nsis:
   oneClick: false
@@ -92,7 +79,7 @@ nsis:
   installerHeaderIcon: "build/installerHeader.ico"
   createDesktopShortcut: always
   createStartMenuShortcut: true
-  shortcutName: "RFID QR Qualitätskontrolle"
+  shortcutName: "RFID QR Wareneinlagerung"
 
   # Installer Sprache
   language: "1031" # Deutsch
@@ -114,24 +101,12 @@ nsis:
 
   # Installer Seiten
   welcomeTitle: "Willkommen zum ${productName} Setup"
-  welcomeText: "Dieses Setup installiert die RFID QR Qualitätskontrolle mit Doppel-Scan-System für präzise Karton-Bearbeitung."
 
   # Menuverzeichnis
-  menuCategory: "Shirtful Qualitätskontrolle"
+  menuCategory: "Shirtful"
 
-  # Registry Einträge für Qualitätskontrolle
+  # Registry Einträge
   include: null
-
-  # Installer-spezifische Konfiguration für Qualitätskontrolle
-  installerHeader: "RFID QR Qualitätskontrolle - Doppel-Scan-System"
-  installerSidebar: "build/installer-sidebar.bmp"
-
-  # Custom NSIS-Defines für Qualitätskontrolle
-  defines:
-    QUALITY_CONTROL_MODE: "true"
-    DOUBLE_SCAN_ENABLED: "true"
-    AUTO_SESSION_RESTART: "true"
-    MULTI_USER_SUPPORT: "true"
 
 # =============================================================================
 # PLATTFORM-SPEZIFISCHE BUILDS
@@ -151,17 +126,11 @@ mac:
   entitlements: null
   entitlementsInherit: null
 
-  # macOS-spezifische Qualitätskontrolle-Metadaten
-  extendInfo:
-    QualityControlSystem: true
-    DoubleScanLogic: true
-    MultiUserSupport: true
-
 # macOS DMG
 dmg:
   title: "${productName} ${version}"
   icon: "build/volume.icns"
-  background: "build/background-qc.png"
+  background: "build/background.png"
   window:
     width: 540
     height: 380
@@ -185,13 +154,8 @@ linux:
         - x64
   icon: "build/icon.png"
   category: Office
-  synopsis: "RFID QR Qualitätskontrolle System mit Doppel-Scan-Logik"
-  description: "Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Qualitätskontrolle mit präzisem Doppel-Scan-System"
-
-  # Linux-spezifische Qualitätskontrolle-Konfiguration
-  desktop:
-    Keywords: "qualitätskontrolle;rfid;qr-code;doppel-scan;shirtful"
-    Categories: "Office;Quality;Manufacturing"
+  synopsis: "RFID QR Wareneinlagerung System"
+  description: "Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Wareneinlagerung"
 
 # Linux AppImage
 appImage:
@@ -207,158 +171,107 @@ deb:
     - libappindicator1
     - libxtst6
     - libnss3
-  packageCategory: "Quality Control"
-
-# =============================================================================
-# QUALITÄTSKONTROLLE-SPEZIFISCHE KONFIGURATION
-# =============================================================================
-
-# Build-Zeit-Konfiguration für Qualitätskontrolle-Features
-buildVersion: "1.0.0-qc"
-buildDependenciesFromSource: false
-npmRebuild: true
-nodeGypRebuild: false
-
-# Metadaten für Qualitätskontrolle
-metadata:
-  author:
-    name: "Shirtful GmbH"
-    email: "support@shirtful.com"
-  homepage: "https://www.shirtful.com/qualitaetskontrolle"
-  description: "RFID-basierte Qualitätskontrolle mit Doppel-Scan-System für moderne Produktionsbetriebe"
-  keywords:
-    - "qualitätskontrolle"
-    - "quality-control"
-    - "rfid"
-    - "qr-code"
-    - "doppel-scan"
-    - "double-scan"
-    - "zeiterfassung"
-    - "karton-bearbeitung"
-    - "multi-user"
-    - "shirtful"
-
-# Qualitätskontrolle-spezifische Ressourcen
-extraFiles:
-  - from: "assets/qc-icons"
-    to: "resources/qc-icons"
-    filter:
-      - "**/*.png"
-      - "**/*.ico"
-      - "**/*.svg"
-  - from: "assets/audio"
-    to: "resources/audio"
-    filter:
-      - "success-*.wav"
-      - "error-*.wav"
-      - "duplicate-*.wav"
 
 # =============================================================================
 # ENTWICKLUNG & DEBUGGING
 # =============================================================================
 
-# Debugging für Qualitätskontrolle
-afterSign: null
-afterAllArtifactBuild: null
+# Debugging
+npmRebuild: true
+nodeGypRebuild: false
 
-# Development-spezifische Konfiguration
-extends: null
+# Build Cache
+buildDependenciesFromSource: false
 
-# Environment-spezifische Builds
-buildEnvironment:
-  QUALITY_CONTROL_BUILD: "true"
-  DOUBLE_SCAN_SYSTEM: "true"
-  AUTO_SESSION_RESTART: "true"
-
-# Qualitätskontrolle-spezifische Build-Hooks
-beforeBuild: "scripts/qc-prebuild.js"
-afterBuild: "scripts/qc-postbuild.js"
-
-# Package-spezifische Konfiguration
-pkg:
-  scripts:
-    - "db/**/*.js"
-    - "rfid/**/*.js"
-    - "renderer/**/*.js"
-
-# =============================================================================
-# SIGNIERUNG & VERTEILUNG (OPTIONAL)
-# =============================================================================
-
-# Code-Signierung (falls verfügbar)
-forceCodeSigning: false
-
-# Verteilungs-Konfiguration
-snap:
-  synopsis: "RFID QR Qualitätskontrolle"
-  description: |
-    RFID QR Qualitätskontrolle mit Doppel-Scan-System für präzise 
-    Karton-Bearbeitung in Produktionsumgebungen.
-    
-    Features:
-    - Doppel-Scan-System (Ein-/Ausgang)
-    - Automatische Session-Verwaltung
-    - Multi-User-Parallelbetrieb
-    - Real-Time Qualitätskontrolle-Dashboard
-    - Intelligente Duplikat-Erkennung
-  grade: stable
-  confinement: strict
-
-# Portable-Version Konfiguration
-portable:
-  artifactName: "${productName}-${version}-Portable.${ext}"
-
-# Squirrel.Windows Konfiguration (falls gewünscht)
-squirrelWindows:
-  iconUrl: "https://www.shirtful.com/assets/qc-icon.ico"
-  loadingGif: "build/installer-loading.gif"
-  setupIcon: "build/setup-qc.ico"
+# Metadaten
+metadata:
+  author:
+    name: "Shirtful GmbH"
+    email: "support@shirtful.com"
+  homepage: "https://www.shirtful.com"
+  description: "RFID-basierte Zeiterfassung und QR-Code Wareneinlagerung für moderne Produktionsbetriebe"
+  keywords:
+    - "rfid"
+    - "qr-code"
+    - "Wareneinlagerung"
+    - "zeiterfassung"
+    - "electron"
+    - "desktop"
 
 # =============================================================================
 # ERWEITERTE KONFIGURATION
 # =============================================================================
 
-# Kompression und Optimierung
-nsis:
-  differentialPackage: false
+# Protokoll Handler (für deep linking)
+protocols:
+  name: "rfid-qr"
+  schemes:
+    - "rfid-qr"
 
-# Protokollierung
-detectUpdateChannel: true
+# Dateierweiterungen
+fileAssociations:
+  - ext: "rqr"
+    name: "RFID QR Export"
+    description: "RFID QR Wareneinlagerung Datenexport"
+    icon: "build/fileIcon.ico"
 
-# Remote-Konfiguration für Updates
-releaseInfo:
-  releaseNotes: |
-    RFID QR Qualitätskontrolle v1.0.0
-    
-    Neue Features:
-    - Doppel-Scan-System für präzise Karton-Bearbeitung
-    - Automatische Session-Verwaltung mit Neustart
-    - Multi-User-Parallelbetrieb
-    - Real-Time Qualitätskontrolle-Dashboard
-    - Intelligente Duplikat-Erkennung
-    - Bearbeitungszeit-Tracking pro Karton
-    
-    Optimierungen:
-    - Verbesserte QR-Scanner-Performance
-    - Stabilere RFID-Integration
-    - Erweiterte Fehlerbehandlung
-    - GPU-optimierte Rendering-Pipeline
-  releaseName: "Qualitätskontrolle v1.0.0 - Doppel-Scan-System"
-  releaseDate: "2024-12-16"
-
-# Qualitätskontrolle-spezifische Anpassungen
+# Umgebungsvariablen für Build
 extraMetadata:
-  qualityControl:
-    systemType: "double-scan"
+  build:
+    timestamp: "2024-06-21"
     version: "1.0.0"
-    features:
-      - "doppel-scan-logik"
-      - "auto-session-restart"
-      - "multi-user-support"
-      - "real-time-dashboard"
-      - "duplicate-detection"
-      - "processing-time-tracking"
-    compatibility:
-      wareneinlagerung: "1.x.x"
-      database: "mssql-2019+"
-      windows: "10+"
+    environment: "production"
+
+# =============================================================================
+# BEISPIEL BUILD COMMANDS
+# =============================================================================
+
+# Verfügbare Build-Befehle:
+# npm run build              # Alle Plattformen
+# npm run build:win          # Nur Windows
+# npm run build:win32        # Windows 32-bit
+# npm run build:win64        # Windows 64-bit
+# npm run build:mac          # Nur macOS
+# npm run build:linux        # Nur Linux
+# npm run dist               # Distribution erstellen
+# npm run dist:dir           # Unpacked Version
+# npm run pack               # Ohne Installer
+
+# =============================================================================
+# NOTIZEN & ANFORDERUNGEN
+# =============================================================================
+
+# Erforderliche Build-Assets (in build/ Verzeichnis):
+# - icon.ico (256x256, Windows Icon)
+# - installer.ico (für NSIS Installer)
+# - uninstaller.ico (für NSIS Uninstaller)
+# - installerHeader.ico (für Installer Header)
+# - icon.icns (macOS Icon, falls benötigt)
+# - volume.icns (macOS DMG Volume Icon)
+# - background.png (macOS DMG Background)
+# - icon.png (Linux Icon)
+# - license.txt (optional, Lizenz-Text)
+
+# Code-Signing (optional für Produktion):
+# 1. Zertifikat von vertrauenswürdiger CA besorgen
+# 2. certificateFile und certificatePassword konfigurieren
+# 3. Umgebungsvariablen CSC_LINK und CSC_KEY_PASSWORD setzen
+
+# Auto-Update Setup:
+# 1. Update-Server einrichten (generic provider)
+# 2. HTTPS-Endpoint für latest.yml konfigurieren
+# 3. electron-updater in main.js integrieren
+
+# Performance-Optimierung:
+# - Unnötige node_modules mit !-Pattern ausschließen
+# - Kompression auf maximum setzen für kleinere Installer
+# - Target-Architekturen nach Bedarf reduzieren
+
+# Multi-Language Support:
+# - Installer-Sprachen in nsis.language konfigurieren
+# - Lokalisierte Strings in separaten Files
+
+# Enterprise Deployment:
+# - MSI-Target für Windows Group Policy
+# - Silent Installation Parameter
+# - Registry-Einträge für zentrale Konfiguration

@@ -1,43 +1,26 @@
-# 🔍 Qualitätskontrolle RFID QR - Doppel-Scan System
+# 📦 Wareneinlagerung RFID QR - Vereinfachte Version
 
-**Moderne Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Qualitätskontrolle mit Doppel-Scan-Logik**
+**Moderne Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Wareneinlagerung**
 
-Speziell entwickelt für Qualitätskontrolle bei Shirtful - Fokus auf präzise Karton-Bearbeitung mit Ein- und Ausgang-Scanning.
+Speziell optimiert für den Wareneinlagerung bei Shirtful - Fokus auf einfache Bedienung und zuverlässige Funktion.
 
 ## ✨ Hauptfeatures
-
-### 🔍 Qualitätskontrolle-System
-- **Doppel-Scan-Logik**: Jeder Karton wird zweimal gescannt
-    - **1. Scan**: Beginn der Bearbeitung (Eingang)
-    - **2. Scan**: Abschluss der Bearbeitung (Ausgang)
-    - **3. Scan**: Duplikatfehler - Karton bereits abgeschlossen
-- **Automatische Session-Verwaltung**: Session endet nach 2. Scan, neue startet automatisch
-- **Präzise Zeiterfassung**: Exakte Bearbeitungszeit pro Karton
-- **Duplikat-Schutz**: Verhindert mehrfache Bearbeitung
 
 ### 🏷️ RFID-Anmeldung
 - **Ein-Klick-Anmeldung** durch RFID-Tag scannen
 - **Automatische Zeiterfassung** mit Live-Timer
-- **Parallele Sessions** - Mehrere Mitarbeiter können gleichzeitig arbeiten
-- **Session-Neustart** durch erneutes Tag-Scannen
+- **Ein Benutzer aktiv** - Fokus auf einzelne Arbeitsplätze
+- **Sofortige Ab-/Anmeldung** durch erneutes Tag-Scannen
 
-### 📸 QR-Code Qualitätskontrolle
+### 📸 QR-Code Wareneinlagerung
 - **Live-Kamera-Vorschau** mit optimierter Scan-Oberfläche
 - **Automatische QR-Erkennung** ohne manuellen Auslöser
-- **Status-Tracking** pro QR-Code (nicht gescannt / in Bearbeitung / abgeschlossen)
+- **Duplikat-Vermeidung** (global + session-basiert)
 - **Visuelles & Audio-Feedback** bei erfolgreichen Scans
-- **Comprehensive Historie** mit Bearbeitungszeiten
+- **Scan-Historie** mit zeitlicher Nachverfolgung
 
-### 📊 Qualitätskontrolle Dashboard
-- **Live-Statistiken**: Gestartete vs. abgeschlossene Kartons
-- **Bearbeitungszeiten**: Durchschnittliche und individuelle Zeiten
-- **Abschlussrate**: Prozentuale Erfolgsquote
-- **Duplikat-Monitoring**: Anzahl fehlerhafter Scan-Versuche
-- **Real-Time Updates**: Alle Metriken in Echtzeit
-
-### 🎯 Optimierte Bedienung
-- **Doppel-Scan-Workflow** - Intuitiver Ein-/Ausgang-Prozess
-- **Multi-User-Interface** - Mehrere Mitarbeiter parallel
+### 🎯 Vereinfachte Bedienung
+- **Reduzierte UI** - nur relevante Informationen
 - **Große Schaltflächen** für Touch-Bedienung geeignet
 - **Klare Status-Anzeigen** für System und Scanner
 - **Minimal-Setup** mit automatischer Konfiguration
@@ -46,41 +29,12 @@ Speziell entwickelt für Qualitätskontrolle bei Shirtful - Fokus auf präzise K
 
 | Komponente | Lösung | Grund |
 |------------|---------|--------|
-| **Desktop** | Electron 28+ | Native Desktop-App mit Web-UI |
+| **Desktop** | Electron 27+ | Native Desktop-App mit Web-UI |
 | **Backend** | Node.js 16+ | RFID/Database-Integration |
 | **Frontend** | Vanilla JS/HTML/CSS | Einfach wartbar, keine Framework-Abhängigkeiten |
 | **Datenbank** | Microsoft SQL Server | Direkte Integration mit mssql-Package |
 | **RFID** | Keyboard-Listener | HID-Tastatur-Emulation (Standard RFID-Reader) |
 | **QR-Scanner** | jsQR + WebRTC | Browser-basierte Kamera-Integration |
-| **Qualitätskontrolle** | Doppel-Scan-Engine | Spezialisierte Logik für Ein-/Ausgang |
-
-## 🎮 Qualitätskontrolle-Workflow
-
-### Mitarbeiter-Anmeldung
-1. **RFID-Tag scannen** → Automatische Anmeldung
-2. **Session startet** → Arbeitszeit-Erfassung beginnt
-3. **Mitarbeiter auswählen** → In der UI für QR-Scanning aktivieren
-
-### Karton-Bearbeitung (Doppel-Scan)
-1. **QR-Scanner aktivieren** → "Scanner starten" klicken
-2. **Erster Scan** → Karton vor Kamera halten (Bearbeitung startet)
-    - ✅ **Status**: "In Bearbeitung"
-    - 📊 **Statistik**: +1 gestarteter Karton
-    - ⏱️ **Timer**: Bearbeitungszeit startet
-3. **Bearbeitung durchführen** → Qualitätskontrolle des Kartons
-4. **Zweiter Scan** → Gleichen Karton erneut scannen (Bearbeitung abgeschlossen)
-    - ✅ **Status**: "Abgeschlossen"
-    - 📊 **Statistik**: +1 abgeschlossener Karton
-    - ⏱️ **Zeit**: Bearbeitungszeit angezeigt
-    - 🔄 **Session**: Automatisch beendet und neue gestartet
-
-### Fehlerbehandlung
-- **Dritter Scan**: ❌ Duplikatfehler - Karton bereits abgeschlossen
-- **Falscher Mitarbeiter**: ⚠️ Warnung - Karton von anderem Mitarbeiter gestartet
-- **Zu schnelle Scans**: 🔄 Rate-Limiting verhindert Versehen
-
-### Abmeldung
-- **Gleiches RFID-Tag erneut scannen** → Session beenden
 
 ## 📋 Voraussetzungen
 
@@ -91,7 +45,7 @@ Speziell entwickelt für Qualitätskontrolle bei Shirtful - Fokus auf präzise K
 
 ### Hardware
 - **RFID-Reader** (HID-Tastatur-Modus)
-- **Webcam** für QR-Code-Scanning (idealerweise HD-Auflösung)
+- **Webcam** für QR-Code-Scanning
 - **Netzwerk-Zugriff** auf SQL Server
 
 ## 🚀 Installation
@@ -99,7 +53,7 @@ Speziell entwickelt für Qualitätskontrolle bei Shirtful - Fokus auf präzise K
 ### 1. Projekt einrichten
 ```bash
 # Repository klonen oder Dateien entpacken
-cd qualitaetskontrolle-rfid-qr
+cd Wareneinlagerung-rfid-qr
 
 # Dependencies installieren
 npm install
@@ -114,7 +68,6 @@ Das Setup-Script führt Sie durch die Konfiguration:
 - **Datenbank-Verbindung** (SQL Server Details)
 - **UI-Einstellungen** (Fenstergröße, Theme)
 - **Scanner-Optionen** (Cooldown, Audio-Feedback)
-- **Qualitätskontrolle-Parameter** (Doppel-Scan-Timing, Session-Restart)
 
 Alternativ: `.env.example` zu `.env` kopieren und manuell anpassen.
 
@@ -140,7 +93,29 @@ npm run test-db
 **Webcam:**
 1. USB-Webcam anschließen oder integrierte verwenden
 2. Kamera-Berechtigung erteilen
-3. Optimal: HD-Webcam für bessere QR-Erkennung
+3. Optimal: Rückkamera für bessere QR-Erkennung
+
+## 🎮 Bedienung
+
+### Login-Prozess
+1. **RFID-Tag scannen** → Automatische Anmeldung
+2. **Timer startet** → Arbeitszeit-Erfassung beginnt
+3. **QR-Scanner aktivieren** → "Scanner starten" klicken
+4. **Pakete scannen** → QR-Codes vor Kamera halten
+5. **Abmelden** → Gleiches RFID-Tag erneut scannen
+
+### QR-Code Scanning
+- **Automatische Erkennung** - kein Button-Druck nötig
+- **Visuelles Feedback** - grüner Bildschirm bei Erfolg
+- **Audio-Signal** - Bestätigungston (optional)
+- **Duplikat-Schutz** - verhindert versehentliche Doppelscans
+- **Live-Historie** - letzte 10 Scans sichtbar
+
+### Status-Informationen
+- **Aktueller Benutzer** mit Live-Timer
+- **Scan-Anzahl** der aktuellen Session
+- **System-Status** (Datenbank, RFID, Kamera)
+- **Letzte Scan-Zeit** und Erfolgs-Rate
 
 ## ⚙️ Konfiguration
 
@@ -153,75 +128,39 @@ MSSQL_DATABASE=RdScanner
 MSSQL_USER=sa
 MSSQL_PASSWORD=IhrPasswort
 
-# Qualitätskontrolle-spezifisch
-QC_DOUBLE_SCAN_ENABLED=true          # Doppel-Scan-System aktivieren
-QC_AUTO_SESSION_RESTART=true         # Automatischer Session-Neustart
-QC_SESSION_RESTART_DELAY=500         # Verzögerung zwischen Sessions (ms)
-QC_DUPLICATE_ERROR_ON_THIRD=true     # Duplikatfehler bei 3. Scan
-
 # QR-Scanner
-QR_SCAN_COOLDOWN=2000                # 2s zwischen Scans
-QR_GLOBAL_COOLDOWN=300               # 5 Min zwischen globalen Duplikaten
-SCAN_SUCCESS_DURATION=2000           # 2s Erfolgs-Overlay
-AUDIO_FEEDBACK=true                  # Audio-Bestätigung
+QR_GLOBAL_COOLDOWN=300        # 5 Min zwischen Duplikaten
+SCAN_SUCCESS_DURATION=2000    # 2s Erfolgs-Overlay
+AUDIO_FEEDBACK=true           # Audio-Bestätigung
 
 # UI
-UI_WINDOW_WIDTH=1400                 # Fensterbreite
-UI_WINDOW_HEIGHT=900                 # Fensterhöhe
-UI_THEME=auto                        # auto/light/dark
+UI_WINDOW_WIDTH=1400          # Fensterbreite
+UI_WINDOW_HEIGHT=900          # Fensterhöhe
+UI_THEME=auto                 # auto/light/dark
 
 # RFID
-RFID_MIN_SCAN_INTERVAL=1000          # 1s zwischen RFID-Scans
-RFID_SESSION_RESTART_ENABLED=true    # Session-Restart via RFID
+RFID_MIN_SCAN_INTERVAL=1000   # 1s zwischen RFID-Scans
 ```
 
-### Qualitätskontrolle-Performance
+### Performance-Optimierung
+
+**Langsame Hardware:**
+```env
+UI_UPDATE_INTERVAL=2000       # Weniger UI-Updates
+QR_GLOBAL_COOLDOWN=600        # Längeres Cooldown
+CAMERA_RESOLUTION_WIDTH=640   # Geringere Auflösung
+```
 
 **Hochfrequenz-Betrieb:**
 ```env
-QC_MAX_PARALLEL_SESSIONS=15          # Mehr parallele Sessions
-QR_SCAN_COOLDOWN=1000                # Schnellere Scans
-QC_SESSION_RESTART_DELAY=250         # Schnellerer Session-Wechsel
-QR_RATE_LIMIT_PER_MINUTE=30          # Höheres Rate-Limit
-```
-
-**Präzisions-Modus:**
-```env
-QR_SCAN_COOLDOWN=3000                # Längeres Cooldown
-QC_SESSION_RESTART_DELAY=1000        # Mehr Zeit zwischen Sessions
-AUDIO_FEEDBACK=true                  # Akustische Bestätigung
-SCAN_SUCCESS_DURATION=3000           # Längere Erfolgs-Anzeige
+RFID_MIN_SCAN_INTERVAL=500    # Schnellere RFID-Scans
+QR_GLOBAL_COOLDOWN=60         # Kürzeres Cooldown
+MAX_RECENT_SCANS=20           # Mehr Historie
 ```
 
 ## 🔧 Troubleshooting
 
-### Qualitätskontrolle-spezifische Probleme
-
-❌ **"Karton wird als Duplikat erkannt obwohl nur einmal gescannt"**
-```bash
-1. QR_GLOBAL_COOLDOWN reduzieren (von 300 auf 60)
-2. Datenbank-Cache leeren: npm run db:cleanup
-3. Session-Historie prüfen: Scan-Historie in UI
-4. QR-Code-Format prüfen: Eindeutige Codes verwenden
-```
-
-❌ **"Session startet nicht automatisch nach 2. Scan"**
-```bash
-1. QC_AUTO_SESSION_RESTART=true prüfen
-2. QC_SESSION_RESTART_DELAY erhöhen (auf 1000ms)
-3. RFID-Tag-Verfügbarkeit prüfen
-4. Session-Logs untersuchen: logs/sessions.log
-```
-
-❌ **"Dritter Scan zeigt keinen Duplikatfehler"**
-```bash
-1. QC_DUPLICATE_ERROR_ON_THIRD=true setzen
-2. Datenbank-Schema aktualisieren: npm run setup-db
-3. Qualitätskontrolle-Modul neu starten
-4. QR-Code State-Management prüfen
-```
-
-### Standard-Troubleshooting
+### RFID-Reader Probleme
 
 ❌ **"Kein RFID-Reader erkannt"**
 ```bash
@@ -232,68 +171,60 @@ SCAN_SUCCESS_DURATION=3000           # Längere Erfolgs-Anzeige
 5. Als Administrator starten
 ```
 
+✅ **Lösung:**
+- Reader auf HID-Keyboard-Modus umstellen
+- `RFID_MIN_SCAN_INTERVAL=500` reduzieren
+- USB-Port wechseln
+
+### Kamera-Probleme
+
 ❌ **"Kamera-Zugriff fehlgeschlagen"**
 ```bash
 1. Kamera-Berechtigung in Windows erlauben
 2. Andere Apps schließen (Teams, Skype, etc.)
 3. Browser-Cache leeren
-4. USB-Kamera an anderen Port anschließen
+4. Anwendung als Administrator starten
 ```
 
-❌ **"Datenbank-Verbindung fehlgeschlagen"**
+✅ **Lösung:**
+- Windows-Einstellungen → Datenschutz → Kamera
+- Andere Kamera-Apps beenden
+- USB-Kamera verwenden falls integrierte nicht funktioniert
+
+### Datenbank-Verbindung
+
+❌ **"Connection failed"**
 ```bash
-1. SQL Server läuft?
-2. Netzwerk-Verbindung prüfen
+1. Netzwerk: ping 116.202.224.248
+2. Port: telnet 116.202.224.248 1433
 3. Firewall-Regeln prüfen
 4. SQL Server Authentication aktiviert?
 ```
 
-## 📊 Qualitätskontrolle-Datenbankstruktur
+✅ **Lösung:**
+```env
+MSSQL_TRUST_CERT=true
+MSSQL_ENCRYPT=false
+MSSQL_CONNECTION_TIMEOUT=30000
+```
+
+## 📊 Datenbankstruktur
 
 ### Haupttabellen
 - **ScannBenutzer** - Mitarbeiterdaten mit EPC (RFID)
-- **Sessions** - Arbeitszeit-Sessions (Start/End) mit automatischem Restart
-- **QrScans** - Erfasste QR-Codes mit Scan-Zähler und Status
-- **QualityControlStates** - Karton-Status (nicht gescannt/in Bearbeitung/abgeschlossen)
+- **Sessions** - Arbeitszeit-Sessions (Start/End)
+- **QrScans** - Erfasste QR-Codes mit Timestamp
 
-### Qualitätskontrolle-Logik
+### Session-Logik
 ```sql
--- Erster Scan: Bearbeitung starten
-INSERT INTO QrScans (SessionID, RawPayload, ScanType, CapturedTS) 
-VALUES (?, ?, 'first_scan', SYSDATETIME())
+-- Neue Session starten
+INSERT INTO Sessions (UserID, StartTS, Active) VALUES (?, SYSDATETIME(), 1)
 
--- QR-Status auf "in Bearbeitung" setzen
-INSERT INTO QualityControlStates (QRCode, Status, FirstScanSession, FirstScanTime)
-VALUES (?, 'in_progress', ?, SYSDATETIME())
+-- Session beenden
+UPDATE Sessions SET EndTS = SYSDATETIME(), Active = 0 WHERE ID = ?
 
--- Zweiter Scan: Bearbeitung abschließen
-INSERT INTO QrScans (SessionID, RawPayload, ScanType, CapturedTS) 
-VALUES (?, ?, 'second_scan', SYSDATETIME())
-
--- QR-Status auf "abgeschlossen" setzen
-UPDATE QualityControlStates 
-SET Status = 'completed', SecondScanSession = ?, CompletedTime = SYSDATETIME()
-WHERE QRCode = ?
-
--- Session automatisch beenden
-UPDATE Sessions SET EndTS = SYSDATETIME(), Active = 0, EndReason = 'quality_control_complete'
-WHERE ID = ?
-
--- Neue Session automatisch starten
-INSERT INTO Sessions (UserID, StartTS, Active, SessionType) 
-VALUES (?, SYSDATETIME(), 1, 'Qualitaetskontrolle')
-```
-
-### Qualitätskontrolle-Statistiken
-```sql
--- Tagesstatistiken abrufen
-SELECT 
-    COUNT(DISTINCT CASE WHEN Status IN ('in_progress', 'completed') THEN QRCode END) as BoxesStarted,
-    COUNT(DISTINCT CASE WHEN Status = 'completed' THEN QRCode END) as BoxesCompleted,
-    AVG(CASE WHEN Status = 'completed' THEN DATEDIFF(ms, FirstScanTime, CompletedTime) END) as AvgProcessingTime,
-    COUNT(CASE WHEN ScanCount > 2 THEN 1 END) as DuplicateAttempts
-FROM QualityControlStates 
-WHERE DATE(FirstScanTime) = CURDATE()
+-- QR-Scan speichern
+INSERT INTO QrScans (SessionID, RawPayload, CapturedTS) VALUES (?, ?, SYSDATETIME())
 ```
 
 ## 🔄 Updates & Wartung
@@ -308,9 +239,6 @@ npm run debug
 
 # Quick-Test der DB-Verbindung
 npm run test-quick
-
-# Qualitätskontrolle-spezifische Tests
-npm run test:quality-control
 ```
 
 ### Produktions-Build
@@ -318,22 +246,19 @@ npm run test:quality-control
 # Windows Installer erstellen
 npm run build:win
 
-# Ausgabe: dist/Qualitätskontrolle RFID QR Setup.exe
+# Ausgabe: dist/Wareneinlagerung RFID QR Setup.exe
 ```
 
-### Qualitätskontrolle-Wartung
+### Datenbank-Wartung
 ```bash
-# QR-States zurücksetzen (nur Development)
-npm run qc:reset-states
+# Neue Testbenutzer anlegen
+npm run setup-users
 
-# Abgeschlossene Kartons archivieren
-npm run qc:archive-completed
+# Tabellen-Status prüfen
+npm run test-db
 
-# Statistiken neu berechnen
-npm run qc:recalc-stats
-
-# Duplikat-Cache leeren
-npm run qc:clear-duplicates
+# Schema-Updates
+npm run setup-db
 ```
 
 ## 🛡️ Sicherheit
@@ -344,7 +269,6 @@ NODE_ENV=production
 APP_DEBUG=false
 MSSQL_ENCRYPT=true
 MSSQL_TRUST_CERT=false
-QC_DEV_MODE=false
 ```
 
 ### Datenschutz
@@ -352,110 +276,84 @@ QC_DEV_MODE=false
 - RFID-Tags als anonyme IDs
 - Lokale Datenverarbeitung (keine Cloud)
 - Automatische Session-Bereinigung
-- Qualitätskontrolle-Daten anonymisiert
 
 ## 📈 Monitoring
 
 ### Live-Status
 - **System-Status** in Header (grün/rot)
-- **Qualitätskontrolle-Dashboard** mit Real-Time-Metriken
-- **Session-Dauer** Live-Timer pro Mitarbeiter
-- **Karton-Status** (gestartet/in Bearbeitung/abgeschlossen)
-- **Duplikat-Monitoring** mit Fehleranzahl
+- **Verbindungszeit** zur Datenbank
+- **Scan-Rate** und Erfolgsquote
+- **Session-Dauer** Live-Timer
 
 ### Logs
 ```
 logs/
-├── main.log                    # Hauptanwendung
-├── database.log               # SQL-Operationen
-├── rfid.log                   # RFID-Events
-├── quality-control.log        # Qualitätskontrolle-spezifische Events
-└── sessions.log              # Session-Management
+├── main.log              # Hauptanwendung
+├── database.log          # SQL-Operationen
+└── rfid.log              # RFID-Events
 ```
 
-### Qualitätskontrolle-Metriken
+### Health-Check
 ```javascript
 // Verfügbar über UI oder IPC
-await window.electronAPI.qualityControl.getStats();
-// Returns: {
-//   totalBoxesStarted, totalBoxesCompleted, 
-//   duplicateAttempts, averageProcessingTime,
-//   completionRate, activeSessions
-// }
+await window.electronAPI.system.getStatus();
+// Returns: { database, rfid, uptime, errors }
 ```
 
-## 🆚 Unterschiede zur Wareneinlagerung-Version
+## 🆚 Unterschiede zur Original-Version
 
-| Feature | Wareneinlagerung | **Qualitätskontrolle** |
-|---------|------------------|----------------------|
-| **QR-Scan-Logik** | Einmal-Scan | ✅ Doppel-Scan (Ein-/Ausgang) |
-| **Session-Ende** | Manuell/RFID | ✅ Automatisch nach 2. Scan |
-| **Session-Neustart** | Manuell | ✅ Automatisch |
-| **Karton-Status** | Gescannt/Nicht gescannt | ✅ Nicht gescannt/In Bearbeitung/Abgeschlossen |
-| **Duplikat-Handling** | Warnung | ✅ Duplikatfehler bei 3. Scan |
-| **Bearbeitungszeit** | Session-Zeit | ✅ Karton-spezifische Zeit |
-| **Dashboard** | Basic-Statistiken | ✅ Qualitätskontrolle-Dashboard |
-| **Workflow** | Kontinuierlich | ✅ Diskrete Karton-Bearbeitung |
+| Feature | Original | **Vereinfacht** |
+|---------|----------|----------------|
+| **Multi-User** | ✅ Mehrere gleichzeitig | ❌ Ein Benutzer |
+| **QR-Zuordnung** | Manual/Round-Robin/Last | ✅ Automatisch an User |
+| **UI-Komplexität** | Viele Panels | ✅ Fokussierte Ansicht |
+| **Setup** | Manual | ✅ Guided Setup |
+| **Features** | Alle Module | ✅ Nur Wareneinlagerung |
+| **Performance** | 80-120 MB RAM | ✅ 60-90 MB RAM |
+| **Bedienung** | Komplex | ✅ Ein-Klick-Workflow |
 
 ## 🎯 Roadmap
 
 ### Phase 1 (Aktuell)
-- ✅ Doppel-Scan-System implementiert
-- ✅ Automatische Session-Verwaltung
-- ✅ Qualitätskontrolle-Dashboard
-- ✅ Multi-User-Parallelbetrieb
+- ✅ Grundfunktionen implementiert
+- ✅ RFID + QR-Scanner Integration
+- ✅ Vereinfachte UI
 
 ### Phase 2 (Geplant)
-- 📊 Erweiterte Reporting-Features
+- 📊 Tagesstatistiken-Dashboard
 - 🔄 Auto-Update Funktionalität
-- 📱 Mobile Web-Interface für Supervisor
-- 🎯 Ziel-basierte Leistungsmetriken
+- 📱 Mobile Web-Interface (optional)
 
 ### Phase 3 (Future)
-- 🏭 Multi-Station-Qualitätskontrolle
-- 📈 Predictive Analytics für Bearbeitungszeiten
-- 🔌 API für externe QM-Systeme
-- 🤖 KI-basierte Anomalie-Erkennung
+- 🏭 Multi-Station Support
+- 📈 Reporting-Module
+- 🔌 API für externe Systeme
 
 ## 📞 Support
 
-**Bei Qualitätskontrolle-spezifischen Problemen:**
-1. **QC-Logs prüfen**: `logs/quality-control.log`
-2. **Dashboard-Status**: Qualitätskontrolle-Metriken in UI
-3. **Session-Test**: `npm run test:sessions`
-4. **QR-Status prüfen**: `npm run qc:check-states`
-
-**Bei allgemeinen Problemen:**
+**Bei Problemen:**
 1. **Logs prüfen**: `logs/` Verzeichnis
 2. **Health-Check**: "System-Status" in UI
 3. **Quick-Test**: `npm run test-quick`
 4. **Vollständiger Test**: `npm test`
 
-**Häufige Qualitätskontrolle-Probleme:**
-- Doppel-Scan nicht erkannt → QR-Code-Format prüfen
-- Session startet nicht auto → RFID-Verbindung prüfen
-- Duplikatfehler falsch → Datenbank-Cache leeren
-- Statistiken falsch → Neu berechnen mit `npm run qc:recalc-stats`
+**Häufige Probleme:**
+- RFID nicht erkannt → Hardware-Setup prüfen
+- Kamera-Fehler → Berechtigungen/andere Apps
+- DB-Verbindung → Netzwerk/Firewall
+- Performance → .env Optimierung
 
 ---
 
 ## 🏭 Shirtful Integration
 
-Diese Anwendung ist speziell für die Qualitätskontrolle bei Shirtful optimiert:
+Diese Anwendung ist speziell für den Wareneinlagerung bei Shirtful optimiert:
 
-- **Doppel-Scan-Workflow**: Präzise Ein-/Ausgang-Erfassung
+- **Einfacher Workflow**: RFID scannen → QR-Codes erfassen
 - **Robuste Hardware-Integration**: Standard USB-Geräte
-- **Zuverlässige Karton-Verfolgung**: Direkte SQL Server Anbindung
-- **Intuitive Bedienung**: Optimiert für Qualitätskontrolle-Prozesse
+- **Zuverlässige Datenerfassung**: Direkte SQL Server Anbindung
+- **Benutzerfreundlich**: Minimal-UI für effiziente Bedienung
 
-**Perfekt für**: Qualitätskontrolle, Endkontrolle, Karton-Bearbeitung, Multi-User-Stationen
+**Perfekt für**: Wareneinlagerung, Qualitätskontrolle, Versand-Stationen
 
 ✅ **Produktionsbereit** - Sofort einsetzbar nach Setup!
-
-**Qualitätskontrolle-Features:**
-- 🔍 Doppel-Scan-System für präzise Bearbeitung
-- ⏱️ Automatische Bearbeitungszeit-Erfassung
-- 🔄 Nahtlose Session-Übergänge
-- 📊 Real-Time Qualitätskontrolle-Dashboard
-- 🚫 Intelligente Duplikat-Erkennung
-- 👥 Multi-User-Parallelbetrieb

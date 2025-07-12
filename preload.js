@@ -1,575 +1,1135 @@
-/**
- * Qualitätskontrolle RFID QR - Preload Script
- * Sichere IPC-Kommunikation zwischen Renderer und Main Process
- * Spezialisiert für Doppel-Scan-System und Multi-User-Sessions
- */
-
 const { contextBridge, ipcRenderer } = require('electron');
 
-// ===== SICHERE IPC-BRIDGE FÜR QUALITÄTSKONTROLLE =====
+// Sichere API für Renderer Process - Wareneinlagerung
 contextBridge.exposeInMainWorld('electronAPI', {
-
-    // ===== SYSTEM & STATUS =====
-    invoke: (channel, ...args) => {
-        // Erlaubte IPC-Kanäle für invoke
-        const validInvokeChannels = [
-            'system:get-status',
-            'system:get-info',
-            'system:restart',
-
-            // Sessions
-            'sessions:get-active',
-            'sessions:get-by-id',
-            'sessions:end-session',
-            'sessions:get-stats',
-
-            // QR-Scanning (Qualitätskontrolle-spezifisch)
-            'qr:process-scan',
-            'qr:get-scan-state',
-            'qr:get-session-scans',
-            'qr:get-history',
-            'qr:get-stats',
-
-            // RFID
-            'rfid:simulate-tag',
-            'rfid:get-status',
-            'rfid:test-connection',
-
-            // Database
-            'db:test-connection',
-            'db:get-stats',
-            'db:cleanup',
-
-            // Users
-            'users:get-all',
-            'users:get-by-id',
-            'users:get-by-epc',
-
-            // Qualitätskontrolle-spezifische APIs
-            'quality:get-stats',
-            'quality:reset-stats',
-            'quality:get-completion-report',
-            'quality:export-data',
-
-            // Development/Debug
-            'dev:simulate-qr-scan',
-            'dev:reset-all-data',
-            'dev:get-debug-info'
-        ];
-
-        if (validInvokeChannels.includes(channel)) {
-            return ipcRenderer.invoke(channel, ...args);
-        } else {
-            throw new Error(`Unauthorized IPC invoke channel: ${channel}`);
-        }
+    // ===== DATENBANK OPERATIONEN =====
+    db: {
+        query: (query, params) => ipcRenderer.invoke('db-query', query, params),
+        getUserByEPC: (tagId) => ipcRenderer.invoke('db-get-user-by-epc', tagId),
+        getUserById: (userId) => ipcRenderer.invoke('db-get-user-by-id', userId)
     },
 
-    // ===== EVENT LISTENERS =====
-    on: (channel, callback) => {
-        // Erlaubte Event-Kanäle
-        const validEventChannels = [
-            // Session Events
-            'session-started',
-            'session-ended',
-            'sessions-updated',
-            'session-timer-update',
-            'session-error',
+    // ===== PARALLELES SESSION MANAGEMENT =====
+    session: {
+        // Alle aktiven Sessions abrufen
+        getAllActive: () => ipcRenderer.invoke('session-get-all-active'),
 
-            // RFID Events
-            'rfid-scan-success',
-            'rfid-scan-error',
-            'rfid-status-changed',
-            'rfid-device-connected',
-            'rfid-device-disconnected',
+        // Neue Session erstellen (ohne bestehende zu beenden)
+        create: (userId) => ipcRenderer.invoke('session-create', userId),
 
-            // QR-Scan Events (Qualitätskontrolle-spezifisch)
-            'qr-scan-success',
-            'qr-scan-error',
-            'qr-scan-duplicate',
-            'qr-scan-first',
-            'qr-scan-second',
-            'qr-scan-invalid',
+        // Session neu starten (Timer zurücksetzen)
+        restart: (sessionId, userId) => ipcRenderer.invoke('session-restart', sessionId, userId),
 
-            // System Events
-            'system-status-changed',
-            'database-connected',
-            'database-disconnected',
-            'database-error',
-
-            // Qualitätskontrolle Events
-            'quality-stats-updated',
-            'quality-milestone-reached',
-            'quality-error-threshold-exceeded',
-            'box-processing-started',
-            'box-processing-completed',
-
-            // UI Events
-            'notification-show',
-            'overlay-show',
-            'overlay-hide',
-
-            // Debug Events
-            'debug-message',
-            'performance-warning',
-            'memory-usage-high'
-        ];
-
-        if (validEventChannels.includes(channel)) {
-            // Event-Listener hinzufügen
-            const subscription = (event, ...args) => callback(...args);
-            ipcRenderer.on(channel, subscription);
-
-            // Cleanup-Funktion zurückgeben
-            return () => {
-                ipcRenderer.removeListener(channel, subscription);
-            };
-        } else {
-            throw new Error(`Unauthorized IPC event channel: ${channel}`);
-        }
+        // Spezifische Session beenden
+        end: (sessionId, userId) => ipcRenderer.invoke('session-end', sessionId, userId)
     },
 
-    // ===== ONE-TIME EVENT LISTENERS =====
-    once: (channel, callback) => {
-        const validEventChannels = [
-            'app-ready',
-            'database-initialized',
-            'rfid-initialized',
-            'system-ready',
-            'session-setup-complete'
-        ];
-
-        if (validEventChannels.includes(channel)) {
-            ipcRenderer.once(channel, (event, ...args) => callback(...args));
-        } else {
-            throw new Error(`Unauthorized IPC once channel: ${channel}`);
-        }
+    // ===== QR-CODE OPERATIONEN MIT DEKODIERUNG =====
+    qr: {
+        saveScan: (sessionId, payload) => ipcRenderer.invoke('qr-scan-save', sessionId, payload),
+        getDecodedScans: (sessionId, limit) => ipcRenderer.invoke('qr-get-decoded-scans', sessionId, limit),
+        searchDecoded: (searchTerm, sessionId) => ipcRenderer.invoke('qr-search-decoded', searchTerm, sessionId),
+        getDecodingStats: (sessionId) => ipcRenderer.invoke('qr-get-decoding-stats', sessionId)
     },
 
-    // ===== QUALITÄTSKONTROLLE-SPEZIFISCHE APIs =====
-    qualityControl: {
-        // Doppel-Scan-Logik
-        processDoubleScan: async (qrCode, sessionId, scanType = 'auto') => {
-            return await ipcRenderer.invoke('qr:process-scan', qrCode, sessionId, { scanType });
-        },
-
-        // QR-Code Status abrufen
-        getQRCodeStatus: async (qrCode) => {
-            return await ipcRenderer.invoke('qr:get-scan-state', qrCode);
-        },
-
-        // Session-spezifische Scans
-        getSessionScans: async (sessionId) => {
-            return await ipcRenderer.invoke('qr:get-session-scans', sessionId);
-        },
-
-        // Qualitätskontrolle-Statistiken
-        getStats: async () => {
-            return await ipcRenderer.invoke('quality:get-stats');
-        },
-
-        // Statistiken zurücksetzen
-        resetStats: async () => {
-            return await ipcRenderer.invoke('quality:reset-stats');
-        },
-
-        // Completion Report erstellen
-        getCompletionReport: async (dateRange = null) => {
-            return await ipcRenderer.invoke('quality:get-completion-report', dateRange);
-        },
-
-        // Daten exportieren
-        exportData: async (format = 'csv', filters = {}) => {
-            return await ipcRenderer.invoke('quality:export-data', format, filters);
-        }
-    },
-
-    // ===== SESSION MANAGEMENT =====
-    sessions: {
-        // Aktive Sessions abrufen
-        getActive: async () => {
-            return await ipcRenderer.invoke('sessions:get-active');
-        },
-
-        // Session beenden
-        endSession: async (sessionId) => {
-            return await ipcRenderer.invoke('sessions:end-session', sessionId);
-        },
-
-        // Session-Statistiken
-        getStats: async (sessionId = null) => {
-            return await ipcRenderer.invoke('sessions:get-stats', sessionId);
-        },
-
-        // Session-Events abonnieren
-        onSessionStarted: (callback) => {
-            return ipcRenderer.on('session-started', (event, data) => callback(data));
-        },
-
-        onSessionEnded: (callback) => {
-            return ipcRenderer.on('session-ended', (event, data) => callback(data));
-        },
-
-        onSessionsUpdated: (callback) => {
-            return ipcRenderer.on('sessions-updated', (event, data) => callback(data));
-        }
-    },
-
-    // ===== RFID MANAGEMENT =====
+    // ===== RFID OPERATIONEN =====
     rfid: {
-        // RFID-Tag simulieren
-        simulateTag: async (tagId) => {
-            return await ipcRenderer.invoke('rfid:simulate-tag', tagId);
-        },
-
-        // RFID-Status abrufen
-        getStatus: async () => {
-            return await ipcRenderer.invoke('rfid:get-status');
-        },
-
-        // RFID-Verbindung testen
-        testConnection: async () => {
-            return await ipcRenderer.invoke('rfid:test-connection');
-        },
-
-        // RFID-Events abonnieren
-        onScanSuccess: (callback) => {
-            return ipcRenderer.on('rfid-scan-success', (event, data) => callback(data));
-        },
-
-        onScanError: (callback) => {
-            return ipcRenderer.on('rfid-scan-error', (event, data) => callback(data));
-        },
-
-        onStatusChanged: (callback) => {
-            return ipcRenderer.on('rfid-status-changed', (event, data) => callback(data));
-        }
+        getStatus: () => ipcRenderer.invoke('rfid-get-status'),
+        simulateTag: (tagId) => ipcRenderer.invoke('rfid-simulate-tag', tagId)
     },
 
-    // ===== QR-SCANNER MANAGEMENT =====
-    qrScanner: {
-        // QR-Scan verarbeiten
-        processScan: async (qrData, sessionId, options = {}) => {
-            return await ipcRenderer.invoke('qr:process-scan', qrData, sessionId, options);
-        },
-
-        // Scan-Historie abrufen
-        getHistory: async (limit = 50, sessionId = null) => {
-            return await ipcRenderer.invoke('qr:get-history', limit, sessionId);
-        },
-
-        // Scan-Statistiken
-        getStats: async (sessionId = null) => {
-            return await ipcRenderer.invoke('qr:get-stats', sessionId);
-        },
-
-        // QR-Events abonnieren
-        onScanSuccess: (callback) => {
-            return ipcRenderer.on('qr-scan-success', (event, data) => callback(data));
-        },
-
-        onScanError: (callback) => {
-            return ipcRenderer.on('qr-scan-error', (event, data) => callback(data));
-        },
-
-        onFirstScan: (callback) => {
-            return ipcRenderer.on('qr-scan-first', (event, data) => callback(data));
-        },
-
-        onSecondScan: (callback) => {
-            return ipcRenderer.on('qr-scan-second', (event, data) => callback(data));
-        },
-
-        onDuplicateError: (callback) => {
-            return ipcRenderer.on('qr-scan-duplicate', (event, data) => callback(data));
-        }
-    },
-
-    // ===== DATABASE MANAGEMENT =====
-    database: {
-        // Verbindung testen
-        testConnection: async () => {
-            return await ipcRenderer.invoke('db:test-connection');
-        },
-
-        // Statistiken abrufen
-        getStats: async () => {
-            return await ipcRenderer.invoke('db:get-stats');
-        },
-
-        // Cleanup durchführen
-        cleanup: async () => {
-            return await ipcRenderer.invoke('db:cleanup');
-        },
-
-        // Database-Events abonnieren
-        onConnected: (callback) => {
-            return ipcRenderer.on('database-connected', (event, data) => callback(data));
-        },
-
-        onDisconnected: (callback) => {
-            return ipcRenderer.on('database-disconnected', (event, data) => callback(data));
-        },
-
-        onError: (callback) => {
-            return ipcRenderer.on('database-error', (event, data) => callback(data));
-        }
-    },
-
-    // ===== USER MANAGEMENT =====
-    users: {
-        // Alle Benutzer abrufen
-        getAll: async () => {
-            return await ipcRenderer.invoke('users:get-all');
-        },
-
-        // Benutzer nach ID
-        getById: async (userId) => {
-            return await ipcRenderer.invoke('users:get-by-id', userId);
-        },
-
-        // Benutzer nach EPC (RFID)
-        getByEPC: async (epcTag) => {
-            return await ipcRenderer.invoke('users:get-by-epc', epcTag);
-        }
-    },
-
-    // ===== SYSTEM UTILITIES =====
+    // ===== SYSTEM STATUS =====
     system: {
-        // System-Status abrufen
-        getStatus: async () => {
-            return await ipcRenderer.invoke('system:get-status');
-        },
+        getStatus: () => ipcRenderer.invoke('get-system-status'),
+        getInfo: () => ipcRenderer.invoke('get-system-info')
+    },
 
-        // System-Info abrufen
-        getInfo: async () => {
-            return await ipcRenderer.invoke('system:get-info');
-        },
+    // ===== APP STEUERUNG =====
+    app: {
+        minimize: () => ipcRenderer.invoke('app-minimize'),
+        close: () => ipcRenderer.invoke('app-close'),
+        restart: () => ipcRenderer.invoke('app-restart'),
+        getSystemInfo: () => ipcRenderer.invoke('get-system-info')
+    },
 
-        // System neu starten
-        restart: async () => {
-            return await ipcRenderer.invoke('system:restart');
-        },
+    // ===== EVENT LISTENERS - WARENEINLAGERUNG =====
+    on: (channel, callback) => {
+        const validChannels = [
+            'system-ready',
+            'system-error',
+            'user-login',           // Neuer Benutzer loggt sich ein
+            'user-logout',          // Benutzer loggt sich aus
+            'session-ended',        // NEU: Session wurde beendet (RFID-Rescan)
+            'session-restarted',    // Session wurde neu gestartet (DEPRECATED)
+            'session-timer-update', // Timer-Updates für Sessions
+            'rfid-scan-error',
+            'qr-scan-detected',
+            'decoding-stats-updated'
+        ];
 
-        // System-Events abonnieren
-        onStatusChanged: (callback) => {
-            return ipcRenderer.on('system-status-changed', (event, data) => callback(data));
-        },
-
-        onNotification: (callback) => {
-            return ipcRenderer.on('notification-show', (event, data) => callback(data));
+        if (validChannels.includes(channel)) {
+            ipcRenderer.removeAllListeners(channel);
+            ipcRenderer.on(channel, (event, data) => callback(data));
         }
     },
 
-    // ===== DEVELOPMENT & DEBUG =====
-    dev: {
-        // QR-Scan simulieren
-        simulateQRScan: async (qrData, sessionId) => {
-            return await ipcRenderer.invoke('dev:simulate-qr-scan', qrData, sessionId);
-        },
+    off: (channel) => {
+        ipcRenderer.removeAllListeners(channel);
+    },
 
-        // Alle Daten zurücksetzen
-        resetAllData: async () => {
-            return await ipcRenderer.invoke('dev:reset-all-data');
-        },
+    once: (channel, callback) => {
+        const validChannels = [
+            'system-ready',
+            'system-error',
+            'user-login',
+            'user-logout',
+            'session-ended',        // NEU: Session wurde beendet
+            'session-restarted',
+            'session-timer-update',
+            'rfid-scan-error',
+            'qr-scan-detected',
+            'decoding-stats-updated'
+        ];
 
-        // Debug-Info abrufen
-        getDebugInfo: async () => {
-            return await ipcRenderer.invoke('dev:get-debug-info');
-        },
+        if (validChannels.includes(channel)) {
+            ipcRenderer.once(channel, (event, data) => callback(data));
+        }
+    }
+});
 
-        // Debug-Events abonnieren
-        onDebugMessage: (callback) => {
-            return ipcRenderer.on('debug-message', (event, data) => callback(data));
-        },
+// ===== KAMERA API =====
+contextBridge.exposeInMainWorld('cameraAPI', {
+    getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+    getDevices: () => navigator.mediaDevices.enumerateDevices(),
 
-        onPerformanceWarning: (callback) => {
-            return ipcRenderer.on('performance-warning', (event, data) => callback(data));
+    checkPermissions: async () => {
+        try {
+            const result = await navigator.permissions.query({ name: 'camera' });
+            return result.state;
+        } catch (error) {
+            return 'unknown';
         }
     },
 
-    // ===== UTILITY FUNCTIONS =====
-    utils: {
-        // Plattform-Info
-        platform: process.platform,
+    getSupportedConstraints: () => navigator.mediaDevices.getSupportedConstraints(),
 
-        // Node.js Version
-        nodeVersion: process.versions.node,
+    stopStream: (stream) => {
+        if (stream && stream.getTracks) {
+            stream.getTracks().forEach(track => track.stop());
+        }
+    }
+});
 
-        // Electron Version
-        electronVersion: process.versions.electron,
+// ===== ERWEITERTE UTILITY FUNKTIONEN FÜR WARENEINLAGERUNG =====
+contextBridge.exposeInMainWorld('utils', {
+    // ===== ZEIT & DATUM FORMATIERUNG =====
+    formatDuration: (seconds) => {
+        if (typeof seconds !== 'number' || seconds < 0) return '00:00:00';
 
-        // Chrome Version
-        chromeVersion: process.versions.chrome,
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
 
-        // Zeitmessung
-        now: () => Date.now(),
+        return [hours, minutes, secs]
+            .map(v => v.toString().padStart(2, '0'))
+            .join(':');
+    },
 
-        // UUID generieren
-        generateUUID: () => {
-            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                const r = Math.random() * 16 | 0;
-                const v = c === 'x' ? r : (r & 0x3 | 0x8);
-                return v.toString(16);
+    formatTimestamp: (timestamp, format = 'datetime') => {
+        try {
+            const date = new Date(timestamp);
+
+            // Prüfe auf gültiges Datum
+            if (isNaN(date.getTime())) {
+                return 'Ungültiges Datum';
+            }
+
+            const options = {
+                timeZone: 'Europe/Berlin', // Deutsche Zeitzone
+            };
+
+            switch (format) {
+                case 'time':
+                    return date.toLocaleTimeString('de-DE', {
+                        ...options,
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false
+                    });
+
+                case 'date':
+                    return date.toLocaleDateString('de-DE', {
+                        ...options,
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    });
+
+                case 'datetime':
+                    return date.toLocaleString('de-DE', {
+                        ...options,
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    });
+
+                case 'short':
+                    return date.toLocaleString('de-DE', {
+                        ...options,
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+
+                case 'relative':
+                    return this.getRelativeTime(date);
+
+                case 'iso':
+                    return date.toISOString();
+
+                default:
+                    return date.toLocaleString('de-DE', options);
+            }
+        } catch (error) {
+            console.error('Fehler bei Zeitformatierung:', error);
+            return 'Formatfehler';
+        }
+    },
+
+    getRelativeTime: (date) => {
+        try {
+            const now = new Date();
+            const diffMs = now - new Date(date);
+            const diffSecs = Math.floor(diffMs / 1000);
+            const diffMins = Math.floor(diffSecs / 60);
+            const diffHours = Math.floor(diffMins / 60);
+            const diffDays = Math.floor(diffHours / 24);
+
+            if (diffSecs < 5) return 'gerade eben';
+            if (diffSecs < 60) return `vor ${diffSecs} Sekunde${diffSecs !== 1 ? 'n' : ''}`;
+            if (diffMins < 60) return `vor ${diffMins} Minute${diffMins !== 1 ? 'n' : ''}`;
+            if (diffHours < 24) return `vor ${diffHours} Stunde${diffHours !== 1 ? 'n' : ''}`;
+            if (diffDays < 7) return `vor ${diffDays} Tag${diffDays !== 1 ? 'en' : ''}`;
+
+            return new Date(date).toLocaleDateString('de-DE');
+        } catch (error) {
+            return 'Unbekannt';
+        }
+    },
+
+    getCurrentTimestamp: () => new Date().toISOString(),
+
+    // ===== SESSION DURATION BERECHNUNG =====
+    calculateSessionDuration: (startTime) => {
+        try {
+            const start = new Date(startTime);
+            const now = new Date();
+
+            if (isNaN(start.getTime())) {
+                return 0;
+            }
+
+            const diffMs = now.getTime() - start.getTime();
+            return Math.max(0, Math.floor(diffMs / 1000));
+        } catch (error) {
+            console.error('Fehler bei Session-Duration-Berechnung:', error);
+            return 0;
+        }
+    },
+
+    // ===== RFID TAG VALIDIERUNG =====
+    validateTagId: (tagId) => {
+        if (!tagId || typeof tagId !== 'string') return false;
+
+        const cleaned = tagId.trim().toUpperCase();
+
+        // Prüfe Länge (8-12 Hex-Zeichen sind typisch)
+        if (cleaned.length < 8 || cleaned.length > 12) return false;
+
+        // Prüfe Hex-Format
+        if (!/^[0-9A-F]+$/.test(cleaned)) return false;
+
+        // Prüfe ob konvertierbar und nicht Null
+        try {
+            const decimal = parseInt(cleaned, 16);
+            return decimal > 0;
+        } catch (error) {
+            return false;
+        }
+    },
+
+    // ===== QR-CODE DEKODIERUNG UND VERARBEITUNG =====
+
+    /**
+     * Dekodiert QR-Code Daten basierend auf der Backend-Logik
+     * @param {string} data - Rohe QR-Code Daten
+     * @returns {Object} - Dekodierte Informationen
+     */
+    decodeQRData: (data) => {
+        const result = {
+            auftrags_nr: "",
+            paket_nr: "",
+            kunden_name: "",
+            original_data: data,
+            format_type: "unknown"
+        };
+
+        if (!data || typeof data !== 'string') {
+            return result;
+        }
+
+        try {
+            // Spezielles durch ^ getrenntes Format (hat höchste Priorität)
+            if (data.includes('^')) {
+                const parts = data.split('^');
+
+                // Wir benötigen mindestens 4 Teile für Auftragsnummer und Paketnummer
+                if (parts.length >= 4) {
+                    result.format_type = "caret_separated";
+
+                    // Auftragsnummer ist im zweiten Feld (Index 1)
+                    result.auftrags_nr = parts[1] || "";
+
+                    // Paketnummer ist im vierten Feld (Index 3)
+                    result.paket_nr = parts[3] || "";
+
+                    // Falls verfügbar, Kundennummer oder ID im dritten Feld (Index 2)
+                    if (parts.length > 2 && parts[2]) {
+                        result.kunden_name = `Kunden-ID: ${parts[2]}`;
+                    }
+
+                    return result;
+                }
+            }
+
+            result.format_type = "pattern_matching";
+
+            // Versuch, die Auftragsnummer zu extrahieren
+            // Basierend auf den Beispielbildern, Muster "NL-XXXXXXX" oder ähnlich
+            const auftragsNrMatch = data.match(/[A-Z]{2}-\d+/);
+            if (auftragsNrMatch) {
+                result.auftrags_nr = auftragsNrMatch[0];
+            }
+
+            // Versuch, die Paketnummer zu extrahieren
+            // Langer numerischer Code, wie in den Beispielbildern
+            const paketNrMatch = data.match(/\d{10,}/);
+            if (paketNrMatch) {
+                result.paket_nr = paketNrMatch[0];
+            }
+
+            // Versuch, den Kundennamen zu extrahieren
+            if (data.includes("KUNDENNAME:")) {
+                const parts = data.split("KUNDENNAME:");
+                if (parts.length > 1) {
+                    let kundenName = parts[1].trim();
+                    // Bis zum nächsten Schlüsselwort oder Ende nehmen
+                    const endMarkers = ["PAKET-NR", "AUFTRAG", "\n"];
+                    for (const marker of endMarkers) {
+                        if (kundenName.includes(marker)) {
+                            kundenName = kundenName.split(marker)[0].trim();
+                            break;
+                        }
+                    }
+                    result.kunden_name = kundenName;
+                }
+            }
+
+            // Zusätzliche Suche für andere Formate
+            // Nach "Referenz: XXX" oder ähnlichen Patterns suchen
+            if (!result.auftrags_nr) {
+                const referenzMatch = data.match(/Referenz:\s+([A-Z0-9-]+)/);
+                if (referenzMatch) {
+                    result.auftrags_nr = referenzMatch[1];
+                }
+            }
+
+            // Nach "Tracking: XXX" oder ähnlichen Patterns suchen
+            if (!result.paket_nr) {
+                const trackingMatch = data.match(/Tracking:\s+(\d+)/);
+                if (trackingMatch) {
+                    result.paket_nr = trackingMatch[1];
+                }
+            }
+
+            return result;
+
+        } catch (error) {
+            console.error('Fehler beim Dekodieren der QR-Code Daten:', error);
+            result.format_type = "error";
+            return result;
+        }
+    },
+
+    /**
+     * Erstellt eine benutzerfreundliche Anzeige für dekodierte QR-Codes
+     * @param {Object} decoded - Dekodierte QR-Code Daten
+     * @returns {Object} - Formatierte Anzeige-Informationen
+     */
+    formatDecodedData: (decoded) => {
+        if (!decoded || typeof decoded !== 'object') {
+            return {
+                hasData: false,
+                icon: '📄',
+                title: 'Unstrukturierte Daten',
+                fields: [],
+                summary: 'Keine dekodierten Daten verfügbar'
+            };
+        }
+
+        const { auftrags_nr, paket_nr, kunden_name, format_type } = decoded;
+        const fields = [];
+
+        // Auftragsnummer
+        if (auftrags_nr && auftrags_nr.trim()) {
+            fields.push({
+                label: 'Auftrag',
+                value: auftrags_nr.trim(),
+                type: 'auftrag',
+                icon: '📋'
             });
-        },
+        }
 
-        // Formatierung
-        formatDuration: (milliseconds) => {
-            const seconds = Math.floor(milliseconds / 1000);
-            const minutes = Math.floor(seconds / 60);
-            const hours = Math.floor(minutes / 60);
+        // Paketnummer
+        if (paket_nr && paket_nr.trim()) {
+            fields.push({
+                label: 'Paket',
+                value: paket_nr.trim(),
+                type: 'paket',
+                icon: '📦'
+            });
+        }
 
-            if (hours > 0) {
-                return `${hours}:${String(minutes % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+        // Kundenname/ID
+        if (kunden_name && kunden_name.trim()) {
+            fields.push({
+                label: 'Kunde',
+                value: kunden_name.trim(),
+                type: 'kunde',
+                icon: '👤'
+            });
+        }
+
+        // Icon und Titel basierend auf verfügbaren Daten
+        let icon = '📄';
+        let title = 'Paketdaten';
+        let quality = 'minimal';
+
+        if (auftrags_nr && paket_nr) {
+            icon = '📦';
+            title = 'Vollständige Paketinformationen';
+            quality = 'complete';
+        } else if (auftrags_nr || paket_nr) {
+            icon = '📋';
+            title = 'Teilweise Paketinformationen';
+            quality = 'partial';
+        } else if (kunden_name) {
+            icon = '👤';
+            title = 'Kundeninformationen';
+            quality = 'customer';
+        } else {
+            icon = '📄';
+            title = 'Unstrukturierte Daten';
+            quality = 'minimal';
+        }
+
+        // Zusammenfassung erstellen
+        const parts = [];
+        if (auftrags_nr) parts.push(`Auftrag: ${auftrags_nr}`);
+        if (paket_nr) parts.push(`Paket: ${paket_nr}`);
+        if (kunden_name) parts.push(kunden_name);
+
+        const summary = parts.length > 0 ? parts.join(' • ') : 'Keine strukturierten Daten erkannt';
+
+        return {
+            hasData: fields.length > 0,
+            icon: icon,
+            title: title,
+            fields: fields,
+            summary: summary,
+            quality: quality,
+            formatType: format_type || 'unknown'
+        };
+    },
+
+    /**
+     * Validiert dekodierte QR-Code Daten
+     * @param {Object} decoded - Dekodierte Daten
+     * @returns {Object} - Validierungsergebnis
+     */
+    validateDecodedData: (decoded) => {
+        const validation = {
+            isValid: false,
+            hasAuftrag: false,
+            hasPaket: false,
+            hasKunde: false,
+            completeness: 0,
+            issues: []
+        };
+
+        if (!decoded || typeof decoded !== 'object') {
+            validation.issues.push('Keine dekodierten Daten vorhanden');
+            return validation;
+        }
+
+        const { auftrags_nr, paket_nr, kunden_name } = decoded;
+
+        // Auftragsnummer prüfen
+        if (auftrags_nr && auftrags_nr.trim()) {
+            validation.hasAuftrag = true;
+            // Validiere Format (z.B. NL-123456)
+            if (!/^[A-Z]{2}-\d+$/.test(auftrags_nr.trim())) {
+                validation.issues.push('Auftragsnummer hat ungewöhnliches Format');
+            }
+        }
+
+        // Paketnummer prüfen
+        if (paket_nr && paket_nr.trim()) {
+            validation.hasPaket = true;
+            // Validiere dass es numerisch ist und mindestens 10 Stellen hat
+            if (!/^\d{10,}$/.test(paket_nr.trim())) {
+                validation.issues.push('Paketnummer hat ungewöhnliches Format');
+            }
+        }
+
+        // Kundenname prüfen
+        if (kunden_name && kunden_name.trim()) {
+            validation.hasKunde = true;
+        }
+
+        // Vollständigkeit berechnen
+        let completenessScore = 0;
+        if (validation.hasAuftrag) completenessScore += 40;
+        if (validation.hasPaket) completenessScore += 40;
+        if (validation.hasKunde) completenessScore += 20;
+
+        validation.completeness = completenessScore;
+        validation.isValid = validation.hasAuftrag || validation.hasPaket;
+
+        return validation;
+    },
+
+    parseQRPayload: (payload) => {
+        if (!payload || typeof payload !== 'string') {
+            return { type: 'invalid', data: null, display: 'Ungültiger QR-Code' };
+        }
+
+        try {
+            // JSON-Format versuchen
+            const jsonData = JSON.parse(payload);
+            return {
+                type: 'json',
+                data: jsonData,
+                display: JSON.stringify(jsonData, null, 2),
+                preview: this.createJSONPreview(jsonData)
+            };
+        } catch (e) {
+            // Versuche QR-Code zu dekodieren
+            const decoded = this.decodeQRData(payload);
+            const formatted = this.formatDecodedData(decoded);
+
+            if (formatted.hasData) {
+                return {
+                    type: 'decoded_qr',
+                    data: decoded,
+                    display: formatted.summary,
+                    preview: formatted.title,
+                    formatted: formatted
+                };
+            }
+
+            // Key-Value Format versuchen (Format: key1:value1^key2:value2)
+            if (payload.includes('^') && payload.includes(':')) {
+                const parts = payload.split('^');
+                const data = {};
+                let valid = false;
+
+                parts.forEach(part => {
+                    if (part.includes(':')) {
+                        const [key, ...valueParts] = part.split(':');
+                        const value = valueParts.join(':'); // Für Werte mit ':'
+                        data[key.trim()] = value.trim();
+                        valid = true;
+                    }
+                });
+
+                if (valid) {
+                    const display = Object.entries(data)
+                        .map(([k, v]) => `${k}: ${v}`)
+                        .join('\n');
+                    return {
+                        type: 'keyvalue',
+                        data,
+                        display,
+                        preview: this.createKeyValuePreview(data)
+                    };
+                }
+            }
+
+            // Barcode-Format erkennen (EAN, UPC, etc.)
+            if (/^\d{8,14}$/.test(payload)) {
+                return {
+                    type: 'barcode',
+                    data: payload,
+                    display: payload,
+                    preview: `Barcode: ${payload}`
+                };
+            }
+
+            // URL-Format
+            if (payload.startsWith('http://') || payload.startsWith('https://')) {
+                return {
+                    type: 'url',
+                    data: payload,
+                    display: payload,
+                    preview: `URL: ${payload.length > 50 ? payload.substring(0, 50) + '...' : payload}`
+                };
+            }
+
+            // Plain Text
+            return {
+                type: 'text',
+                data: payload,
+                display: payload,
+                preview: payload.length > 100 ? payload.substring(0, 100) + '...' : payload
+            };
+        }
+    },
+
+    createJSONPreview: (jsonData) => {
+        try {
+            if (typeof jsonData === 'object') {
+                const keys = Object.keys(jsonData);
+                if (keys.length === 0) return 'Leeres JSON-Objekt';
+
+                const preview = keys.slice(0, 3).map(key => {
+                    const value = jsonData[key];
+                    const shortValue = typeof value === 'string' && value.length > 20
+                        ? value.substring(0, 20) + '...'
+                        : value;
+                    return `${key}: ${shortValue}`;
+                }).join(', ');
+
+                return keys.length > 3 ? `${preview}...` : preview;
+            }
+            return String(jsonData);
+        } catch (error) {
+            return 'JSON-Vorschau nicht verfügbar';
+        }
+    },
+
+    createKeyValuePreview: (data) => {
+        try {
+            const entries = Object.entries(data);
+            if (entries.length === 0) return 'Keine Daten';
+
+            const preview = entries.slice(0, 2).map(([key, value]) => {
+                const shortValue = value.length > 15 ? value.substring(0, 15) + '...' : value;
+                return `${key}: ${shortValue}`;
+            }).join(', ');
+
+            return entries.length > 2 ? `${preview}...` : preview;
+        } catch (error) {
+            return 'Vorschau nicht verfügbar';
+        }
+    },
+
+    // ===== SCAN RESULT HANDLING MIT DEKODIERUNG =====
+    formatScanResult: (result) => {
+        if (!result || typeof result !== 'object') {
+            return {
+                success: false,
+                message: 'Ungültiges Scan-Ergebnis',
+                status: 'error'
+            };
+        }
+
+        const { success, status, message, data, duplicateInfo } = result;
+
+        let formattedMessage = message || 'Unbekannter Status';
+        let displayType = status || 'unknown';
+        let decodedSummary = null;
+
+        // Dekodierte Daten extrahieren falls verfügbar
+        if (data && data.DecodedData) {
+            const formatted = this.formatDecodedData(data.DecodedData);
+            if (formatted.hasData) {
+                decodedSummary = formatted.summary;
+                // Nachricht mit dekodierten Daten erweitern
+                if (success) {
+                    formattedMessage = `${message} - ${formatted.summary}`;
+                }
+            }
+        }
+
+        // Status-spezifische Formatierung
+        switch (status) {
+            case 'duplicate_cache':
+            case 'duplicate_database':
+            case 'duplicate_transaction':
+                if (duplicateInfo && duplicateInfo.minutesAgo !== undefined) {
+                    formattedMessage = `Bereits vor ${duplicateInfo.minutesAgo} Minuten gescannt`;
+                } else if (duplicateInfo && duplicateInfo.count) {
+                    formattedMessage = `${duplicateInfo.count}x bereits gescannt`;
+                }
+                displayType = 'duplicate';
+                break;
+
+            case 'rate_limit':
+                formattedMessage = 'Zu viele Scans - kurz warten';
+                displayType = 'warning';
+                break;
+
+            case 'saved':
+                if (data && data.ID) {
+                    formattedMessage = `Erfolgreich gespeichert (ID: ${data.ID})`;
+                    if (decodedSummary) {
+                        formattedMessage += ` - ${decodedSummary}`;
+                    }
+                }
+                displayType = 'success';
+                break;
+
+            case 'error':
+            case 'database_offline':
+                displayType = 'error';
+                break;
+
+            case 'processing':
+                displayType = 'info';
+                break;
+        }
+
+        return {
+            success: success || false,
+            message: formattedMessage,
+            status: displayType,
+            data: data || null,
+            duplicateInfo: duplicateInfo || null,
+            decodedSummary: decodedSummary,
+            timestamp: new Date().toISOString()
+        };
+    },
+
+    // ===== PARALLELE SESSION UTILITIES =====
+    formatSessionInfo: (session) => {
+        if (!session) return null;
+
+        const duration = this.calculateSessionDuration(session.StartTS || session.localStartTime);
+
+        return {
+            id: session.ID,
+            userId: session.UserID,
+            userName: session.UserName || 'Unbekannt',
+            department: session.Department || '',
+            sessionType: session.SessionTypeName || 'Wareneinlagerung',
+            startTime: session.StartTS || session.localStartTime,
+            duration: duration,
+            durationFormatted: this.formatDuration(duration),
+            scanCount: session.ScanCount || 0,
+            isActive: session.Active === 1 || session.Active === true
+        };
+    },
+
+    groupSessionsByUser: (sessions) => {
+        const grouped = {};
+
+        sessions.forEach(session => {
+            const userId = session.UserID;
+            if (!grouped[userId]) {
+                grouped[userId] = {
+                    user: {
+                        id: userId,
+                        name: session.UserName || 'Unbekannt',
+                        department: session.Department || ''
+                    },
+                    sessions: []
+                };
+            }
+            grouped[userId].sessions.push(this.formatSessionInfo(session));
+        });
+
+        return grouped;
+    },
+
+    // ===== COPY TO CLIPBOARD FUNKTIONALITÄT =====
+    copyToClipboard: async (text) => {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
             } else {
-                return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+                // Fallback für ältere Browser
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                textArea.style.top = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+
+                const result = document.execCommand('copy');
+                document.body.removeChild(textArea);
+                return result;
+            }
+        } catch (error) {
+            console.error('Clipboard-Fehler:', error);
+            return false;
+        }
+    },
+
+    // ===== ZAHLKONVERTIERUNG =====
+    hexToDecimal: (hex) => {
+        try {
+            const cleaned = hex.toString().replace(/[^0-9A-Fa-f]/g, '');
+            return parseInt(cleaned, 16);
+        } catch (error) {
+            return null;
+        }
+    },
+
+    decimalToHex: (decimal) => {
+        try {
+            return Number(decimal).toString(16).toUpperCase();
+        } catch (error) {
+            return null;
+        }
+    },
+
+    // ===== PERFORMANCE UTILITIES =====
+    debounce: (func, wait) => {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    },
+
+    throttle: (func, limit) => {
+        let inThrottle;
+        return function(...args) {
+            if (!inThrottle) {
+                func.apply(this, args);
+                inThrottle = true;
+                setTimeout(() => inThrottle = false, limit);
+            }
+        };
+    },
+
+    // ===== DATENVERARBEITUNG =====
+    formatFileSize: (bytes) => {
+        if (bytes === 0) return '0 Bytes';
+
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    },
+
+    generateRandomTag: () => {
+        const chars = '0123456789ABCDEF';
+        let result = '';
+        for (let i = 0; i < 10; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return result;
+    },
+
+    // ===== ERROR HANDLING =====
+    createErrorInfo: (error, context = null) => {
+        const errorInfo = {
+            message: error?.message || String(error),
+            stack: error?.stack,
+            name: error?.name,
+            code: error?.code,
+            context: context,
+            timestamp: new Date().toISOString(),
+            userAgent: navigator.userAgent,
+            url: window.location.href
+        };
+
+        // Zusätzliche Informationen für spezielle Fehler
+        if (error?.name === 'NotAllowedError') {
+            errorInfo.suggestion = 'Kamera-Berechtigung verweigert - in den Browsereinstellungen erlauben';
+        } else if (error?.name === 'NotFoundError') {
+            errorInfo.suggestion = 'Keine Kamera gefunden - USB-Kamera anschließen';
+        } else if (error?.name === 'OverconstrainedError') {
+            errorInfo.suggestion = 'Kamera-Einstellungen nicht unterstützt - andere Auflösung versuchen';
+        }
+
+        return errorInfo;
+    },
+
+    // ===== LOGGING =====
+    log: (level, message, data = null) => {
+        const timestamp = new Date().toISOString();
+        const logMessage = `[${timestamp}] ${level.toUpperCase()}: ${message}`;
+
+        switch (level.toLowerCase()) {
+            case 'error':
+                console.error(logMessage, data);
+                break;
+            case 'warn':
+                console.warn(logMessage, data);
+                break;
+            case 'info':
+                console.info(logMessage, data);
+                break;
+            case 'debug':
+                if (window.config && window.config.isDev()) {
+                    console.log(logMessage, data);
+                }
+                break;
+            default:
+                console.log(logMessage, data);
+        }
+    },
+
+    // ===== VALIDIERUNG =====
+    isValidEmail: (email) => {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    },
+
+    sanitizeString: (str) => {
+        if (typeof str !== 'string') return '';
+        return str.replace(/[<>"/\\&]/g, '');
+    },
+
+    truncateString: (str, maxLength = 50) => {
+        if (typeof str !== 'string') return '';
+        return str.length > maxLength ? str.substring(0, maxLength) + '...' : str;
+    },
+
+    // ===== STORAGE HELPERS =====
+    safeJSONParse: (str, fallback = null) => {
+        try {
+            return JSON.parse(str);
+        } catch (error) {
+            console.warn('JSON Parse Fehler:', error);
+            return fallback;
+        }
+    },
+
+    safeJSONStringify: (obj, fallback = '{}') => {
+        try {
+            return JSON.stringify(obj);
+        } catch (error) {
+            console.warn('JSON Stringify Fehler:', error);
+            return fallback;
+        }
+    }
+});
+
+// ===== KONFIGURATION & UMGEBUNG =====
+contextBridge.exposeInMainWorld('config', {
+    get: (key) => {
+        const allowedKeys = [
+            'NODE_ENV',
+            'UI_WINDOW_WIDTH',
+            'UI_WINDOW_HEIGHT',
+            'APP_DEBUG',
+            'UI_THEME',
+            'UI_UPDATE_INTERVAL'
+        ];
+
+        if (allowedKeys.includes(key)) {
+            return process.env[key];
+        }
+        return undefined;
+    },
+
+    isDev: () => process.env.NODE_ENV === 'development',
+    version: null, // Wird später von der App gesetzt
+
+    // ===== THEME MANAGEMENT =====
+    theme: {
+        get: () => {
+            try {
+                return localStorage.getItem('wareneinlagerung-theme') || 'auto';
+            } catch {
+                return 'auto';
             }
         },
 
-        formatTimestamp: (timestamp) => {
-            return new Date(timestamp).toLocaleString('de-DE');
+        set: (theme) => {
+            try {
+                localStorage.setItem('wareneinlagerung-theme', theme);
+                document.body.className = document.body.className.replace(/theme-\w+/g, '');
+
+                if (theme === 'auto') {
+                    // System-Präferenz verwenden
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                        document.body.classList.add('theme-dark');
+                    } else {
+                        document.body.classList.add('theme-light');
+                    }
+                } else {
+                    document.body.classList.add(`theme-${theme}`);
+                }
+            } catch (error) {
+                console.warn('Theme setzen fehlgeschlagen:', error);
+            }
         },
 
-        formatDate: (date) => {
-            return new Date(date).toLocaleDateString('de-DE');
-        },
-
-        formatTime: (time) => {
-            return new Date(time).toLocaleTimeString('de-DE');
+        toggle: () => {
+            const current = config.theme.get();
+            const next = current === 'dark' ? 'light' : current === 'light' ? 'auto' : 'dark';
+            config.theme.set(next);
+            return next;
         }
     }
 });
 
-// ===== SICHERHEITSPRÜFUNGEN =====
+// ===== DIAGNOSTICS & ERROR HANDLING =====
+contextBridge.exposeInMainWorld('diagnostics', {
+    collectSystemInfo: async () => {
+        try {
+            const systemInfo = await window.electronAPI.system.getInfo();
+            const systemStatus = await window.electronAPI.system.getStatus();
+            const rfidStatus = await window.electronAPI.rfid.getStatus();
 
-// Prüfe ob im Development-Modus
-const isDevelopment = process.env.NODE_ENV === 'development';
-
-// Development-spezifische APIs nur im Dev-Modus verfügbar machen
-if (isDevelopment) {
-    console.log('🚀 Qualitätskontrolle-App läuft im Development-Modus');
-
-    // Zusätzliche Debug-Funktionen
-    contextBridge.exposeInMainWorld('devAPI', {
-        // Console-Umleitung für Debugging
-        log: (...args) => console.log('[RENDERER]', ...args),
-        warn: (...args) => console.warn('[RENDERER]', ...args),
-        error: (...args) => console.error('[RENDERER]', ...args),
-
-        // Memory-Info
-        getMemoryInfo: () => process.memoryUsage(),
-
-        // Process-Info
-        getProcessInfo: () => ({
-            pid: process.pid,
-            platform: process.platform,
-            arch: process.arch,
-            versions: process.versions
-        }),
-
-        // Performance-Metriken
-        performance: {
-            now: () => performance.now(),
-            mark: (name) => performance.mark(name),
-            measure: (name, startMark, endMark) => performance.measure(name, startMark, endMark),
-            getEntries: () => performance.getEntries()
+            return {
+                timestamp: new Date().toISOString(),
+                system: systemInfo,
+                status: systemStatus,
+                rfid: rfidStatus,
+                browser: {
+                    userAgent: navigator.userAgent,
+                    language: navigator.language,
+                    cookieEnabled: navigator.cookieEnabled,
+                    onLine: navigator.onLine
+                },
+                screen: {
+                    width: screen.width,
+                    height: screen.height,
+                    colorDepth: screen.colorDepth,
+                    pixelDepth: screen.pixelDepth
+                },
+                performance: performance.memory ? {
+                    used: Math.round(performance.memory.usedJSHeapSize / 1024 / 1024),
+                    total: Math.round(performance.memory.totalJSHeapSize / 1024 / 1024),
+                    limit: Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024)
+                } : null,
+                localStorage: (() => {
+                    try {
+                        return {
+                            available: typeof Storage !== 'undefined',
+                            theme: localStorage.getItem('wareneinlagerung-theme')
+                        };
+                    } catch {
+                        return { available: false };
+                    }
+                })()
+            };
+        } catch (error) {
+            return {
+                error: error.message,
+                timestamp: new Date().toISOString()
+            };
         }
-    });
-} else {
-    console.log('🏭 Qualitätskontrolle-App läuft im Production-Modus');
-}
-
-// ===== ERROR HANDLING =====
-
-// Globale Fehlerbehandlung für Renderer-Process
-window.addEventListener('error', (event) => {
-    console.error('Qualitätskontrolle Renderer Error:', {
-        message: event.message,
-        filename: event.filename,
-        lineno: event.lineno,
-        colno: event.colno,
-        error: event.error
-    });
-
-    // Fehler an Main-Process weiterleiten
-    if (window.electronAPI) {
-        window.electronAPI.invoke('system:report-error', {
-            type: 'renderer-error',
-            message: event.message,
-            stack: event.error?.stack,
-            timestamp: Date.now()
-        }).catch(() => {
-            // Fehler beim Senden ignorieren
-        });
-    }
-});
-
-// Unhandled Promise Rejections
-window.addEventListener('unhandledrejection', (event) => {
-    console.error('Qualitätskontrolle Unhandled Promise Rejection:', event.reason);
-
-    // Fehler an Main-Process weiterleiten
-    if (window.electronAPI) {
-        window.electronAPI.invoke('system:report-error', {
-            type: 'unhandled-rejection',
-            reason: event.reason?.toString(),
-            stack: event.reason?.stack,
-            timestamp: Date.now()
-        }).catch(() => {
-            // Fehler beim Senden ignorieren
-        });
-    }
-});
-
-// ===== LIFECYCLE EVENTS =====
-
-// DOM Content Loaded
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('✅ Qualitätskontrolle DOM Content Loaded');
-
-    // Initialisierung-Event senden
-    if (window.electronAPI) {
-        window.electronAPI.invoke('system:renderer-ready', {
-            timestamp: Date.now(),
-            url: window.location.href,
-            userAgent: navigator.userAgent
-        }).catch((error) => {
-            console.warn('Renderer-Ready Event konnte nicht gesendet werden:', error);
-        });
-    }
-});
-
-// Before Unload
-window.addEventListener('beforeunload', () => {
-    console.log('🔄 Qualitätskontrolle Renderer wird beendet');
-
-    // Cleanup-Event senden
-    if (window.electronAPI) {
-        window.electronAPI.invoke('system:renderer-cleanup', {
-            timestamp: Date.now()
-        }).catch(() => {
-            // Fehler beim Senden ignorieren
-        });
-    }
-});
-
-// ===== QUALITÄTSKONTROLLE-SPEZIFISCHE INITIALISIERUNG =====
-
-// Qualitätskontrolle App-spezifische Konfiguration
-window.QUALITY_CONTROL_CONFIG = {
-    appName: 'RFID Qualitätskontrolle',
-    version: '1.0.0',
-    features: {
-        doubleScanLogic: true,
-        autoSessionEnd: true,
-        duplicateDetection: true,
-        parallelSessions: true
     },
-    limits: {
-        maxScansPerBox: 2,
-        duplicateErrorOnThirdScan: true,
-        autoSessionRestartDelay: 500
-    }
-};
 
-console.log('✅ Qualitätskontrolle Preload Script geladen:', window.QUALITY_CONTROL_CONFIG);
+    exportDiagnostics: async () => {
+        try {
+            const systemInfo = await diagnostics.collectSystemInfo();
+            const logs = window.logs || [];
+
+            return {
+                ...systemInfo,
+                logs: logs.slice(-100), // Letzte 100 Log-Einträge
+                exportTime: new Date().toISOString()
+            };
+        } catch (error) {
+            return {
+                error: error.message,
+                timestamp: new Date().toISOString()
+            };
+        }
+    }
+});
+
+// ===== INITIALIZATION =====
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('Preload Script geladen, DOM bereit');
+
+    // Theme initialisieren
+    const savedTheme = localStorage.getItem('wareneinlagerung-theme') || 'auto';
+    config.theme.set(savedTheme);
+
+    // System Theme Changes verfolgen
+    if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+            const currentTheme = localStorage.getItem('wareneinlagerung-theme') || 'auto';
+            if (currentTheme === 'auto') {
+                config.theme.set('auto'); // Theme neu anwenden
+            }
+        });
+    }
+
+    // Global Error Handler
+    window.addEventListener('error', (event) => {
+        const errorInfo = {
+            message: event.error?.message || event.message,
+            stack: event.error?.stack,
+            filename: event.filename,
+            lineno: event.lineno,
+            colno: event.colno,
+            timestamp: new Date().toISOString()
+        };
+
+        console.error('Global Error:', errorInfo);
+        utils.log('error', 'Global JavaScript Error', errorInfo);
+    });
+
+    // Unhandled Promise Rejections
+    window.addEventListener('unhandledrejection', (event) => {
+        const errorInfo = {
+            reason: event.reason,
+            promise: event.promise,
+            timestamp: new Date().toISOString()
+        };
+
+        console.error('Unhandled Promise Rejection:', errorInfo);
+        utils.log('error', 'Unhandled Promise Rejection', errorInfo);
+    });
+
+    // Log-Array für Diagnostics
+    window.logs = window.logs || [];
+
+    // Console-Methoden erweitern für Log-Sammlung
+    const originalConsoleError = console.error;
+    console.error = (...args) => {
+        window.logs.push({
+            level: 'error',
+            message: args.join(' '),
+            timestamp: new Date().toISOString()
+        });
+        originalConsoleError.apply(console, args);
+    };
+
+    const originalConsoleWarn = console.warn;
+    console.warn = (...args) => {
+        window.logs.push({
+            level: 'warn',
+            message: args.join(' '),
+            timestamp: new Date().toISOString()
+        });
+        originalConsoleWarn.apply(console, args);
+    };
+
+    console.log('✅ Preload Script erfolgreich initialisiert für Wareneinlagerung mit parallelen Sessions');
+});
+
+console.log('Preload Script für Wareneinlagerung mit parallelen Sessions geladen');
