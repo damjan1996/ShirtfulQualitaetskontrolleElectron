@@ -53,7 +53,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
             'rfid-scan-error',
             'qr-scan-detected',
             'decoding-stats-updated',
-            'session-reset-before-login' // ← Neues Event für RFID-Benutzerwechsel
+            'session-reset-before-login', // ← Neues Event für RFID-Benutzerwechsel
+            'qc-session-restarted'
         ];
 
         if (validChannels.includes(channel)) {
@@ -75,7 +76,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
             'rfid-scan-error',
             'qr-scan-detected',
             'decoding-stats-updated',
-            'session-reset-before-login' // ← Neues Event für RFID-Benutzerwechsel
+            'session-reset-before-login', // ← Neues Event für RFID-Benutzerwechsel
+            'qc-session-restarted'
         ];
 
         if (validChannels.includes(channel)) {
