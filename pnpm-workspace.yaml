@@ -1,4 +1,0 @@
-ignoredBuiltDependencies:
-  - node-hid
-onlyBuiltDependencies:
-  - electron
