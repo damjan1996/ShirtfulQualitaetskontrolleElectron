@@ -1,9 +1,9 @@
 /**
- * RFID Wareneingang - Vereinfachte Hauptanwendung
- * Fokus auf einfache Bedienung für Wareneingang-Mitarbeiter
+ * RFID Qualitätskontrolle - Vereinfachte Hauptanwendung
+ * Fokus auf einfache Bedienung für Qualitätskontrolle-Mitarbeiter
  */
 
-class WareneingangApp {
+class QualitaetskontrolleApp {
     constructor() {
         // Anwendungsstatus
         this.currentUser = null;
@@ -41,7 +41,7 @@ class WareneingangApp {
     }
 
     async init() {
-        console.log('🚀 Wareneingang-App wird initialisiert...');
+        console.log('🚀 Qualitätskontrolle-App wird initialisiert...');
 
         this.setupEventListeners();
         this.setupIPCListeners();
@@ -51,7 +51,7 @@ class WareneingangApp {
         // Kamera-Verfügbarkeit prüfen
         await this.checkCameraAvailability();
 
-        console.log('✅ Wareneingang-App bereit');
+        console.log('✅ Qualitätskontrolle-App bereit');
     }
 
     // ===== EVENT LISTENERS =====
@@ -149,6 +149,19 @@ class WareneingangApp {
         window.electronAPI.on('rfid-scan-error', (data) => {
             console.error('RFID-Fehler:', data);
             this.showNotification('error', 'RFID-Fehler', data.message);
+        });
+
+        // Automatischer Session-Neustart nach zweitem Scan
+        window.electronAPI.on('qc-session-restarted', (data) => {
+            console.log('QC Session automatisch neu gestartet:', data);
+            // Aktualisiere aktuelle Session-ID
+            if (this.currentUser) {
+                this.currentUser.sessionId = data.newSession.ID;
+                this.sessionStartTime = new Date(data.newSession.StartTS);
+                this.scanCount = 0;
+                this.updateUserDisplay();
+                this.showNotification('success', 'Nächster Karton', 'Neue Session gestartet');
+            }
         });
     }
 
@@ -1275,28 +1288,28 @@ class WareneingangApp {
 
 // ===== APP INITIALIZATION =====
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('🏁 DOM geladen, starte Wareneingang-App...');
-    window.wareneingangApp = new WareneingangApp();
+    console.log('🏁 DOM geladen, starte Qualitätskontrolle-App...');
+    window.qcApp = new QualitaetskontrolleApp();
 });
 
 // Cleanup beim Fenster schließen
 window.addEventListener('beforeunload', () => {
-    if (window.wareneingangApp && window.wareneingangApp.scannerActive) {
-        window.wareneingangApp.stopQRScanner();
+    if (window.qcApp && window.qcApp.scannerActive) {
+        window.qcApp.stopQRScanner();
     }
 });
 
 // Global verfügbare Funktionen
 window.app = {
     showNotification: (type, title, message) => {
-        if (window.wareneingangApp) {
-            window.wareneingangApp.showNotification(type, title, message);
+        if (window.qcApp) {
+            window.qcApp.showNotification(type, title, message);
         }
     },
 
     logoutUser: () => {
-        if (window.wareneingangApp) {
-            window.wareneingangApp.logoutCurrentUser();
+        if (window.qcApp) {
+            window.qcApp.logoutCurrentUser();
         }
     }
 };

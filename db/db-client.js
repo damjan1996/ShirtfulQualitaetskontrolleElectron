@@ -121,7 +121,7 @@ class DatabaseClient {
 
     // ===== SESSION OPERATIONS (DELEGATED) =====
 
-    async createSession(userId, sessionType = 'Wareneingang') {
+    async createSession(userId, sessionType = 'Qualitätskontrolle') {
         return await this.sessions.createSession(userId, sessionType);
     }
 
@@ -465,6 +465,8 @@ module.exports.DatabaseClient = DatabaseClient;
 module.exports.SESSION_TYPES = SessionTypeConstants.SESSION_TYPES;
 module.exports.createWareneingangSession = SessionTypeConstants.createWareneingangSession;
 module.exports.getWareneingangSessionTypeId = SessionTypeConstants.getWareneingangSessionTypeId;
+module.exports.createQualitaetskontrolleSession = SessionTypeConstants.createQualitaetskontrolleSession;
+module.exports.getQualitaetskontrolleSessionTypeId = SessionTypeConstants.getQualitaetskontrolleSessionTypeId;
 
 // Module exports für direkte Nutzung (Advanced)
 module.exports.modules = {

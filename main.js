@@ -25,7 +25,7 @@ try {
     console.log('💡 App läuft ohne RFID-Support');
 }
 
-class WareneingangMainApp {
+class QualitaetskontrolleMainApp {
     constructor() {
         this.mainWindow = null;
         this.rfidListener = null;
@@ -53,6 +53,10 @@ class WareneingangMainApp {
             withPaket: 0,
             withKunde: 0
         };
+
+        // Qualitätskontrolle Workflow Daten
+        this.qcSessions = new Map(); // sessionId -> { currentCode, scanCount, userId }
+        this.qcCompletedCodes = new Set(); // Bereits abgearbeitete Codes
 
         // RFID-Session-Wechsel Tracking
         this.lastRFIDScanTime = 0;
@@ -123,7 +127,7 @@ class WareneingangMainApp {
                 hardwareAcceleration: false
             },
             show: false,
-            title: 'RFID Wareneingang - Shirtful',
+            title: 'RFID Qualitätskontrolle - Shirtful',
             autoHideMenuBar: true,
             frame: true,
             titleBarStyle: 'default',
@@ -430,25 +434,82 @@ class WareneingangMainApp {
                 // Payload bereinigen (BOM entfernen falls vorhanden)
                 const cleanPayload = payload.replace(/^\ufeff/, '');
 
-                // QR-Scan speichern - gibt jetzt immer strukturierte Antwort mit Dekodierung zurück
-                const result = await this.dbClient.saveQRScan(sessionId, cleanPayload);
-
-                // Rate Limit Counter aktualisieren bei erfolgreichen Scans
-                if (result.success) {
-                    this.updateQRScanRateLimit(sessionId);
-
-                    // Dekodierung-Statistiken aktualisieren
-                    await this.updateDecodingStats(result);
+                // === Qualitätskontrolle Workflow ===
+                if (this.qcCompletedCodes.has(cleanPayload)) {
+                    return {
+                        success: false,
+                        status: 'duplicate_completed',
+                        qcStatus: 'duplicate_completed',
+                        message: 'Karton bereits abgearbeitet',
+                        data: null,
+                        timestamp: new Date().toISOString()
+                    };
                 }
 
-                console.log(`QR-Scan Ergebnis für Session ${sessionId}:`, {
-                    success: result.success,
-                    status: result.status,
-                    message: result.message,
-                    hasDecodedData: !!(result.data?.DecodedData)
-                });
+                let qcInfo = this.qcSessions.get(sessionId);
+                if (!qcInfo) {
+                    qcInfo = { currentCode: null, scanCount: 0, userId: this.currentSession?.userId };
+                    this.qcSessions.set(sessionId, qcInfo);
+                }
 
-                return result;
+                if (!qcInfo.currentCode) {
+                    // Erster Scan
+                    const result = await this.dbClient.saveQRScan(sessionId, cleanPayload);
+                    if (result.success) {
+                        this.updateQRScanRateLimit(sessionId);
+                        await this.updateDecodingStats(result);
+                        qcInfo.currentCode = cleanPayload;
+                        qcInfo.scanCount = 1;
+                        this.qcSessions.set(sessionId, qcInfo);
+                        result.qcStatus = 'first_scan';
+                    }
+                    return result;
+                }
+
+                if (qcInfo.currentCode === cleanPayload && qcInfo.scanCount === 1) {
+                    // Zweiter Scan -> Abschluss
+                    const result = await this.dbClient.saveQRScan(sessionId, cleanPayload);
+                    if (result.success) {
+                        this.updateQRScanRateLimit(sessionId);
+                        await this.updateDecodingStats(result);
+                        this.qcCompletedCodes.add(cleanPayload);
+                        qcInfo.currentCode = null;
+                        qcInfo.scanCount = 0;
+                        const userId = qcInfo.userId;
+                        this.qcSessions.set(sessionId, qcInfo);
+
+                        // Session beenden und neue starten
+                        await this.dbClient.endSession(sessionId);
+                        const newSession = await this.dbClient.createSession(userId, 'Qualitätskontrolle');
+                        this.qcSessions.set(newSession.ID, { currentCode: null, scanCount: 0, userId });
+                        if (this.currentSession && this.currentSession.sessionId === sessionId) {
+                            this.currentSession = {
+                                sessionId: newSession.ID,
+                                userId,
+                                startTime: newSession.StartTS
+                            };
+                        }
+
+                        this.sendToRenderer('qc-session-restarted', {
+                            oldSessionId: sessionId,
+                            newSession: { ...newSession, StartTS: this.normalizeTimestamp(newSession.StartTS) },
+                            timestamp: new Date().toISOString()
+                        });
+
+                        result.qcStatus = 'second_scan';
+                    }
+                    return result;
+                }
+
+                // Falscher Code während laufender QC
+                return {
+                    success: false,
+                    status: 'wrong_code',
+                    qcStatus: 'wrong_code',
+                    message: 'Bitte denselben Karton erneut scannen',
+                    data: null,
+                    timestamp: new Date().toISOString()
+                };
 
             } catch (error) {
                 console.error('QR Scan Save unerwarteter Fehler:', error);
@@ -802,7 +863,9 @@ class WareneingangMainApp {
             // ===== SCHRITT 4: NEUE SESSION FÜR DEN GESCANNTEN BENUTZER STARTEN =====
             console.log(`🔑 Starte neue Session für ${user.BenutzerName}...`);
 
-            const session = await this.dbClient.createSession(user.ID);
+            const session = await this.dbClient.createSession(user.ID, 'Qualitätskontrolle');
+            // QC Workflow initialisieren
+            this.qcSessions.set(session.ID, { currentCode: null, scanCount: 0, userId: user.ID });
 
             if (session) {
                 // Lokale Session-Daten setzen
@@ -863,6 +926,9 @@ class WareneingangMainApp {
                 // Rate Limit zurücksetzen
                 this.qrScanRateLimit.delete(this.currentSession.sessionId);
 
+                // QC-Session-Daten entfernen
+                this.qcSessions.delete(this.currentSession.sessionId);
+
                 this.currentSession = null;
             }
 
@@ -905,6 +971,8 @@ class WareneingangMainApp {
                 await this.dbClient.endSession(this.currentSession.sessionId);
                 this.currentSession = null;
             }
+
+            this.qcSessions.clear();
 
             // Rate Limits zurücksetzen
             this.qrScanRateLimit.clear();
@@ -968,7 +1036,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // ===== APP INSTANCE =====
-const wareneingangApp = new WareneingangMainApp();
+const qcApp = new QualitaetskontrolleMainApp();
 
 // Prevent multiple instances
 const gotTheLock = app.requestSingleInstanceLock();
@@ -978,11 +1046,11 @@ if (!gotTheLock) {
 } else {
     app.on('second-instance', (event, commandLine, workingDirectory) => {
         // Someone tried to run a second instance, focus our window instead
-        if (wareneingangApp.mainWindow) {
-            if (wareneingangApp.mainWindow.isMinimized()) {
-                wareneingangApp.mainWindow.restore();
+        if (qcApp.mainWindow) {
+            if (qcApp.mainWindow.isMinimized()) {
+                qcApp.mainWindow.restore();
             }
-            wareneingangApp.mainWindow.focus();
+            qcApp.mainWindow.focus();
         }
     });
 }

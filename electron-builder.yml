@@ -1,10 +1,10 @@
 # =============================================================================
-# RFID QR Wareneingang - Electron Builder Konfiguration
+# RFID QR Qualitaetskontrolle - Electron Builder Konfiguration
 # =============================================================================
 
 # App Metadaten
-appId: com.shirtful.rfid-qr-wareneingang
-productName: "RFID QR Wareneingang"
+appId: com.shirtful.rfid-qr-qualitaetskontrolle
+productName: "RFID QR Qualitaetskontrolle"
 copyright: "Copyright © 2024 Shirtful GmbH"
 
 # Verzeichnisse
@@ -79,7 +79,7 @@ nsis:
   installerHeaderIcon: "build/installerHeader.ico"
   createDesktopShortcut: always
   createStartMenuShortcut: true
-  shortcutName: "RFID QR Wareneingang"
+  shortcutName: "RFID QR Qualitaetskontrolle"
 
   # Installer Sprache
   language: "1031" # Deutsch
@@ -154,8 +154,8 @@ linux:
         - x64
   icon: "build/icon.png"
   category: Office
-  synopsis: "RFID QR Wareneingang System"
-  description: "Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Wareneingang"
+  synopsis: "RFID QR Qualitaetskontrolle System"
+  description: "Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Qualitaetskontrolle"
 
 # Linux AppImage
 appImage:
@@ -189,11 +189,11 @@ metadata:
     name: "Shirtful GmbH"
     email: "support@shirtful.com"
   homepage: "https://www.shirtful.com"
-  description: "RFID-basierte Zeiterfassung und QR-Code Wareneingang für moderne Produktionsbetriebe"
+  description: "RFID-basierte Zeiterfassung und QR-Code Qualitaetskontrolle für moderne Produktionsbetriebe"
   keywords:
     - "rfid"
     - "qr-code"
-    - "wareneingang"
+    - "qualitaetskontrolle"
     - "zeiterfassung"
     - "electron"
     - "desktop"
@@ -212,7 +212,7 @@ protocols:
 fileAssociations:
   - ext: "rqr"
     name: "RFID QR Export"
-    description: "RFID QR Wareneingang Datenexport"
+    description: "RFID QR Qualitaetskontrolle Datenexport"
     icon: "build/fileIcon.ico"
 
 # Umgebungsvariablen für Build

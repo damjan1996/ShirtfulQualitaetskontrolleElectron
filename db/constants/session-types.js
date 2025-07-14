@@ -87,6 +87,13 @@ async function createWareneingangSession(dbClient, userId) {
     return await dbClient.sessions.createSession(userId, SESSION_TYPES.WARENEINGANG);
 }
 
+async function createQualitaetskontrolleSession(dbClient, userId) {
+    if (!dbClient.sessions) {
+        throw new Error('DatabaseClient muss sessions module haben');
+    }
+    return await dbClient.sessions.createSession(userId, SESSION_TYPES.QUALITAETSKONTROLLE);
+}
+
 /**
  * Helper-Funktion zum Abrufen der SessionType-ID für Wareneingang
  * @param {Object} dbClient - Datenbankverbindung (muss sessions module haben)
@@ -103,6 +110,21 @@ async function getWareneingangSessionTypeId(dbClient) {
         return wareneingang ? wareneingang.ID : null;
     } catch (error) {
         console.error('Fehler beim Abrufen der Wareneingang SessionType ID:', error);
+        return null;
+    }
+}
+
+async function getQualitaetskontrolleSessionTypeId(dbClient) {
+    try {
+        if (!dbClient.sessions) {
+            throw new Error('DatabaseClient muss sessions module haben');
+        }
+
+        const types = await dbClient.sessions.getSessionTypes();
+        const qualitaet = types.find(type => type.TypeName === SESSION_TYPES.QUALITAETSKONTROLLE);
+        return qualitaet ? qualitaet.ID : null;
+    } catch (error) {
+        console.error('Fehler beim Abrufen der Qualitätskontrolle SessionType ID:', error);
         return null;
     }
 }
@@ -347,6 +369,8 @@ module.exports = {
     // Helper Functions
     createWareneingangSession,
     getWareneingangSessionTypeId,
+    createQualitaetskontrolleSession,
+    getQualitaetskontrolleSessionTypeId,
     getSessionTypeConfig,
     getAllSessionTypeConfigs,
     isQRTypeAllowedForSession,

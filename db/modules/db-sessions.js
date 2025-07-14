@@ -28,10 +28,10 @@ class SessionModule {
     /**
      * Erweiterte createSession Methode mit SessionType-Unterstützung
      * @param {number} userId - Benutzer-ID
-     * @param {number|string} sessionType - SessionType ID oder Name (default: 'Wareneingang')
+     * @param {number|string} sessionType - SessionType ID oder Name (default: 'Qualitätskontrolle')
      * @returns {Object|null} - Neue Session oder null bei Fehler
      */
-    async createSession(userId, sessionType = 'Wareneingang') {
+    async createSession(userId, sessionType = 'Qualitätskontrolle') {
         try {
             customConsole.info(`Session wird erstellt für User ${userId}, SessionType: ${sessionType}`);
 
